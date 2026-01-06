@@ -14,6 +14,9 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
+use std::env;
+use std::process::Command;
+use tracing::{info, warn};
 
 pub(crate) async fn do_bind(
     ldap_info: &LdapInfo,
@@ -70,7 +73,7 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
     use lldap_auth::*;
     let mut rng = rand::rngs::OsRng;
     let registration_start_request =
-        opaque::client::registration::start_registration(password, &mut rng)?;
+    opaque::client::registration::start_registration(password, &mut rng)?;
     let req = registration::ClientRegistrationStartRequest {
         username: user.clone(),
         registration_start_request: registration_start_request.message,
@@ -86,6 +89,24 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
         registration_upload: registration_finish.message,
     };
     backend_handler.registration_finish(req).await?;
+
+    // Optional external hook for password sync (e.g., to Kerberos)
+    if let Ok(hook_command) = env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
+        let password_str = String::from_utf8_lossy(password).to_string();
+        let username = user.to_string();  // UserId clones to String for username
+
+        let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} {} \"{}\"", hook_command, username, password_str))
+        .output();
+
+        match output {
+            Ok(out) if out.status.success() => info!("Password change hook succeeded for user {}", username),
+            Ok(out) => warn!("Password change hook failed for user {}: {:?}", username, out),
+            Err(e) => warn!("Failed to run password change hook for user {}: {}", username, e),
+        }
+    }
+
     Ok(())
 }
 
