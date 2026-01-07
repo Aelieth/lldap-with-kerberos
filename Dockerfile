@@ -11,7 +11,7 @@ RUN set -x \
         --uid 10001 \
         app \
     # Install required packages
-    && apk add openssl-dev musl-dev make perl curl gzip
+    && apk add openssl-dev musl-dev make perl curl gzip git  # Add git here for checkout
 
 USER app
 WORKDIR /app
@@ -72,6 +72,7 @@ RUN set -eux; \
 # verify that the binary works
         gosu --version; \
         gosu nobody true
+
 
 RUN apk add --no-cache docker-cli  # For hook exec
 
