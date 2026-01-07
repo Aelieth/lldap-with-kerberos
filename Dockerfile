@@ -32,21 +32,24 @@ FROM chef AS builder
 RUN git clone https://github.com/Aelieth/lldap.git . \
     && git checkout password-change-hook  # Clone your fork branch with hook code
 COPY --from=planner /tmp/recipe.json recipe.json
+RUN rustup target add wasm32-unknown-unknown  # Add target in builder for cook
 RUN cargo chef cook --release -p lldap_app --target wasm32-unknown-unknown \
     && cargo chef cook --release -p lldap \
     && cargo chef cook --release -p lldap_migration_tool \
     && cargo chef cook --release -p lldap_set_password
 
+# Copy the source and build the app and server.
+COPY --chown=app:app . .
 RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password \
     # Build the frontend.
     && ./app/build.sh
 
 # Final image
 FROM alpine:3.21
-
-ENV GOSU_VERSION=1.14
 ENV UID=10001
 ENV GID=10001
+
+ENV GOSU_VERSION=1.14
 # Fetch gosu from git
 RUN set -eux; \
         \
