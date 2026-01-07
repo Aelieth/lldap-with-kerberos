@@ -14,6 +14,8 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use std::env;
 use std::process::Command;
 use tracing::{info, warn};
@@ -92,12 +94,18 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
 
     // Optional external hook for password sync (e.g., to Kerberos)
     if let Ok(hook_command) = env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
-        let password_str = String::from_utf8_lossy(password).to_string();
-        let username = user.to_string();  // UserId clones to String for username
+        let obfuscated_pass = {
+            let pass_bytes = password.to_vec();
+            let key = env::var("ENCODE_KEY").unwrap_or_default().into_bytes();
+            let xored: Vec<u8> = pass_bytes.iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]).collect();
+            STANDARD.encode(xored)
+        };
+
+        let username = user.to_string();
 
         let output = Command::new("sh")
         .arg("-c")
-        .arg(format!("{} {} \"{}\"", hook_command, username, password_str))
+        .arg(format!("{} {} {}", hook_command, username, obfuscated_pass))
         .output();
 
         match output {
