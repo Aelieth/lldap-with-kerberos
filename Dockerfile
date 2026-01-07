@@ -11,7 +11,7 @@ RUN set -x \
         --uid 10001 \
         app \
     # Install required packages
-    && apk add openssl-dev musl-dev make perl curl gzip git  # Add git for clone
+    && apk add openssl-dev musl-dev make perl curl gzip git  # git for clone
 
 USER app
 WORKDIR /app
@@ -24,19 +24,19 @@ RUN set -x \
 # Prepare the dependency list.
 FROM chef AS planner
 RUN git clone https://github.com/Aelieth/lldap.git . \
-    && git checkout password-change-hook  # Build from your hook branch with code
+    && git checkout password-change-hook
 RUN cargo chef prepare --recipe-path /tmp/recipe.json
 
 # Build dependencies.
 FROM chef AS builder
+RUN git clone https://github.com/Aelieth/lldap.git . \
+    && git checkout password-change-hook  # Clone your fork branch with hook code
 COPY --from=planner /tmp/recipe.json recipe.json
 RUN cargo chef cook --release -p lldap_app --target wasm32-unknown-unknown \
     && cargo chef cook --release -p lldap \
     && cargo chef cook --release -p lldap_migration_tool \
     && cargo chef cook --release -p lldap_set_password
 
-# Copy the source and build the app and server.
-COPY --chown=app:app . .
 RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password \
     # Build the frontend.
     && ./app/build.sh
@@ -74,7 +74,6 @@ RUN set -eux; \
 # verify that the binary works
         gosu --version; \
         gosu nobody true
-
 
 RUN apk add --no-cache docker-cli  # For hook exec
 
