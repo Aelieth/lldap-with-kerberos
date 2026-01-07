@@ -1,32 +1,21 @@
-# Build image
 FROM rust:alpine3.21 AS chef
 
 RUN set -x \
-    # Add user
     && addgroup --gid 10001 app \
-    && adduser --disabled-password \
-        --gecos '' \
-        --ingroup app \
-        --home /app \
-        --uid 10001 \
-        app \
-    # Install required packages
+    && adduser --disabled-password --gecos '' --ingroup app --home /app --uid 10001 app \
     && apk add openssl-dev musl-dev make perl curl gzip
 
 USER app
 WORKDIR /app
 
 RUN set -x \
-    # Install build tools
     && RUSTFLAGS=-Ctarget-feature=-crt-static cargo install wasm-pack cargo-chef \
     && rustup target add wasm32-unknown-unknown
 
-# Prepare the dependency list.
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path /tmp/recipe.json
 
-# Build dependencies.
 FROM chef AS builder
 COPY --from=planner /tmp/recipe.json recipe.json
 RUN cargo chef cook --release -p lldap_app --target wasm32-unknown-unknown \
@@ -34,44 +23,28 @@ RUN cargo chef cook --release -p lldap_app --target wasm32-unknown-unknown \
     && cargo chef cook --release -p lldap_migration_tool \
     && cargo chef cook --release -p lldap_set_password
 
-# Copy the source and build the app and server.
 COPY --chown=app:app . .
 RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password \
-    # Build the frontend.
     && ./app/build.sh
 
-# Final image
 FROM alpine:3.21
 
 ENV GOSU_VERSION=1.14
-# Fetch gosu from git
 RUN set -eux; \
-        \
-        apk add --no-cache --virtual .gosu-deps \
-                ca-certificates \
-                dpkg \
-                gnupg \
-        ; \
-        \
-        dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
-        wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
-        wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch.asc"; \
-        \
-# verify the signature
-        export GNUPGHOME="$(mktemp -d)"; \
-        gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4; \
-        gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu; \
-        command -v gpgconf && gpgconf --kill all || :; \
-        rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc; \
-        \
-# clean up fetch dependencies
-        apk del --no-network .gosu-deps; \
-        \
-        chmod +x /usr/local/bin/gosu; \
-# verify that the binary works
-        gosu --version; \
-        gosu nobody true
+    apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg; \
+    dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
+    wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch"; \
+    wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch.asc"; \
+    export GNUPGHOME="$(mktemp -d)"; \
+    gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4; \
+    gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu; \
+    command -v gpgconf && gpgconf --kill all || :; \
+    rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc; \
+    apk del --no-network .gosu-deps; \
+    chmod +x /usr/local/bin/gosu; \
+    gosu nobody true
 
+RUN apk add --no-cache docker.io  # For hook exec
 
 WORKDIR /app
 
