@@ -3004,6 +3004,7 @@ name = "lldap_ldap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "derive_more 1.0.0",
  "itertools",

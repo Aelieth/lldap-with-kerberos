@@ -11,7 +11,7 @@ RUN set -x \
         --uid 10001 \
         app \
     # Install required packages
-    && apk add openssl-dev musl-dev make perl curl gzip git  # Add git here for checkout
+    && apk add openssl-dev musl-dev make perl curl gzip git  # Add git for clone
 
 USER app
 WORKDIR /app
@@ -23,13 +23,13 @@ RUN set -x \
 
 # Prepare the dependency list.
 FROM chef AS planner
-COPY . .
-RUN git checkout password-change-hook  # Build from your hook branch with password change code
+RUN git clone https://github.com/Aelieth/lldap.git . \
+    && git checkout password-change-hook  # Build from your hook branch with code
 RUN cargo chef prepare --recipe-path /tmp/recipe.json
 
 # Build dependencies.
 FROM chef AS builder
-COPY --from=planner /tmp/recipe.json recipe.json
+COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release -p lldap_app --target wasm32-unknown-unknown \
     && cargo chef cook --release -p lldap \
     && cargo chef cook --release -p lldap_migration_tool \
