@@ -12,6 +12,8 @@ rust-version.workspace = true
 [dependencies]
 tracing = "*"
 async-trait = "0.1"
+lldap_opaque_handler = { path = "../opaque-handler" }
+anyhow = "*"
 
 [dependencies.lldap_auth]
 path = "../auth"

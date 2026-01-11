@@ -18,22 +18,22 @@ use lldap_domain::types::{GroupId, UserId};
 use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use std::sync::Arc;
 use tracing::{Instrument, Span, debug, debug_span};
-
+use lldap_opaque_handler::OpaqueHandler;
 use crate::api::{Context, field_error_callback};
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL query type.
-pub struct Query<Handler: BackendHandler> {
+pub struct Query<Handler: BackendHandler + OpaqueHandler> {
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
-impl<Handler: BackendHandler> Default for Query<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Handler: BackendHandler> Query<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
     pub fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
@@ -42,7 +42,7 @@ impl<Handler: BackendHandler> Query<Handler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> Query<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
     fn api_version() -> &'static str {
         "1.0"
     }
@@ -137,7 +137,7 @@ impl<Handler: BackendHandler> Query<Handler> {
     }
 }
 
-impl<Handler: BackendHandler> Query<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
     async fn get_schema(
         &self,
         context: &Context<Handler>,

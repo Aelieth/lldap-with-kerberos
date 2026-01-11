@@ -13,6 +13,7 @@ use juniper::{
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_graphql_server::api::Context;
 use lldap_graphql_server::api::schema;
+use lldap_opaque_handler::OpaqueHandler;
 
 async fn graphiql_route() -> Result<HttpResponse, Error> {
     let html = graphiql_source("/api/graphql", None);
@@ -119,7 +120,7 @@ where
     Ok(response.content_type("application/json").body(gql_response))
 }
 
-async fn graphql_route<Handler: BackendHandler + Clone>(
+async fn graphql_route<Handler: BackendHandler + OpaqueHandler + Clone>(
     req: actix_web::HttpRequest,
     payload: actix_web::web::Payload,
     data: web::Data<AppState<Handler>>,
@@ -142,7 +143,7 @@ async fn graphql_route<Handler: BackendHandler + Clone>(
 
 pub fn configure_endpoint<Backend>(cfg: &mut web::ServiceConfig)
 where
-    Backend: BackendHandler + Clone + 'static,
+    Backend: BackendHandler + OpaqueHandler + Clone + 'static,
 {
     let json_config = web::JsonConfig::default()
         .limit(4096)

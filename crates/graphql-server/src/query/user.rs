@@ -7,7 +7,7 @@ use lldap_domain_handlers::handler::BackendHandler;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{Instrument, debug, debug_span};
-
+use lldap_opaque_handler::OpaqueHandler;
 use super::attribute::AttributeValue;
 use super::group::Group;
 use crate::api::Context;
@@ -54,7 +54,7 @@ impl<Handler: BackendHandler> User<Handler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> User<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
     fn id(&self) -> &str {
         self.user.user_id.as_str()
     }
@@ -111,7 +111,7 @@ impl<Handler: BackendHandler> User<Handler> {
     }
 
     /// The groups to which this user belongs.
-    async fn groups(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
+    async fn groups<Handler: BackendHandler + OpaqueHandler>(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
         if let Some(groups) = &self.groups {
             return Ok(groups.clone());
         }

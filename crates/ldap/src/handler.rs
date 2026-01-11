@@ -22,6 +22,7 @@ use lldap_domain::public_schema::PublicSchema;
 use lldap_domain_handlers::handler::{BackendHandler, LoginHandler, ReadSchemaBackendHandler};
 use lldap_opaque_handler::OpaqueHandler;
 use tracing::{debug, instrument};
+use lldap_sql_backend_handler::SqlBackendHandler;
 
 use super::delete::make_del_response;
 
@@ -260,7 +261,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         let backend_handler = self
             .user_info
             .as_ref()
-            .and_then(|u| self.backend_handler.get_admin_handler(u))
+            .and_then(|u| self.backend_handler.get_admin_handler::<SqlBackendHandler>(u))
             .ok_or_else(|| LdapError {
                 code: LdapResultCode::InsufficentAccessRights,
                 message: "Unauthorized write".to_string(),
@@ -273,7 +274,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         let backend_handler = self
             .user_info
             .as_ref()
-            .and_then(|u| self.backend_handler.get_admin_handler(u))
+            .and_then(|u| self.backend_handler.get_admin_handler::<SqlBackendHandler>(u))
             .ok_or_else(|| LdapError {
                 code: LdapResultCode::InsufficentAccessRights,
                 message: "Unauthorized write".to_string(),

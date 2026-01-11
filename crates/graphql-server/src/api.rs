@@ -7,8 +7,9 @@ use lldap_access_control::{
 use lldap_auth::{access_control::ValidationResults, types::UserId};
 use lldap_domain_handlers::handler::BackendHandler;
 use tracing::debug;
+use lldap_opaque_handler::OpaqueHandler;
 
-pub struct Context<Handler: BackendHandler> {
+pub struct Context<Handler: BackendHandler + OpaqueHandler> {
     pub handler: AccessControlledBackendHandler<Handler>,
     pub validation_result: ValidationResults,
 }
@@ -23,7 +24,7 @@ pub fn field_error_callback<'a>(
     }
 }
 
-impl<Handler: BackendHandler> Context<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
     #[cfg(test)]
     pub fn new_for_tests(handler: Handler, validation_result: ValidationResults) -> Self {
         Self {
@@ -32,8 +33,8 @@ impl<Handler: BackendHandler> Context<Handler> {
         }
     }
 
-    pub fn get_admin_handler(&self) -> Option<&(impl AdminBackendHandler + use<Handler>)> {
-        self.handler.get_admin_handler(&self.validation_result)
+    pub fn get_admin_handler<'a>(&'a self) -> Option<&'a (impl AdminBackendHandler + Send + Sync + 'a)> {
+        self.handler.get_admin_handler::<Handler>(&self.validation_result)
     }
 
     pub fn get_readonly_handler(&self) -> Option<&(impl ReadonlyBackendHandler + use<Handler>)> {
@@ -57,15 +58,15 @@ impl<Handler: BackendHandler> Context<Handler> {
     }
 }
 
-impl<Handler: BackendHandler> juniper::Context for Context<Handler> {}
+impl<Handler: BackendHandler + OpaqueHandler> juniper::Context for Context<Handler> {}
 
 type Schema<Handler> =
     RootNode<'static, Query<Handler>, Mutation<Handler>, EmptySubscription<Context<Handler>>>;
 
-pub fn schema<Handler: BackendHandler>() -> Schema<Handler> {
+pub fn schema<Handler: BackendHandler + OpaqueHandler>() -> Schema<Handler> {
     Schema::new(
         Query::<Handler>::new(),
-        Mutation::<Handler>::new(),
+        Mutation::<Handler>::default(),
         EmptySubscription::<Context<Handler>>::new(),
     )
 }

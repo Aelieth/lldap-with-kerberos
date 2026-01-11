@@ -1,9 +1,6 @@
 use crate::SqlBackendHandler;
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use std::env;
-use std::process::Command;
 use lldap_auth::opaque;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BindRequest, LoginHandler};
@@ -241,31 +238,7 @@ pub async fn register_password(
             server_data: start_response.server_data,
             registration_upload: registration_finish.message,
         })
-        .await?
-
-        if let Ok(hook_command) = env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
-            let obfuscated_pass = {
-                let pass_bytes = password.unsecure().as_bytes().to_vec();
-                let key = env::var("ENCODE_KEY").unwrap_or_default().into_bytes();
-                let xored: Vec<u8> = pass_bytes.iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]).collect();
-                STANDARD.encode(xored)
-            };
-
-            let username = username.to_string();
-
-            let output = Command::new("sh")
-            .arg("-c")
-            .arg(format!("{} {} {}", hook_command, username, obfuscated_pass))
-            .output();
-
-            match output {
-                Ok(out) if out.status.success() => info!("Password change hook succeeded for user {}", username),
-                Ok(out) => warn!("Password change hook failed for user {}: {:?}", username, out),
-                Err(e) => warn!("Failed to run password change hook for user {}: {}", username, e),
-            }
-        }
-
-Ok(())
+        .await
 }
 
 #[cfg(test)]

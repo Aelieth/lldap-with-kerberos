@@ -2845,11 +2845,13 @@ dependencies = [
 name = "lldap_access_control"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "lldap_auth",
  "lldap_domain",
  "lldap_domain_handlers",
  "lldap_domain_model",
+ "lldap_opaque_handler",
  "tracing",
 ]
 
@@ -2978,6 +2980,8 @@ name = "lldap_graphql_server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "chrono",
  "juniper",
  "lldap_access_control",
@@ -2986,11 +2990,13 @@ dependencies = [
  "lldap_domain_handlers",
  "lldap_domain_model",
  "lldap_ldap",
+ "lldap_opaque_handler",
  "lldap_sql_backend_handler",
  "lldap_test_utils",
  "lldap_validation",
  "mockall",
  "pretty_assertions",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tokio",
@@ -3015,6 +3021,7 @@ dependencies = [
  "lldap_domain_handlers",
  "lldap_domain_model",
  "lldap_opaque_handler",
+ "lldap_sql_backend_handler",
  "lldap_test_utils",
  "mockall",
  "pretty_assertions",

@@ -7,7 +7,7 @@ use lldap_domain::types::{Attribute as DomainAttribute, AttributeValue as Domain
 use lldap_domain::types::{Cardinality, Group as DomainGroup, GroupDetails, User as DomainUser};
 use lldap_domain_handlers::handler::BackendHandler;
 use serde::{Deserialize, Serialize};
-
+use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub struct AttributeSchema<Handler: BackendHandler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> AttributeSchema<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
     fn name(&self) -> String {
         self.schema.name.to_string()
     }
@@ -67,7 +67,7 @@ pub struct AttributeValue<Handler: BackendHandler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> AttributeValue<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
     fn name(&self) -> &str {
         self.attribute.name.as_str()
     }

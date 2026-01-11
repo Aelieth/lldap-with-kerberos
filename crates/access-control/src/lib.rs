@@ -20,6 +20,8 @@ use lldap_domain_handlers::handler::{
 use lldap_domain_model::error::Result;
 use std::collections::HashSet;
 use tracing::info;
+use lldap_opaque_handler::OpaqueHandler;
+use lldap_auth::{login, registration};
 
 #[async_trait]
 pub trait UserReadableBackendHandler: ReadSchemaBackendHandler {
@@ -50,6 +52,7 @@ pub trait AdminBackendHandler:
     + ReadonlyBackendHandler
     + UserWriteableBackendHandler
     + SchemaBackendHandler
+    + OpaqueHandler
 {
     async fn create_user(&self, request: CreateUserRequest) -> Result<()>;
     async fn delete_user(&self, user_id: &UserId) -> Result<()>;
@@ -107,7 +110,7 @@ impl<Handler: BackendHandler> UserWriteableBackendHandler for Handler {
     }
 }
 #[async_trait]
-impl<Handler: BackendHandler> AdminBackendHandler for Handler {
+impl<Handler: BackendHandler + OpaqueHandler> AdminBackendHandler for Handler {
     async fn create_user(&self, request: CreateUserRequest) -> Result<()> {
         <Handler as UserBackendHandler>::create_user(self, request).await
     }
@@ -173,7 +176,7 @@ impl<Handler> AccessControlledBackendHandler<Handler> {
     }
 }
 
-impl<Handler: BackendHandler> AccessControlledBackendHandler<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> AccessControlledBackendHandler<Handler> {
     pub fn new(handler: Handler) -> Self {
         Self { handler }
     }
@@ -185,11 +188,11 @@ impl<Handler: BackendHandler> AccessControlledBackendHandler<Handler> {
         Some(&self.handler)
     }
 
-    pub fn get_admin_handler(
-        &self,
-        validation_result: &ValidationResults,
-    ) -> Option<&(impl AdminBackendHandler + use<Handler>)> {
-        validation_result.is_admin().then_some(&self.handler)
+    pub fn get_admin_handler<'a, H: BackendHandler + OpaqueHandler + Send + Sync>(
+        &'a self,
+        validation_results: &ValidationResults,
+    ) -> Option<&'a (impl AdminBackendHandler + Send + Sync + 'a)> {
+        validation_results.is_admin().then_some(&self.handler)
     }
 
     pub fn get_readonly_handler(
@@ -339,5 +342,36 @@ impl<Handler: GroupListerBackendHandler + UserListerBackendHandler + Sync>
 {
     fn user_filter(&self) -> &Option<UserId> {
         &self.user_filter
+    }
+}
+
+#[async_trait]
+impl<Inner: OpaqueHandler + Send + Sync> OpaqueHandler for AccessControlledBackendHandler<Inner> {
+    async fn login_start(
+        &self,
+        request: login::ClientLoginStartRequest,
+    ) -> Result<login::ServerLoginStartResponse> {
+        self.handler.login_start(request).await
+    }
+
+    async fn login_finish(
+        &self,
+        request: login::ClientLoginFinishRequest,
+    ) -> Result<UserId> {  // From trait: Returns UserId
+        self.handler.login_finish(request).await
+    }
+
+    async fn registration_start(
+        &self,
+        request: registration::ClientRegistrationStartRequest,
+    ) -> Result<registration::ServerRegistrationStartResponse> {
+        self.handler.registration_start(request).await
+    }
+
+    async fn registration_finish(
+        &self,
+        request: registration::ClientRegistrationFinishRequest,
+    ) -> Result<()> {
+        self.handler.registration_finish(request).await
     }
 }

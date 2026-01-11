@@ -118,7 +118,7 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
     Ok(())
 }
 
-pub(crate) async fn do_password_modification<Handler: BackendHandler>(
+pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHandler>(
     credentials: &ValidationResults,
     ldap_info: &LdapInfo,
     backend_handler: &AccessControlledBackendHandler<Handler>,

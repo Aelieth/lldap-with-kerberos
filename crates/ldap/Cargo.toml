@@ -15,6 +15,7 @@ ldap3_proto = "0.6.0"
 tracing = "*"
 itertools = "0.10"
 base64 = "0.22.1"
+lldap_sql_backend_handler = { path = "../sql-backend-handler" }
 
 [dependencies.derive_more]
 features = ["from"]

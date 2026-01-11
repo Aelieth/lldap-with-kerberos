@@ -11,7 +11,7 @@ use lldap_domain::{
 use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use std::{collections::BTreeMap, sync::Arc};
 use tracing::{Instrument, Span};
-
+use lldap_opaque_handler::OpaqueHandler;
 use super::inputs::AttributeValue;
 use crate::api::{Context, field_error_callback};
 
@@ -99,7 +99,7 @@ pub fn consolidate_attributes(
     provided_attributes.into_values().collect()
 }
 
-pub async fn create_group_with_details<Handler: BackendHandler>(
+pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
     context: &Context<Handler>,
     request: super::inputs::CreateGroupInput,
     span: Span,

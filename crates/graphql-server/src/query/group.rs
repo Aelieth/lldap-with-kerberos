@@ -7,7 +7,7 @@ use lldap_domain_handlers::handler::{BackendHandler, UserRequestFilter as Domain
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{Instrument, debug, debug_span};
-
+use lldap_opaque_handler::OpaqueHandler;
 use super::attribute::AttributeValue;
 use super::user::User;
 use crate::api::{Context, field_error_callback};
@@ -77,7 +77,7 @@ impl<Handler: BackendHandler> Clone for Group<Handler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> Group<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Group<Handler> {
     fn id(&self) -> i32 {
         self.group_id
     }
@@ -97,7 +97,7 @@ impl<Handler: BackendHandler> Group<Handler> {
     }
 
     /// The groups to which this user belongs.
-    async fn users(&self, context: &Context<Handler>) -> FieldResult<Vec<User<Handler>>> {
+    async fn users<Handler: BackendHandler + OpaqueHandler>(&self, context: &Context<Handler>) -> FieldResult<Vec<User<Handler>>> {
         let span = debug_span!("[GraphQL query] group::users");
         span.in_scope(|| {
             debug!(name = %self.display_name);

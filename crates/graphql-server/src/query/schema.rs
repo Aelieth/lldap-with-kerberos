@@ -5,7 +5,7 @@ use lldap_domain::types::LdapObjectClass;
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_ldap::{get_default_group_object_classes, get_default_user_object_classes};
 use serde::{Deserialize, Serialize};
-
+use lldap_opaque_handler::OpaqueHandler;
 use super::attribute::AttributeSchema;
 use crate::api::Context;
 
@@ -35,7 +35,7 @@ impl ObjectClassInfo {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> AttributeList<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> AttributeList<Handler> {
     fn attributes(&self) -> Vec<AttributeSchema<Handler>> {
         self.attributes
             .attributes
@@ -90,7 +90,7 @@ pub struct Schema<Handler: BackendHandler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler> Schema<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler> Schema<Handler> {
     fn user_schema(&self) -> AttributeList<Handler> {
         AttributeList::<Handler>::new(
             self.schema.get_schema().user_attributes.clone(),
