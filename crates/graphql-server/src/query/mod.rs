@@ -135,6 +135,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let span = debug_span!("[GraphQL query] get_schema");
         self.get_schema(context, span).await.map(Into::into)
     }
+    async fn kerberos_enabled(&self, _context: &Context<Handler>) -> bool {
+        true  // Temp placeholder—will update to _context.config.kerberos_enabled in next step
+    }
 }
 
 impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
