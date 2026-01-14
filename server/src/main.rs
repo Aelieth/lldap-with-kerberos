@@ -222,7 +222,8 @@ async fn set_up_server(config: Configuration) -> Result<(ServerBuilder, Database
 async fn run_server_command(opts: RunOpts) -> Result<()> {
     debug!("CLI: {:#?}", &opts);
 
-    let config = configuration::init(opts)?;
+    let mut config = configuration::init(opts)?;  // Changed: Added 'mut' here
+    config.kerberos_enabled = std::env::var("LLDAP_PASSWORD_CHANGE_HOOK").ok().is_some();  // New: Insert exactly here, right after config init
     logging::init(&config)?;
 
     let (server, sql_pool) = set_up_server(config).await?;
