@@ -155,11 +155,6 @@ pub struct Configuration {
     server_setup: Option<ServerSetupConfig>,
     #[builder(default)]
     pub healthcheck_options: HealthcheckOptions,
-    #[builder(default = "None")]
-    pub password_change_hook: Option<PathBuf>,
-    #[serde(default)]  // Changed: No "false" or quotes—uses bool's Default (false) for deserialization
-    #[builder(default = "false")]  // Keep this for the builder
-    pub kerberos_enabled: bool,  // New field (unchanged)
 }
 
 impl std::default::Default for Configuration {
