@@ -46,7 +46,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
         user_id: &UserId,
     ) -> Option<&(impl UserWriteableBackendHandler + use<Handler>)> {
         self.handler
-            .get_writeable_handler(&self.validation_result, user_id)
+        .get_writeable_handler(&self.validation_result, user_id)
     }
 
     pub fn get_readable_handler(
@@ -54,20 +54,20 @@ impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
         user_id: &UserId,
     ) -> Option<&(impl UserReadableBackendHandler + use<Handler>)> {
         self.handler
-            .get_readable_handler(&self.validation_result, user_id)
+        .get_readable_handler(&self.validation_result, user_id)
     }
 }
 
 impl<Handler: BackendHandler + OpaqueHandler> juniper::Context for Context<Handler> {}
 
 type Schema<Handler> =
-    RootNode<'static, Query<Handler>, Mutation<Handler>, EmptySubscription<Context<Handler>>>;
+RootNode<'static, Query<Handler>, Mutation<Handler>, EmptySubscription<Context<Handler>>>;
 
 pub fn schema<Handler: BackendHandler + OpaqueHandler>() -> Schema<Handler> {
     Schema::new(
         Query::<Handler>::new(),
-        Mutation::<Handler>::default(),
-        EmptySubscription::<Context<Handler>>::new(),
+                Mutation::<Handler>::default(),
+                EmptySubscription::<Context<Handler>>::new(),
     )
 }
 
@@ -83,9 +83,9 @@ pub fn export_schema(output_file: Option<String>) -> anyhow::Result<()> {
             use std::path::Path;
             let path = Path::new(&path);
             let mut file =
-                File::create(path).context(format!("unable to open '{}'", path.display()))?;
+            File::create(path).context(format!("unable to open '{}'", path.display()))?;
             file.write_all(output.as_bytes())
-                .context(format!("unable to write in '{}'", path.display()))?;
+            .context(format!("unable to write in '{}'", path.display()))?;
         }
     }
     Ok(())

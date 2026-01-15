@@ -5,7 +5,7 @@ use crate::{
     },
     handler::make_extended_response,
 };
-use anyhow::Result;
+use anyhow::{Result, Context};  // Fixed: Added Context trait for .context() method
 use ldap3_proto::proto::{
     LdapBindCred, LdapBindRequest, LdapOp, LdapPasswordModifyRequest, LdapResultCode,
 };
@@ -14,11 +14,7 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use std::env;
-use std::process::Command;
-use tracing::{info, warn};
+use lldap_kerberos::sync_kerberos_hook;  // New: Import the crate fn
 
 pub(crate) async fn do_bind(
     ldap_info: &LdapInfo,
@@ -92,28 +88,10 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
     };
     backend_handler.registration_finish(req).await?;
 
-    // Optional external hook for password sync (e.g., to Kerberos)
-    if let Ok(hook_command) = env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
-        let obfuscated_pass = {
-            let pass_bytes = password.to_vec();
-            let key = env::var("ENCODE_KEY").unwrap_or_default().into_bytes();
-            let xored: Vec<u8> = pass_bytes.iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]).collect();
-            STANDARD.encode(xored)
-        };
-
-        let username = user.to_string();
-
-        let output = Command::new("sh")
-        .arg("-c")
-        .arg(format!("{} {} {}", hook_command, username, obfuscated_pass))
-        .output();
-
-        match output {
-            Ok(out) if out.status.success() => info!("Password change hook succeeded for user {}", username),
-            Ok(out) => warn!("Password change hook failed for user {}: {:?}", username, out),
-            Err(e) => warn!("Failed to run password change hook for user {}: {}", username, e),
-        }
-    }
+    // Trigger kerberos hook (obfuscate + run command)
+    // Standard crate call post-OPAQUE (convert &[u8] to &str)
+    let password_str = std::str::from_utf8(password).context("Invalid UTF-8 in password")?;
+    sync_kerberos_hook(&user.to_string(), password_str)?;
 
     Ok(())
 }

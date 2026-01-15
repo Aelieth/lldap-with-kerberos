@@ -16,6 +16,7 @@ tracing = "*"
 itertools = "0.10"
 base64 = "0.22.1"
 lldap_sql_backend_handler = { path = "../sql-backend-handler" }
+lldap-kerberos = { path = "../kerberos" }
 
 [dependencies.derive_more]
 features = ["from"]

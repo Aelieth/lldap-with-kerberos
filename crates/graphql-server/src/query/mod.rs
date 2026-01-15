@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tracing::{Instrument, Span, debug, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::{Context, field_error_callback};
+use std::env;  // New: Import for env::var
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL query type.
@@ -135,8 +136,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let span = debug_span!("[GraphQL query] get_schema");
         self.get_schema(context, span).await.map(Into::into)
     }
-    async fn kerberos_enabled(&self, _context: &Context<Handler>) -> bool {
-        true  // Temp placeholder—will update to _context.config.kerberos_enabled in next step
+    async fn kerberos_enabled(&self) -> bool {  // Removed context if not used elsewhere
+        env::var("LLDAP_PASSWORD_CHANGE_HOOK").is_ok()  // True if env set (env-flagged)
     }
 }
 

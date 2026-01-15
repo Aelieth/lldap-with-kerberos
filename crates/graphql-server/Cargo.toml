@@ -19,6 +19,7 @@ base64 = "0.22"
 rand = "0.8"
 async-trait = "0.1"
 lldap_opaque_handler = { path = "../opaque-handler" }
+lldap-kerberos = { path = "../kerberos" }
 
 [dependencies.chrono]
 features = ["serde"]

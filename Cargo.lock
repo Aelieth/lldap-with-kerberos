@@ -2842,6 +2842,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lldap-kerberos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "lldap_domain",
+ "tracing",
+]
+
+[[package]]
 name = "lldap_access_control"
 version = "0.1.0"
 dependencies = [
@@ -2984,6 +2994,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "juniper",
+ "lldap-kerberos",
  "lldap_access_control",
  "lldap_auth",
  "lldap_domain",
@@ -3015,6 +3026,7 @@ dependencies = [
  "derive_more 1.0.0",
  "itertools",
  "ldap3_proto",
+ "lldap-kerberos",
  "lldap_access_control",
  "lldap_auth",
  "lldap_domain",

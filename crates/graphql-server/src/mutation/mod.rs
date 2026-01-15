@@ -19,12 +19,14 @@ use lldap_domain::{
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
-use tracing::{Instrument, debug, debug_span};
+use tracing::{Instrument, debug_span};  // Fixed: Removed unused debug
 use lldap_opaque_handler::OpaqueHandler;
+use lldap_kerberos::sync_kerberos_hook;  // New: Import for hook
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
+use tracing::debug;
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
@@ -86,17 +88,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     async fn set_user_password(
         context: &Context<Handler>,
         user_id: String,
-        password: String,  // Plain text from client!
+        password: String,
     ) -> FieldResult<Success> {
-        use tracing::{debug_span, debug, info, warn};  // For logging
+        use tracing::{debug_span}; // For logging
         let span = debug_span!("[GraphQL mutation] set_user_password");
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized password set"))?;
-
-        // Debug: Log plain password (remove in prod/security audit!)
-        debug!("DEBUG: Setting plain password for user {}: {}", &user_id, &password);
-
         // Simulate OPAQUE client-side (blinds pw, registers server-side)
         use lldap_auth::{opaque, registration};
         use anyhow::Context;
@@ -122,29 +120,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         };
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
-
-        // Trigger the hook (obfuscate + run command)
-        if let Ok(hook_command) = std::env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
-            use base64::engine::general_purpose::STANDARD;
-            use base64::Engine;
-            let obfuscated_pass = {
-                let pass_bytes = password.as_bytes().to_vec();
-                let key = std::env::var("ENCODE_KEY").unwrap_or_default().into_bytes();
-                let xored: Vec<u8> = pass_bytes.iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]).collect();
-                STANDARD.encode(xored)
-            };
-            let username = user_id.clone();
-            info!("Running password change hook for user {}", &username);
-            let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{} {} {}", hook_command, username, obfuscated_pass))
-            .output();
-            match output {
-                Ok(out) if out.status.success() => info!("Hook succeeded for user {}", username),
-                Ok(out) => warn!("Hook failed for user {}: {:?}", username, out),
-                Err(e) => warn!("Hook error for user {}: {}", username, e),
-            }
-        }
+        // Trigger kerberos hook (obfuscate + run command)
+        sync_kerberos_hook(&user_id, &password)?;
 
         Ok(Success::new())
     }
