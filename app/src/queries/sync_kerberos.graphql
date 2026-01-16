@@ -1,0 +1,3 @@
+mutation SyncKerberos($userId: ID!, $obfuscatedPassword: String!) {
+  syncKerberosPassword(userId: $userId, obfuscatedPassword: $obfuscatedPassword)
+}

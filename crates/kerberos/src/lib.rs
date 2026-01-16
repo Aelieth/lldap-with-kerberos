@@ -1,4 +1,4 @@
-use anyhow::{Result, Context, bail};  // Import bail! macro here
+use anyhow::{anyhow, Result, Context, bail};  // Updated: Add anyhow for the macro  // Import bail! macro here
 use base64::engine::general_purpose::STANDARD;  // Fixed: Use STANDARD for general-purpose base64
 use base64::Engine;  // New: Brings the trait into scope for encode method
 use std::env;
@@ -32,4 +32,34 @@ pub fn sync_kerberos_hook(username: &str, plain_password: &str) -> Result<()> {
         debug!("Kerberos hook not enabled—skipping sync");
         Ok(())
     }
+}
+
+pub fn is_kerberos_enabled() -> bool {
+    std::env::var("LLDAP_PASSWORD_CHANGE_HOOK").is_ok()
+}
+
+pub fn get_encode_key() -> Option<String> {
+    if is_kerberos_enabled() {
+        std::env::var("ENCODE_KEY").ok()
+    } else {
+        None
+    }
+}
+
+pub fn sync_kerberos_hook_obfuscated(user: &str, obfuscated: &str) -> anyhow::Result<()> {
+    if let Ok(hook) = std::env::var("LLDAP_PASSWORD_CHANGE_HOOK") {
+        let output = Command::new(&hook)
+        .arg(user)
+        .arg(obfuscated)
+        .output()
+        .context(format!("Failed to execute Kerberos hook '{}'", hook))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Kerberos hook failed: stdout: {}, stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                               String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    Ok(())
 }
