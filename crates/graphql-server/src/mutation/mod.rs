@@ -584,6 +584,21 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .await?;
         Ok(Success::new())
     }
+
+    async fn sync_kerberos_password(
+        &self,
+        _context: &Context<Handler>,  // Underscore for unused
+        user_id: String,  // Changed: Use String for GraphQL input
+        obfuscated_password: String,
+    ) -> FieldResult<bool> {
+        if !lldap_kerberos::is_kerberos_enabled() {
+            return Ok(false);
+        }
+        let user_id = UserId::new(&user_id);  // New: Convert String to UserId
+        lldap_kerberos::sync_kerberos_hook_obfuscated(&user_id.to_string(), &obfuscated_password)  // Changed: Use to_string() instead of .0
+        .map_err(|e| FieldError::from(format!("Kerberos sync failed: {}", e)))?;
+        Ok(true)
+    }
 }
 #[cfg(test)]
 mod tests {
