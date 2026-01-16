@@ -20,12 +20,19 @@ use std::sync::Arc;
 use tracing::{Instrument, Span, debug, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::{Context, field_error_callback};
-use std::env;  // New: Import for env::var
+use lldap_kerberos;
+use juniper::GraphQLObject;  // New: For #[derive(GraphQLObject)]
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL query type.
 pub struct Query<Handler: BackendHandler + OpaqueHandler> {
     _phantom: std::marker::PhantomData<Box<Handler>>,
+}
+
+#[derive(GraphQLObject)]
+pub struct KerberosInfo {
+    pub enabled: bool,
+    pub encode_key: Option<String>,
 }
 
 impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
@@ -136,8 +143,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let span = debug_span!("[GraphQL query] get_schema");
         self.get_schema(context, span).await.map(Into::into)
     }
-    async fn kerberos_enabled(&self) -> bool {  // Removed context if not used elsewhere
-        env::var("LLDAP_PASSWORD_CHANGE_HOOK").is_ok()  // True if env set (env-flagged)
+    fn kerberos_info(&self, _context: &Context<Handler>) -> FieldResult<KerberosInfo> {
+        let enabled = lldap_kerberos::is_kerberos_enabled();
+        let encode_key = lldap_kerberos::get_encode_key();
+        Ok(KerberosInfo { enabled, encode_key })
     }
 }
 
