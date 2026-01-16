@@ -22,6 +22,7 @@ type Mutation {
   addGroupObjectClass(name: String!): Success!
   deleteUserObjectClass(name: String!): Success!
   deleteGroupObjectClass(name: String!): Success!
+  syncKerberosPassword(userId: ID!, obfuscatedPassword: String!): Boolean!
 }
 
 type Group {
@@ -58,6 +59,7 @@ type Query {
   groups: [Group!]!
   group(groupId: Int!): Group!
   schema: Schema!
+  kerberosInfo: KerberosInfo!
 }
 
 "The details required to create a user."
@@ -192,6 +194,11 @@ type AttributeList {
   attributes: [AttributeSchema!]!
   extraLdapObjectClasses: [String!]!
   ldapObjectClasses: [ObjectClassInfo!]!
+}
+
+type KerberosInfo {
+  enabled: Boolean!
+  encodeKey: String
 }
 
 type Success {
