@@ -18,6 +18,7 @@ use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
+use crate::infra::{api::*, obfuscate::obfuscate_password};
 
 /// The fields of the form, with the constraints.
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -33,6 +34,7 @@ pub struct ResetPasswordStep2Form {
     form: Form<FormModel>,
     username: Option<String>,
     opaque_data: Option<opaque_registration::ClientRegistration>,
+    kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
 }
 
 #[derive(Clone, PartialEq, Eq, Properties)]
@@ -46,6 +48,8 @@ pub enum Msg {
     Submit,
     RegistrationStartResponse(Result<Box<registration::ServerRegistrationStartResponse>>),
     RegistrationFinishResponse(Result<()>),
+    KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
+    SyncKerberosResponse(Result<sync_kerberos::ResponseData>),
 }
 
 impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
@@ -58,6 +62,16 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
         match msg {
             Msg::ValidateTokenResponse(response) => {
                 self.username = Some(response?.user_id);
+                self.common.call_graphql::<GetKerberosInfo, _>(
+                    ctx,
+                    get_kerberos_info::Variables {},
+                    Msg::KerberosInfoResponse,
+                    "Error fetching Kerberos info",
+                );
+                Ok(true)
+            }
+            Msg::KerberosInfoResponse(res) => {
+                self.kerberos_info = Some(anyhow::Context::context(res, "Failed to fetch Kerberos info")?.kerberos_info);
                 Ok(true)
             }
             Msg::FormUpdate => Ok(true),
@@ -104,10 +118,31 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                 Ok(false)
             }
             Msg::RegistrationFinishResponse(response) => {
-                if response.is_ok() {
-                    ctx.link().history().unwrap().push(AppRoute::Login);
+                anyhow::Context::context(response, "Registration finish failed")?;
+                if let Some(info) = &self.kerberos_info {
+                    if info.enabled {
+                        let new_password = self.form.model().password;
+                        let key = info.encode_key.as_ref().ok_or(anyhow::anyhow!("Missing encode key"))?;  // Use ok_or for Option
+                        let obfuscated = obfuscate_password(&new_password, key);
+                        let vars = sync_kerberos::Variables {
+                            user_id: self.username.clone().ok_or(anyhow::anyhow!("Missing username"))?,
+                            obfuscated_password: obfuscated,
+                        };
+                        self.common.call_graphql::<SyncKerberos, _>(
+                            ctx,
+                            vars,
+                            Msg::SyncKerberosResponse,
+                            "Kerberos sync failed",
+                        );
+                        return Ok(false);
+                    }
                 }
-                response?;
+                ctx.link().history().unwrap().push(AppRoute::Login);
+                Ok(true)
+            }
+            Msg::SyncKerberosResponse(res) => {
+                anyhow::Context::context(res, "Kerberos sync failed")?;
+                ctx.link().history().unwrap().push(AppRoute::Login);
                 Ok(true)
             }
         }
@@ -128,6 +163,7 @@ impl Component for ResetPasswordStep2Form {
             form: yew_form::Form::<FormModel>::new(FormModel::default()),
             opaque_data: None,
             username: None,
+            kerberos_info: None,
         };
         let token = ctx.props().token.clone();
         component.common.call_backend(
