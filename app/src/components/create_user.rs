@@ -25,6 +25,7 @@ use validator_derive::Validate;
 use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
+use crate::infra::{api::*, obfuscate::obfuscate_password};
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -65,6 +66,7 @@ pub struct CreateUserForm {
     form: yew_form::Form<CreateUserModel>,
     attributes_schema: Option<Vec<Attribute>>,
     form_ref: NodeRef,
+    kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -100,14 +102,16 @@ pub enum Msg {
             Result<Box<registration::ServerRegistrationStartResponse>>,
         ),
     ),
+    KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
+    SyncKerberosResponse(Result<sync_kerberos::ResponseData>),
     RegistrationFinishResponse(Result<()>),
 }
 
 impl CommonComponent<CreateUserForm> for CreateUserForm {
     fn handle_msg(
         &mut self,
-        ctx: &Context<Self>,
-        msg: <Self as Component>::Message,
+        ctx: &Context<CreateUserForm>,
+        msg: Self::Message,
     ) -> Result<bool> {
         match msg {
             Msg::Update => Ok(true),
@@ -116,28 +120,30 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     Some(schema?.schema.user_schema.attributes.into_iter().collect());
                 Ok(true)
             }
+            Msg::KerberosInfoResponse(res) => {
+                self.kerberos_info = Some(anyhow::Context::context(res, "Failed to fetch Kerberos info")?.kerberos_info);
+                Ok(true)
+            }
             Msg::SubmitForm => {
                 ensure!(self.form.validate(), "Check the form for errors");
-
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),
-                    &self.form_ref,
-                    IsAdmin(true),
-                    EmailIsRequired(true),
+                                                          &self.form_ref,
+                                                          IsAdmin(true),
+                                                          EmailIsRequired(true),
                 )?;
                 let attributes = Some(
                     all_values
-                        .into_iter()
-                        .filter(|a| !a.values.is_empty())
-                        .map(
-                            |AttributeValue { name, values }| create_user::AttributeValueInput {
-                                name,
-                                value: values,
-                            },
-                        )
-                        .collect(),
+                    .into_iter()
+                    .filter(|a| !a.values.is_empty())
+                    .map(
+                        |AttributeValue { name, values }| create_user::AttributeValueInput {
+                            name,
+                            value: values,
+                        },
+                    )
+                    .collect(),
                 );
-
                 let model = self.form.model();
                 let req = create_user::Variables {
                     user: create_user::CreateUserInput {
@@ -177,16 +183,16 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                         message,
                     } = opaque::client::registration::start_registration(
                         password.as_bytes(),
-                        &mut rng,
+                                                                         &mut rng,
                     )?;
                     let req = registration::ClientRegistrationStartRequest {
                         username: user_id.into(),
                         registration_start_request: message,
                     };
                     self.common
-                        .call_backend(ctx, HostService::register_start(req), move |r| {
-                            Msg::RegistrationStartResponse((state, r))
-                        });
+                    .call_backend(ctx, HostService::register_start(req), move |r| {
+                        Msg::RegistrationStartResponse((state, r))
+                    });
                 } else {
                     self.update(ctx, Msg::SuccessfulCreation);
                 }
@@ -207,13 +213,38 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.common.call_backend(
                     ctx,
                     HostService::register_finish(req),
-                    Msg::RegistrationFinishResponse,
+                                         Msg::RegistrationFinishResponse,
                 );
                 Ok(false)
             }
+            // NEW: Replace the old RegistrationFinishResponse with this (adds Kerberos sync)
             Msg::RegistrationFinishResponse(response) => {
-                response?;
-                self.handle_msg(ctx, Msg::SuccessfulCreation)
+                anyhow::Context::context(response, "Registration finish failed")?;
+                if let Some(info) = &self.kerberos_info {
+                    if info.enabled {
+                        let model = self.form.model();
+                        let key = info.encode_key.as_ref().ok_or(anyhow::anyhow!("Missing encode key"))?;
+                        let obfuscated = obfuscate_password(&model.password, key);
+                        let vars = sync_kerberos::Variables {
+                            user_id: model.username.clone(),
+                            obfuscated_password: obfuscated,
+                        };
+                        self.common.call_graphql::<SyncKerberos, _>(
+                            ctx,
+                            vars,
+                            Msg::SyncKerberosResponse,
+                            "Kerberos sync failed",
+                        );
+                        return Ok(false);
+                    }
+                }
+                self.handle_msg(ctx, Msg::SuccessfulCreation)?;  // NEW: Add ? to handle Result
+                Ok(true)  // Changed: Return Ok(true) after handling
+            }
+            Msg::SyncKerberosResponse(res) => {
+                anyhow::Context::context(res, "Kerberos sync failed")?;
+                self.handle_msg(ctx, Msg::SuccessfulCreation)?;  // NEW: Add ? to handle Result
+                Ok(true)  // Changed: Return Ok(true) after handling
             }
             Msg::SuccessfulCreation => {
                 ctx.link().history().unwrap().push(AppRoute::ListUsers);
@@ -231,12 +262,13 @@ impl Component for CreateUserForm {
     type Message = Msg;
     type Properties = ();
 
-    fn create(ctx: &Context<Self>) -> Self {
+    fn create(ctx: &Context<CreateUserForm>) -> Self {
         let mut component = Self {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<CreateUserModel>::new(CreateUserModel::default()),
             attributes_schema: None,
             form_ref: NodeRef::default(),
+            kerberos_info: None,
         };
         component.common.call_graphql::<GetUserAttributesSchema, _>(
             ctx,
@@ -244,14 +276,20 @@ impl Component for CreateUserForm {
             Msg::ListAttributesResponse,
             "Error trying to fetch user schema",
         );
+        component.common.call_graphql::<GetKerberosInfo, _>(
+            ctx,
+            get_kerberos_info::Variables {},
+            Msg::KerberosInfoResponse,
+            "Error fetching Kerberos info",
+        );
         component
     }
 
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &Context<CreateUserForm>, msg: Self::Message) -> bool {
         CommonComponentParts::<Self>::update(self, ctx, msg)
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Html {
+    fn view(&self, ctx: &Context<CreateUserForm>) -> Html {
         let link = &ctx.link();
         html! {
           <div class="row justify-content-center">
