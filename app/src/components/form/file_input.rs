@@ -8,6 +8,7 @@ use gloo_file::{
 use web_sys::{FileList, HtmlInputElement, InputEvent};
 use yew::Properties;
 use yew::{prelude::*, virtual_dom::AttrValue};
+use base64::{engine::general_purpose, Engine as _};
 
 #[derive(Default)]
 struct JsFile {
@@ -54,12 +55,12 @@ fn to_base64(file: &JsFile) -> Result<String> {
             if !is_valid_jpeg(data.as_slice()) {
                 bail!("Chosen image is not a valid JPEG");
             }
-            Ok(base64::encode(data))
+            Ok(general_purpose::STANDARD.encode(data))
         }
         JsFile {
             file: None,
             contents: Some(data),
-        } => Ok(base64::encode(data)),
+        } => Ok(general_purpose::STANDARD.encode(data)),
     }
 }
 
@@ -98,7 +99,7 @@ impl Component for JpegFileInput {
                     .props()
                     .value
                     .as_ref()
-                    .and_then(|x| base64::decode(x).ok()),
+                    .and_then(|x| general_purpose::STANDARD.decode(x).ok()),
             }),
             reader: None,
         }
@@ -111,7 +112,7 @@ impl Component for JpegFileInput {
                 .props()
                 .value
                 .as_ref()
-                .and_then(|x| base64::decode(x).ok()),
+                .and_then(|x| general_purpose::STANDARD.decode(x).ok()),
         });
         self.reader = None;
         true

@@ -62,12 +62,6 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
         match msg {
             Msg::ValidateTokenResponse(response) => {
                 self.username = Some(response?.user_id);
-                self.common.call_graphql::<GetKerberosInfo, _>(
-                    ctx,
-                    get_kerberos_info::Variables {},
-                    Msg::KerberosInfoResponse,
-                    "Error fetching Kerberos info",
-                );
                 Ok(true)
             }
             Msg::KerberosInfoResponse(res) => {
@@ -236,6 +230,17 @@ impl Component for ResetPasswordStep2Form {
               } else { html! {} }
             }
           </>
+        }
+    }
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        if first_render && self.kerberos_info.is_none() {
+            gloo_console::log!("Rendered: fetching Kerberos info");
+            self.common.call_graphql::<GetKerberosInfo, _>(
+                ctx,
+                get_kerberos_info::Variables {},
+                Msg::KerberosInfoResponse,
+                "Error fetching Kerberos info",
+            );
         }
     }
 }

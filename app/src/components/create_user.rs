@@ -11,33 +11,60 @@ use crate::{
         api::HostService,
         common_component::{CommonComponent, CommonComponentParts},
         form_utils::{
-            AttributeValue, EmailIsRequired, GraphQlAttributeSchema, IsAdmin,
+            EmailIsRequired, GraphQlAttributeSchema, IsAdmin,
             read_all_form_attributes,
         },
+        obfuscate::obfuscate_password,
         schema::AttributeType,
     },
 };
-use anyhow::{Result, ensure};
-use gloo_console::log;
+use anyhow::{Result, ensure, bail};
 use graphql_client::GraphQLQuery;
+use gloo_console::log;
 use lldap_auth::{opaque, registration};
 use validator_derive::Validate;
 use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
-use crate::infra::{api::*, obfuscate::obfuscate_password};
+use anyhow::Context as AnyhowContext;
+use yew::Context as YewContext;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/get_user_attributes_schema.graphql",
-    response_derives = "Debug,Clone,PartialEq,Eq",
-    custom_scalars_module = "crate::infra::graphql",
-    extern_enums("AttributeType")
+schema_path = "../schema.graphql",
+query_path = "src/queries/get_kerberos_info.graphql",
+response_derives = "Debug,Clone,PartialEq,Eq",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct GetKerberosInfo;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/sync_kerberos.graphql",
+response_derives = "Debug,Clone",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct SyncKerberos;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/create_user.graphql",
+response_derives = "Debug,Clone",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct CreateUser;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/get_user_attributes_schema.graphql",
+response_derives = "Debug,Clone,PartialEq,Eq",
+custom_scalars_module = "crate::infra::graphql",
+extern_enums("AttributeType")
 )]
 pub struct GetUserAttributesSchema;
-
-use get_user_attributes_schema::ResponseData;
 
 pub type Attribute = get_user_attributes_schema::GetUserAttributesSchemaSchemaUserSchemaAttributes;
 
@@ -52,21 +79,16 @@ impl From<&Attribute> for GraphQlAttributeSchema {
     }
 }
 
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/create_user.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
-pub struct CreateUser;
-
 pub struct CreateUserForm {
     common: CommonComponentParts<Self>,
     form: yew_form::Form<CreateUserModel>,
-    attributes_schema: Option<Vec<Attribute>>,
-    form_ref: NodeRef,
-    kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+        attributes_schema: Option<Vec<Attribute>>,
+        form_ref: NodeRef,
+            kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+            fetched_schema: bool,
+            fetched_kerberos: bool,
+            obfuscated_password: Option<String>,
+            user_id: Option<String>,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -74,8 +96,8 @@ pub struct CreateUserModel {
     #[validate(length(min = 1, message = "Username is required"))]
     username: String,
     #[validate(custom(
-        function = "empty_or_long",
-        message = "Password should be longer than 8 characters (or left empty)"
+    function = "empty_or_long",
+    message = "Password should be longer than 8 characters (or left empty)"
     ))]
     password: String,
     #[validate(must_match(other = "password", message = "Passwords must match"))]
@@ -92,161 +114,179 @@ fn empty_or_long(value: &str) -> Result<(), validator::ValidationError> {
 
 pub enum Msg {
     Update,
-    ListAttributesResponse(Result<ResponseData>),
+    ListAttributesResponse(Result<get_user_attributes_schema::ResponseData>),
+    KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
     SubmitForm,
     CreateUserResponse(Result<create_user::ResponseData>),
-    SuccessfulCreation,
     RegistrationStartResponse(
         (
             opaque::client::registration::ClientRegistration,
-            Result<Box<registration::ServerRegistrationStartResponse>>,
+         Result<Box<registration::ServerRegistrationStartResponse>>,
         ),
     ),
-    KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
-    SyncKerberosResponse(Result<sync_kerberos::ResponseData>),
     RegistrationFinishResponse(Result<()>),
+    SyncKerberosResponse(Result<sync_kerberos::ResponseData>),
 }
 
 impl CommonComponent<CreateUserForm> for CreateUserForm {
     fn handle_msg(
         &mut self,
-        ctx: &Context<CreateUserForm>,
-        msg: Self::Message,
+        ctx: &YewContext<Self>,
+        msg: <Self as Component>::Message,
     ) -> Result<bool> {
+        use AnyhowContext;
         match msg {
             Msg::Update => Ok(true),
-            Msg::ListAttributesResponse(schema) => {
-                self.attributes_schema =
-                    Some(schema?.schema.user_schema.attributes.into_iter().collect());
+            Msg::ListAttributesResponse(response) => {
+                let data: get_user_attributes_schema::ResponseData = response?;
+                self.attributes_schema = Some(data.schema.user_schema.attributes);
+                if !self.fetched_kerberos {
+                    log!("Fetching Kerberos info after schema");
+                    self.common.call_graphql::<GetKerberosInfo, _>(
+                        ctx,
+                        get_kerberos_info::Variables {},
+                        Msg::KerberosInfoResponse,
+                        "Error trying to fetch Kerberos info",
+                    );
+                    self.fetched_kerberos = true;
+                }
                 Ok(true)
             }
-            Msg::KerberosInfoResponse(res) => {
-                self.kerberos_info = Some(anyhow::Context::context(res, "Failed to fetch Kerberos info")?.kerberos_info);
+            Msg::KerberosInfoResponse(response) => {
+                let data: get_kerberos_info::ResponseData = response?;
+                self.kerberos_info = Some(data.kerberos_info);
                 Ok(true)
             }
             Msg::SubmitForm => {
-                ensure!(self.form.validate(), "Check the form for errors");
-                let all_values = read_all_form_attributes(
-                    self.attributes_schema.iter().flatten(),
-                                                          &self.form_ref,
-                                                          IsAdmin(true),
+                if !self.form.validate() {
+                    bail!("Check the form for errors");
+                }
+                let model = self.form.model();
+                ensure!(
+                    model.password == model.confirm_password,
+                    "Passwords don't match"
+                );
+                let schema_iter = self.attributes_schema.as_ref().unwrap().iter().map(|a| GraphQlAttributeSchema::from(a));
+                let attributes = read_all_form_attributes(
+                    schema_iter,
+                    &self.form_ref,
+                    IsAdmin(true),
                                                           EmailIsRequired(true),
                 )?;
-                let attributes = Some(
-                    all_values
-                    .into_iter()
-                    .filter(|a| !a.values.is_empty())
-                    .map(
-                        |AttributeValue { name, values }| create_user::AttributeValueInput {
-                            name,
-                            value: values,
-                        },
-                    )
-                    .collect(),
-                );
-                let model = self.form.model();
-                let req = create_user::Variables {
-                    user: create_user::CreateUserInput {
-                        id: model.username,
-                        email: None,
-                        displayName: None,
-                        firstName: None,
-                        lastName: None,
-                        avatar: None,
-                        attributes,
-                    },
+                let attributes_input = attributes
+                .iter()
+                .map(|attr| create_user::AttributeValueInput {
+                    name: attr.name.clone(),
+                     value: attr.values.clone(),
+                })
+                .collect::<Vec<_>>();
+                let obfuscated_password = if !model.password.is_empty() {
+                    if let Some(kerberos_info) = &self.kerberos_info {
+                        if kerberos_info.enabled {
+                            Some(obfuscate_password(
+                                &model.password,
+                                kerberos_info.encode_key.as_ref().unwrap_or(&String::new()).as_str(),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                self.obfuscated_password = obfuscated_password.clone();
+                let user_input = create_user::CreateUserInput {
+                    id: model.username.clone(),
+                    email: None,
+                    displayName: None,
+                    firstName: None,
+                    lastName: None,
+                    avatar: None,
+                    attributes: Some(attributes_input),
+                };
+                let variables = create_user::Variables {
+                    user: user_input,
                 };
                 self.common.call_graphql::<CreateUser, _>(
                     ctx,
-                    req,
+                    variables,
                     Msg::CreateUserResponse,
                     "Error trying to create user",
                 );
                 Ok(true)
             }
-            Msg::CreateUserResponse(r) => {
-                match r {
-                    Err(e) => return Err(e),
-                    Ok(r) => log!(&format!(
-                        "Created user '{}' at '{}'",
-                        &r.create_user.id, &r.create_user.creation_date
-                    )),
-                };
-                let model = self.form.model();
-                let user_id = model.username;
-                let password = model.password;
-                if !password.is_empty() {
-                    // User was successfully created, let's register the password.
+            Msg::CreateUserResponse(response) => {
+                let data: create_user::ResponseData = response?;
+                self.user_id = Some(data.create_user.id.clone());
+                if self.obfuscated_password.is_some() {
                     let mut rng = rand::rngs::OsRng;
-                    let opaque::client::registration::ClientRegistrationStartResult {
-                        state,
-                        message,
-                    } = opaque::client::registration::start_registration(
-                        password.as_bytes(),
-                                                                         &mut rng,
+                    let registration_start_request =
+                    opaque::client::registration::start_registration(
+                        self.form.model().password.as_bytes(),
+                                                                     &mut rng,
                     )?;
                     let req = registration::ClientRegistrationStartRequest {
-                        username: user_id.into(),
-                        registration_start_request: message,
+                        username: self.form.model().username.clone().into(),
+                        registration_start_request: registration_start_request.message,
                     };
-                    self.common
-                    .call_backend(ctx, HostService::register_start(req), move |r| {
-                        Msg::RegistrationStartResponse((state, r))
-                    });
+                    self.common.call_backend(
+                        ctx,
+                        async move {
+                            (
+                                registration_start_request.state,
+                             HostService::register_start(req).await,
+                            )
+                        },
+                        Msg::RegistrationStartResponse,
+                    );
                 } else {
-                    self.update(ctx, Msg::SuccessfulCreation);
+                    ctx.link().history().unwrap().push(AppRoute::ListUsers);
                 }
-                Ok(false)
+                Ok(true)
             }
-            Msg::RegistrationStartResponse((registration_start, response)) => {
-                let response = response?;
+            Msg::RegistrationStartResponse((state, res)) => {
+                let res = res.context("Could not initiate registration")?;
                 let mut rng = rand::rngs::OsRng;
-                let registration_upload = opaque::client::registration::finish_registration(
-                    registration_start,
-                    response.registration_response,
+                let registration_finish = opaque::client::registration::finish_registration(
+                    state,
+                    res.registration_response,
                     &mut rng,
-                )?;
+                )
+                .context("Could not finalize registration")?;
                 let req = registration::ClientRegistrationFinishRequest {
-                    server_data: response.server_data,
-                    registration_upload: registration_upload.message,
+                    server_data: res.server_data,
+                    registration_upload: registration_finish.message,
                 };
                 self.common.call_backend(
                     ctx,
                     HostService::register_finish(req),
                                          Msg::RegistrationFinishResponse,
                 );
-                Ok(false)
+                Ok(true)
             }
-            // NEW: Replace the old RegistrationFinishResponse with this (adds Kerberos sync)
             Msg::RegistrationFinishResponse(response) => {
-                anyhow::Context::context(response, "Registration finish failed")?;
-                if let Some(info) = &self.kerberos_info {
-                    if info.enabled {
-                        let model = self.form.model();
-                        let key = info.encode_key.as_ref().ok_or(anyhow::anyhow!("Missing encode key"))?;
-                        let obfuscated = obfuscate_password(&model.password, key);
-                        let vars = sync_kerberos::Variables {
-                            user_id: model.username.clone(),
-                            obfuscated_password: obfuscated,
-                        };
+                response?;
+                if let Some(obfuscated_password) = self.obfuscated_password.take() {
+                    if let Some(user_id) = self.user_id.clone() {
                         self.common.call_graphql::<SyncKerberos, _>(
                             ctx,
-                            vars,
+                            sync_kerberos::Variables {
+                                user_id,
+                                obfuscated_password,
+                            },
                             Msg::SyncKerberosResponse,
-                            "Kerberos sync failed",
+                            "Error syncing Kerberos",
                         );
-                        return Ok(false);
                     }
+                } else {
+                    ctx.link().history().unwrap().push(AppRoute::ListUsers);
                 }
-                self.handle_msg(ctx, Msg::SuccessfulCreation)?;  // NEW: Add ? to handle Result
-                Ok(true)  // Changed: Return Ok(true) after handling
+                Ok(true)
             }
-            Msg::SyncKerberosResponse(res) => {
-                anyhow::Context::context(res, "Kerberos sync failed")?;
-                self.handle_msg(ctx, Msg::SuccessfulCreation)?;  // NEW: Add ? to handle Result
-                Ok(true)  // Changed: Return Ok(true) after handling
-            }
-            Msg::SuccessfulCreation => {
+            Msg::SyncKerberosResponse(response) => {
+                response?;
                 ctx.link().history().unwrap().push(AppRoute::ListUsers);
                 Ok(true)
             }
@@ -262,81 +302,89 @@ impl Component for CreateUserForm {
     type Message = Msg;
     type Properties = ();
 
-    fn create(ctx: &Context<CreateUserForm>) -> Self {
-        let mut component = Self {
+    fn create(_: &YewContext<Self>) -> Self {
+        CreateUserForm {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<CreateUserModel>::new(CreateUserModel::default()),
-            attributes_schema: None,
-            form_ref: NodeRef::default(),
-            kerberos_info: None,
-        };
-        component.common.call_graphql::<GetUserAttributesSchema, _>(
-            ctx,
-            get_user_attributes_schema::Variables {},
-            Msg::ListAttributesResponse,
-            "Error trying to fetch user schema",
-        );
-        component.common.call_graphql::<GetKerberosInfo, _>(
-            ctx,
-            get_kerberos_info::Variables {},
-            Msg::KerberosInfoResponse,
-            "Error fetching Kerberos info",
-        );
-        component
+                attributes_schema: None,
+                form_ref: NodeRef::default(),
+                    kerberos_info: None,
+                    fetched_schema: false,
+                    fetched_kerberos: false,
+                    obfuscated_password: None,
+                    user_id: None,
+        }
     }
 
-    fn update(&mut self, ctx: &Context<CreateUserForm>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &YewContext<Self>, msg: Self::Message) -> bool {
         CommonComponentParts::<Self>::update(self, ctx, msg)
     }
 
-    fn view(&self, ctx: &Context<CreateUserForm>) -> Html {
-        let link = &ctx.link();
-        html! {
-          <div class="row justify-content-center">
-            <form class="form py-3"
-              ref={self.form_ref.clone()}>
-              <Field<CreateUserModel>
+    fn view(&self, ctx: &YewContext<Self>) -> Html {
+        let link = ctx.link();
+        if self.attributes_schema.is_none() {
+            html! {
+                <div>{"Loading schema..."}</div>
+            }
+        } else {
+            html! {
+                <div class="row justify-content-center">
+                <form class="form py-3" ref={self.form_ref.clone()}>
+                <Field<CreateUserModel>
                 form={&self.form}
                 required=true
                 label="User name"
                 field_name="username"
                 oninput={link.callback(|_| Msg::Update)} />
-              {
-                  self.attributes_schema
-                      .iter()
-                      .flatten()
-                      .filter(|a| !a.is_readonly)
-                      .map(get_custom_attribute_input)
-                      .collect::<Vec<_>>()
-              }
-              <Field<CreateUserModel>
+                {
+                    self.attributes_schema.as_ref().unwrap()
+                    .iter()
+                    .filter(|a| !a.is_readonly)
+                    .map(get_custom_attribute_input)
+                    .collect::<Vec<_>>()
+                }
+                <Field<CreateUserModel>
                 form={&self.form}
                 label="Password"
                 field_name="password"
                 input_type="password"
                 autocomplete="new-password"
                 oninput={link.callback(|_| Msg::Update)} />
-              <Field<CreateUserModel>
+                <Field<CreateUserModel>
                 form={&self.form}
                 label="Confirm password"
                 field_name="confirm_password"
                 input_type="password"
                 autocomplete="new-password"
                 oninput={link.callback(|_| Msg::Update)} />
-              <Submit
+                <Submit
                 disabled={self.common.is_task_running()}
                 onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
-            </form>
-            {
-              if let Some(e) = &self.common.error {
-                html! {
-                  <div class="alert alert-danger">
-                    {e.to_string() }
-                  </div>
+                </form>
+                {
+                    if let Some(e) = &self.common.error {
+                        html! {
+                            <div class="alert alert-danger">
+                            {e.to_string() }
+                            </div>
+                        }
+                    } else { html! {} }
                 }
-              } else { html! {} }
+                </div>
             }
-          </div>
+        }
+    }
+
+    fn rendered(&mut self, ctx: &YewContext<Self>, first_render: bool) {
+        if first_render && !self.fetched_schema {
+            log!("Rendered: fetching schema");
+            self.common.call_graphql::<GetUserAttributesSchema, _>(
+                ctx,
+                get_user_attributes_schema::Variables {},
+                Msg::ListAttributesResponse,
+                "Error trying to fetch user schema",
+            );
+            self.fetched_schema = true;
         }
     }
 }
@@ -347,17 +395,17 @@ fn get_custom_attribute_input(attribute_schema: &Attribute) -> Html {
     if attribute_schema.is_list {
         html! {
             <ListAttributeInput
-                name={attribute_schema.name.clone()}
-                attribute_type={attribute_schema.attribute_type}
-                required={mail_is_required}
+            name={attribute_schema.name.clone()}
+            attribute_type={attribute_schema.attribute_type}
+            required={mail_is_required}
             />
         }
     } else {
         html! {
             <SingleAttributeInput
-                name={attribute_schema.name.clone()}
-                attribute_type={attribute_schema.attribute_type}
-                required={mail_is_required}
+            name={attribute_schema.name.clone()}
+            attribute_type={attribute_schema.attribute_type}
+            required={mail_is_required}
             />
         }
     }

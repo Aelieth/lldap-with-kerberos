@@ -3,7 +3,7 @@ use validator::validate_email;
 use web_sys::{FormData, HtmlFormElement};
 use yew::NodeRef;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AttributeValue {
     pub name: String,
     pub values: Vec<String>,
