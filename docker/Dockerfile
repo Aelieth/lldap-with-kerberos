@@ -36,6 +36,10 @@ RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
     && chmod +x /usr/local/bin/gosu \
     && gosu nobody true
 
+# Set UID/GID defaults for entrypoint permissions (fixes unbound GID)
+ENV UID=10001
+ENV GID=10001
+
 RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 jq procps ca-certificates \
     && update-ca-certificates
 
