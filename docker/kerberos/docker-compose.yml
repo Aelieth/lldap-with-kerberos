@@ -1,0 +1,23 @@
+services:
+  kerberos-test:
+    build: .
+    container_name: kerberos-test
+    ports:
+      - "88:88/tcp"
+      - "88:88/udp"
+      - "749:749/tcp"
+    environment:
+      - LDAP_HOST=localhost
+      - LDAP_PORT=3890
+      - LDAP_SCHEME=ldap
+      - REALM_NAME=TESTLAB.COM
+      - BASE_DN=dc=testlab,dc=com
+      - KDC_DN=uid=krbkdc,ou=people,dc=testlab,dc=com
+      - ADMIN_DN=uid=krbadm,ou=people,dc=testlab,dc=com
+      - CONTAINER_DN=cn=kerberos,ou=groups,dc=testlab,dc=com
+      - DM_DN=uid=admin,ou=people,dc=testlab,dc=com
+      - DM_PASS=adminpassword123!
+      - MASTER_PASS=your-strong-master-pass!
+      - ADMIN_PASS=your-strong-admin-pass!
+      - KDC_PASS=your-strong-kdc-pass!
+      - ENCODE_KEY=my-super-secret-shared-key-123!
