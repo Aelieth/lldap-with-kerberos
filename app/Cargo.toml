@@ -12,7 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow = "1"
-base64 = "0.13"
+base64 = "0.22"
 gloo-console = "0.2.3"
 gloo-file = "0.2.3"
 gloo-net = "*"
