@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script trace mode
+# Script trace mode (for debug)
 if [ "${DEBUG_MODE:-false}" == "true" ]; then
     set -o xtrace
 fi
@@ -20,10 +20,10 @@ fi
 
 echo "Starting Kerberos KDC/KADMIN container"
 
-# Check for custom CA certs (AlmaLinux path)
-if [ -d "/etc/pki/ca-trust/source/anchors" ] && [ "$(ls -A /etc/pki/ca-trust/source/anchors)" ]; then
-    echo "SSL certificate trust found. Running update-ca-trust"
-    /usr/bin/update-ca-trust extract
+# Check for custom CA certs (Alpine path)
+if [ -d "/etc/ssl/certs" ] && [ "$(ls -A /etc/ssl/certs)" ]; then
+    echo "SSL certificate trust found. Running update-ca-certificates"
+    update-ca-certificates
 fi
 
 # Hybrid mode: Default local backend (safe for LLDAP); optional full LDAP if LDAP_BACKEND=true
@@ -33,7 +33,7 @@ if [ "$LDAP_BACKEND" == "true" ] && [ -z "${LDAP_HOST}" ]; then
     LDAP_BACKEND=false
 fi
 
-# Flexible LDAP scheme and port (test defaults to plain ldap:3890; prod can override to ldaps:6360)
+# Flexible LDAP scheme and port (default ldap:3890 for LLDAP; override for prod)
 if [ "$LDAP_BACKEND" == "true" ]; then
     LDAP_SCHEME=${LDAP_SCHEME:-ldap}
     LDAP_PORT=${LDAP_PORT:-3890}
@@ -41,7 +41,7 @@ if [ "$LDAP_BACKEND" == "true" ]; then
     echo "Full LDAP backend enabled (experimental with LLDAP—limitations on Kerberos subtree)."
 fi
 
-# LLDAP UI port for lldap-cli (assumes UI exposed on same host as LDAP, default 17170)
+# LLDAP UI port for lldap-cli (default 17170; assumes UI on localhost in container)
 LLDAP_UI_PORT=${LLDAP_UI_PORT:-17170}
 
 # usage: file_env VAR [DEFAULT]
@@ -68,14 +68,29 @@ file_env() {
     unset "$fileVar"
 }
 
-# Helper functions (adapted to warn instead of exit)
+# Load secrets/flexible envs (synced with LLDAP where possible, e.g., LLDAP_ENCODE_KEY)
+file_env 'MASTER_PASS' 'your-strong-master-pass!'
+file_env 'ADMIN_PASS' 'your-strong-admin-pass!'
+file_env 'KDC_PASS' 'your-strong-kdc-pass!'
+file_env 'DM_PASS' 'adminpassword123!'  # Optional for LDAP setup
+file_env 'LLDAP_ENCODE_KEY' 'my-super-secret-shared-key-123!'  # Synced with LLDAP hook
+ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat
+
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
+BASE_DN="${BASE_DN:-dc=testlab,dc=com}"
+KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"
+ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"
+CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"
+DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"
+
+# Helper functions (warn instead of exit for flexibility)
 ldap_create_person() {
     local ldap_url=$1
-    local dn=$2  # Full DN
-    local sn=$3  # Description/name
+    local dn=$2
+    local sn=$3
 
     echo "  - Adding user $sn at $dn"
-    /usr/bin/ldapadd -H $ldap_url -x -D "${DM_DN}" -w "${DM_PASS}" <<EOL
+    ldapadd -H $ldap_url -x -D "${DM_DN}" -w "${DM_PASS}" <<EOL
 dn: $dn
 objectClass: person
 objectClass: top
@@ -84,272 +99,85 @@ objectClass: posixAccount
 sn: $sn
 cn: $sn
 uid: $sn
-mail: ${sn}@service.${REALM_NAME,,}  # Optional email for LLDAP compatibility
+mail: ${sn}@service.${REALM_NAME,,}
 EOL
     status=$?
     if [ $status -ne 0 ] && [ $status -ne 68 ]; then
-        echo "WARNING: Failed adding user $sn at $dn (status $status). LDAP integration may not work. Check LDAP server logs and schema."
-        return 1
-    fi
-    return 0
-}
-
-ldap_change_password() {
-    local ldap_url=$1
-    local dn=$2
-    local new_pass=$3
-
-    /usr/bin/ldappasswd -H $ldap_url -x -D "${DM_DN}" -w "${DM_PASS}" -s $new_pass $dn
-    status=$?
-    if [ $status -ne 0 ]; then
-        echo "WARNING: Failed changing password for $dn (status $status). Using existing or default—check LDAP auth."
-        return 1
-    fi
-    return 0
-}
-
-save_password_into_file() {
-    local dn=$1
-    local pass=$2
-    local file_path=$3
-
-    /usr/sbin/kdb5_ldap_util stashsrvpw -f $file_path -w "$pass" "$dn" <<EOL
-$pass
-$pass
-
-EOL
-    if [ $? -ne 0 ]; then
-        echo "WARNING: Failed to stash password for $dn in $file_path. LDAP auth may fail—check permissions."
-        return 1
-    fi
-    return 0
-}
-
-# New: LLDAP schema setup using bundled lldap-cli (optional for non-LLDAP)
-setup_lldap_schema() {
-    echo "Extending LLDAP schema for POSIX/SSSD compatibility..."
-
-    # Wait for LLDAP UI to be ready
-    local max_retries=30
-    local retry=0
-    until curl -s "http://${LDAP_HOST}:${LLDAP_UI_PORT}/auth/simple/login" > /dev/null; do
-        ((retry++))
-        if [ $retry -ge $max_retries ]; then
-            echo "WARNING: Could not reach LLDAP UI after $max_retries attempts. Skipping schema extension."
-            return 1
-        fi
-        sleep 5
-    done
-
-    export LLDAP_HTTPURL="http://${LDAP_HOST}:${LLDAP_UI_PORT}"
-    export LLDAP_USERNAME=$(echo "${DM_DN}" | sed -n 's/^uid=\([^,]*\),.*/\1/p')
-    export LLDAP_PASSWORD="${DM_PASS}"
-
-    # Helper to add user attribute if missing
-    add_user_attr_if_missing() {
-        local name=$1
-        local type=$2
-        local flags=${3:-"-v -e"}  # default visible + editable, no list
-
-        if ! /usr/bin/lldap-cli schema attribute user list | grep -q "^${name} "; then
-            echo "  - Adding user attribute: $name ($type $flags)"
-            /usr/bin/lldap-cli schema attribute user add "$name" "$type" $flags
-            [ $? -eq 0 ] && echo "    Success" || echo "    WARNING: Failed to add $name"
-        else
-            echo "  - User attribute $name already exists"
-        fi
-    }
-
-    # Helper for group attributes
-    add_group_attr_if_missing() {
-        local name=$1
-        local type=$2
-        local flags=${3:-"-v -e"}
-
-        if ! /usr/bin/lldap-cli schema attribute group list | grep -q "^${name} "; then
-            echo "  - Adding group attribute: $name ($type $flags)"
-            /usr/bin/lldap-cli schema attribute group add "$name" "$type" $flags
-            [ $? -eq 0 ] && echo "    Success" || echo "    WARNING: Failed to add $name"
-        else
-            echo "  - Group attribute $name already exists"
-        fi
-    }
-
-    # POSIX attributes for SSSD
-    add_user_attr_if_missing uidNumber INTEGER
-    add_user_attr_if_missing gidNumber INTEGER
-    add_user_attr_if_missing unixHomeDirectory STRING
-    add_user_attr_if_missing loginShell STRING "-v -e"  # common name: unixHomeDirectory
-
-    add_group_attr_if_missing gidNumber INTEGER
-
-    # Optional: posixAccount / posixGroup object classes (helps default SSSD filters)
-    if ! /usr/bin/lldap-cli schema objectclass user list | grep -q "^posixAccount$"; then
-        echo "  - Adding objectClass posixAccount to users"
-        /usr/bin/lldap-cli schema objectclass user add posixAccount || echo "    WARNING: Failed"
-    fi
-    if ! /usr/bin/lldap-cli schema objectclass group list | grep -q "^posixGroup$"; then
-        echo "  - Adding objectClass posixGroup to groups"
-        /usr/bin/lldap-cli schema objectclass group add posixGroup || echo "    WARNING: Failed"
-    fi
-
-    # Experimental Kerberos attributes (only if full LDAP backend requested)
-    if [ "$LDAP_BACKEND" == "true" ]; then
-        add_user_attr_if_missing krbPrincipalName STRING "-l -v -e"
-        # Add others if desired...
+        echo "WARNING: Failed adding $dn (status $status)—continuing with local fallback."
     fi
 }
 
-# Set defaults and warnings for all vars (adaptive, no forced structures)
-DESTROY_AND_RECREATE=${DESTROY_AND_RECREATE:-false}
-if [ "$DESTROY_AND_RECREATE" == "false" ]; then
-    echo "INFO: DESTROY_AND_RECREATE not set or false. Existing realm preserved. Set -e DESTROY_AND_RECREATE=true to recreate (careful, destructive!)."
-fi
-
-file_env REALM_NAME "EXAMPLE.COM"
-if [ "$REALM_NAME" == "EXAMPLE.COM" ]; then
-    echo "WARNING: REALM_NAME using default 'EXAMPLE.COM'. Set -e REALM_NAME=YOUR.REALM (e.g., HOME.LAN) for production."
-fi
-
-file_env MASTER_PASS "mastertemp"
-if [ "$MASTER_PASS" == "mastertemp" ]; then
-    echo "WARNING: MASTER_PASS using INSECURE TESTING DEFAULT 'mastertemp'. CHANGE THIS FOR PRODUCTION—set -e MASTER_PASS=strongpass or use MASTER_PASS_FILE."
-fi
-
-file_env BASE_DN "dc=example,dc=com"
-if [ "$BASE_DN" == "dc=example,dc=com" ]; then
-    echo "WARNING: BASE_DN using default 'dc=example,dc=com'. Set -e BASE_DN=your,base,dn to match your LDAP (e.g., dc=mydomain,dc=com for LLDAP)."
-fi
-
-file_env KDC_DN
-if [ -z "$KDC_DN" ]; then
-    KDC_DN="uid=krbkdc,ou=people,$BASE_DN"
-    echo "WARNING: KDC_DN not set. Using default '$KDC_DN' (LLDAP-friendly). Customize with -e KDC_DN=your,full,dn."
-fi
-
-file_env KDC_PASS "kdctemp"
-if [ "$KDC_PASS" == "kdctemp" ]; then
-    echo "WARNING: KDC_PASS using INSECURE TESTING DEFAULT 'kdctemp'. CHANGE THIS FOR PRODUCTION—set -e KDC_PASS=strongpass or KDC_PASS_FILE."
-fi
-
-file_env ADMIN_DN
-if [ -z "$ADMIN_DN" ]; then
-    ADMIN_DN="uid=krbadm,ou=people,$BASE_DN"
-    echo "WARNING: ADMIN_DN not set. Using default '$ADMIN_DN' (LLDAP-friendly). Customize with -e ADMIN_DN=your,full,dn."
-fi
-
-file_env ADMIN_PASS "admintemp"
-if [ "$ADMIN_PASS" == "admintemp" ]; then
-    echo "WARNING: ADMIN_PASS using INSECURE TESTING DEFAULT 'admintemp'. CHANGE THIS FOR PRODUCTION—set -e ADMIN_PASS=strongpass or ADMIN_PASS_FILE."
-fi
-
-file_env CONTAINER_DN
-if [ -z "$CONTAINER_DN" ]; then
-    CONTAINER_DN="cn=kerberos,ou=groups,$BASE_DN"
-    echo "WARNING: CONTAINER_DN not set. Using default '$CONTAINER_DN' (LLDAP group style for subtree). For OpenLDAP-style OU, override with -e CONTAINER_DN=ou=kerberos,$BASE_DN (may require manual creation)."
-fi
-
-file_env DM_DN
-if [ -z "$DM_DN" ]; then
-    DM_DN="uid=admin,ou=people,$BASE_DN"
-    echo "WARNING: DM_DN not set. Using default '$DM_DN' (LLDAP admin). Customize for your directory manager."
-fi
-
-file_env DM_PASS "dmtemp"
-if [ "$DM_PASS" == "dmtemp" ]; then
-    echo "WARNING: DM_PASS using INSECURE TESTING DEFAULT 'dmtemp'. CHANGE THIS FOR PRODUCTION—set -e DM_PASS=strongpass or DM_PASS_FILE for LDAP bind."
-fi
-
-# Create necessary directories
-mkdir -p /var/log/krb5 /var/kerberos/krb5kdc /var/run /tmp
-
-# Generate krb5.conf early (needed for kadmin.local)
-echo " - Generating /etc/krb5.conf"
-cat > /etc/krb5.conf <<EOF
-[libdefaults]
-    dns_canonicalize_hostname = false
-    rdns = false
-    default_realm = ${REALM_NAME}
-    default_ccache_name = FILE:/tmp/krb5cc_%{uid}
-[realms]
-    ${REALM_NAME} = {
-            kdc = localhost
-            admin_server = localhost
-    }
-[domain_realm]
-    .${REALM_NAME,,} = ${REALM_NAME}
-    ${REALM_NAME,,} = ${REALM_NAME}
-[logging]
-    kdc = FILE:/var/log/krb5/krb5kdc.log
-    admin_server = FILE:/var/log/krb5/kadmind.log
-    default = FILE:/var/log/krb5libs.log
-EOF
-
-# Configuration if not already done (check for principal database file)
-if [ ! -f /var/kerberos/krb5kdc/principal ]; then
-    echo "Kerberos database not found. Starting configuration."
-
-    # Optional LLDAP schema setup (for POSIX attrs in hybrid)
-    if [ -x /usr/bin/lldap-cli ]; then
-        setup_lldap_schema
-    else
-        echo "INFO: lldap-cli not available—skipping auto-schema setup (manual UI for POSIX attrs if needed)."
+# Setup LDAP if enabled (flexible, warn on fail)
+if [ "$LDAP_BACKEND" == "true" ]; then
+    echo "Setting up full LDAP backend..."
+    # Install ldap tools if missing (Alpine flexibility)
+    if ! command -v ldapadd > /dev/null; then
+        echo "Installing openldap-clients..."
+        apk add --no-cache openldap-clients
     fi
 
-    if [ "$LDAP_BACKEND" == "true" ]; then
-        echo "Full LDAP backend enabled (experimental with LLDAP—may fallback)."
-        # (keep LDAP init code, but warn)
-        # ... (same as before, with group create)
-    else
-        echo "Hybrid/local mode: Using local Kerberos DB for principals (recommended for LLDAP)."
-    fi
+    # Create container/entries if needed (warn, don't exit)
+    ldap_create_person "$ldap_url" "${CONTAINER_DN}" "kerberos"
+    ldap_create_person "$ldap_url" "${KDC_DN}" "krbkdc"
+    ldap_create_person "$ldap_url" "${ADMIN_DN}" "krbadm"
 
-    # Local init always (safe fallback)
-    echo "Configuring local Kerberos database."
-    /usr/sbin/kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
-    status=$?
-    if [ $status -ne 0 ]; then
-        echo "ERROR: Local Kerberos initialization failed (status $status). Services may not start—check logs."
-    else
-        echo "Adding admin principal..."
-        kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
-        echo "Creating admin keytab..."
-        kadmin.local -q "ktadd -norandkey -k /var/kerberos/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
-        echo "*/admin@${REALM_NAME} *" > /var/kerberos/krb5kdc/kadm5.acl
-    fi
+    # Add principals (flexible, use defaults)
+    echo "Adding kdc/admin principals to LDAP..."
+    kadmin.local -q "addprinc -pw ${KDC_PASS} krbkdc/admin@${REALM_NAME}"
+    kadmin.local -q "addprinc -pw ${ADMIN_PASS} krbadm/admin@${REALM_NAME}"
+
+    # LDAP creds file
+    echo "${KDC_DN}:${KDC_PASS}" > /var/krb5kdc/ldap.creds
+    echo "${ADMIN_DN}:${ADMIN_PASS}" >> /var/krb5kdc/ldap.creds
+else
+    echo "Hybrid/local mode: Using local Kerberos DB (recommended for LLDAP)."
+fi
+
+# Local init always (safe fallback)
+echo "Configuring local Kerberos database."
+kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
+status=$?
+if [ $status -ne 0 ]; then
+    echo "WARNING: Local Kerberos init failed (status $status)—services may not start."
+else
+    echo "Adding admin principal..."
+    kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
+    echo "Creating admin keytab..."
+    kadmin.local -q "ktadd -norandkey -k /var/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
+    echo "*/admin@${REALM_NAME} *" > /var/krb5kdc/kadm5.acl
 fi
 
 # Generate kdc.conf (local always, LDAP optional)
-echo " - Generating /var/kerberos/krb5kdc/kdc.conf"
-cat > /var/kerberos/krb5kdc/kdc.conf <<EOF
+echo " - Generating /var/krb5kdc/kdc.conf"
+cat > /var/krb5kdc/kdc.conf <<EOF
 [kdcdefaults]
     kdc_ports = 750,88
 [realms]
     ${REALM_NAME} = {
 EOF
 if [ "$LDAP_BACKEND" == "true" ]; then
-    cat >> /var/kerberos/krb5kdc/kdc.conf <<EOF
+    cat >> /var/krb5kdc/kdc.conf <<EOF
         database_module = contact_ldap
 EOF
 fi
-cat >> /var/kerberos/krb5kdc/kdc.conf <<EOF
+cat >> /var/krb5kdc/kdc.conf <<EOF
     }
 [dbdefaults]
 [dbmodules]
 EOF
 if [ "$LDAP_BACKEND" == "true" ]; then
-    cat >> /var/kerberos/krb5kdc/kdc.conf <<EOF
+    cat >> /var/krb5kdc/kdc.conf <<EOF
     contact_ldap = {
             db_library = kldap
             ldap_kdc_dn = "${KDC_DN}"
             ldap_kadmind_dn = "${ADMIN_DN}"
             ldap_kerberos_container_dn = "${CONTAINER_DN}"
-            ldap_service_password_file = /var/kerberos/krb5kdc/ldap.creds
+            ldap_service_password_file = /var/krb5kdc/ldap.creds
             ldap_servers = $ldap_url
     }
 EOF
 fi
-cat >> /var/kerberos/krb5kdc/kdc.conf <<EOF
+cat >> /var/krb5kdc/kdc.conf <<EOF
 [logging]
     kdc = FILE:/var/log/krb5/krb5kdc.log
     admin_server = FILE:/var/log/krb5/kadmind.log
@@ -357,9 +185,9 @@ EOF
 
 # Start Kerberos services
 echo "Starting kadmind..."
-/usr/sbin/kadmind -P /var/run/kadmind.pid
+kadmind -P /var/run/kadmind.pid
 echo "Starting krb5kdc..."
-/usr/sbin/krb5kdc -P /var/run/krb5kdc.pid
+krb5kdc -P /var/run/krb5kdc.pid
 
 # Show kdc logging as output. Tail will exit when receiving SIGTERM.
 tail -f /var/log/krb5/krb5kdc.log &
@@ -375,9 +203,9 @@ kill $(cat /var/run/kadmind.pid)
 
 # Wait for clean shutdown
 while true; do
-    ps -p $(cat /var/run/krb5kdc.pid) | grep "/usr/sbin/krb5kdc" > /dev/null
+    ps -p $(cat /var/run/krb5kdc.pid) | grep "krb5kdc" > /dev/null
     krb5kdc_status=$?
-    ps -p $(cat /var/run/kadmind.pid) | grep "/usr/sbin/kadmind" > /dev/null
+    ps -p $(cat /var/run/kadmind.pid) | grep "kadmind" > /dev/null
     kadmin_status=$?
     if [ $krb5kdc_status -ne 0 ] && [ $kadmin_status -ne 0 ]; then
         exit 0
