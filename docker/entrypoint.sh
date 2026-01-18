@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+KERBEROS_ENABLED="${KERBEROS_ENABLED:-true}"
+
 # Run original LLDAP entrypoint to set up config and start server in background
 /docker/docker-entrypoint.original.sh "$@" &  # Starts LLDAP with args (e.g., "run")
 LLDAP_PID=$!
@@ -29,9 +31,11 @@ if [ "${AUTO_EXTEND_SCHEMA:-true}" = "true" ]; then
     # ... add others like gidNumber, etc.
 fi
 
-# Start Kerberos
-echo "Starting Kerberos..."
-/usr/bin/start
+# Start Kerberos if enabled
+if [ "$KERBEROS_ENABLED" = "true" ]; then
+    echo "Starting Kerberos..."
+    /usr/bin/start
+fi
 
 # Tail logs and wait for signals (clean shutdown)
 trap "kill $LLDAP_PID; /usr/bin/start healthcheck; exit" INT TERM  # Calls your healthcheck on stop
