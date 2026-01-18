@@ -230,4 +230,4 @@ pub struct GetKerberosInfo;
     response_derives = "Debug",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct SyncKerberos;
+pub struct SyncKerberosPassword;
