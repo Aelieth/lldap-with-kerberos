@@ -72,9 +72,9 @@ file_env() {
 file_env 'MASTER_PASS' 'your-strong-master-pass!'
 file_env 'ADMIN_PASS' 'your-strong-admin-pass!'
 file_env 'KDC_PASS' 'your-strong-kdc-pass!'
-file_env 'DM_PASS' 'adminpassword123!'  # Optional for LDAP setup
-file_env 'LLDAP_ENCODE_KEY' 'my-super-secret-shared-key-123!'  # Synced with LLDAP hook
-ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat
+file_env 'DM_PASS' 'adminpassword123!'
+file_env 'LLDAP_ENCODE_KEY' 'my-super-secret-shared-key-123!'
+ENCODE_KEY="${LLDAP_ENCODE_KEY}"
 
 REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
 BASE_DN="${BASE_DN:-dc=testlab,dc=com}"
@@ -147,6 +147,9 @@ else
     echo "*/admin@${REALM_NAME} *" > /var/krb5kdc/kadm5.acl
 fi
 
+# Create log dir if missing (new)
+mkdir -p /var/log/krb5
+
 # Generate kdc.conf (local always, LDAP optional)
 echo " - Generating /var/krb5kdc/kdc.conf"
 cat > /var/krb5kdc/kdc.conf <<EOF
@@ -190,7 +193,7 @@ echo "Starting krb5kdc..."
 krb5kdc -P /var/run/krb5kdc.pid
 
 # Show kdc logging as output. Tail will exit when receiving SIGTERM.
-tail -f /var/log/krb5/krb5kdc.log &
+tail -F /var/log/krb5/krb5kdc.log &
 tail_pid=$!
 trap 'kill $tail_pid' TERM INT
 wait $tail_pid

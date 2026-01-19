@@ -36,7 +36,6 @@ RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
     && chmod +x /usr/local/bin/gosu \
     && gosu nobody true
 
-# Set UID/GID defaults for entrypoint permissions (fixes unbound GID)
 ENV UID=10001
 ENV GID=10001
 
@@ -46,9 +45,9 @@ RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 k
 WORKDIR /app
 
 COPY --from=builder /app/target/release/lldap /app/target/release/lldap_migration_tool /app/target/release/lldap_set_password ./
-COPY --from=builder /app/app/static /app/static
-COPY --from=builder /app/app/pkg /app/pkg
-COPY --from=builder /app/app/index_local.html /app/index.html
+COPY --from=builder /app/app/static /app/app/static
+COPY --from=builder /app/app/pkg /app/app/pkg
+COPY --from=builder /app/app/index_local.html /app/app/index.html
 
 COPY docker/lldap_config.docker_template.toml ./
 COPY docker/docker-entrypoint.original.sh ./docker-entrypoint.sh
