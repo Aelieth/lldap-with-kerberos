@@ -25,10 +25,13 @@ fi
 # Optional: Check/extend schema with lldap-cli (use env for creds)
 if [ "$KERBEROS_ENABLED" = "true" ] && [ "${AUTO_EXTEND_SCHEMA:-true}" = "true" ]; then
     echo "Checking/extending LLDAP schema for Kerberos compat..."
-    lldap-cli -u "${LLDAP_LDAP_USER_DN:-admin}" -p "${LLDAP_LDAP_USER_PASS:-password}" schema attribute user list || true
-    # Example extensions
-    lldap-cli -u "${LLDAP_LDAP_USER_DN:-admin}" -p "${LLDAP_LDAP_USER_PASS:-password}" schema attribute user add uidNumber INTEGER -e
-    lldap-cli -u "${LLDAP_LDAP_USER_DN:-admin}" -p "${LLDAP_LDAP_USER_PASS:-password}" schema objectclass user add inetOrgPerson
+    # Set lldap-cli envs (internal to container)
+    export httpUrl="http://localhost:17170"
+    export httpAuthEndpoint="/auth/simple/login"
+    export httpGraphQlEndpoint="/api/graphql"
+    /usr/bin/lldap-cli --user "${LLDAP_LDAP_USER_DN:-admin}" --pass "${LLDAP_LDAP_USER_PASS:-password}" schema attribute user list || true
+    /usr/bin/lldap-cli --user "${LLDAP_LDAP_USER_DN:-admin}" --pass "${LLDAP_LDAP_USER_PASS:-password}" schema attribute user add uidNumber INTEGER -e || true
+    /usr/bin/lldap-cli --user "${LLDAP_LDAP_USER_DN:-admin}" --pass "${LLDAP_LDAP_USER_PASS:-password}" schema objectclass user add inetOrgPerson || true
 fi
 
 # Start Kerberos if enabled

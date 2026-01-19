@@ -172,3 +172,6 @@ key_seed = "RanD0m STR1ng"
 ## If "ldap_host" is set to a specific IP address, this must be set to match if the built-in
 ## healthcheck command is used.
 #ldap_host = "localhost"
+
+password_change_hook = "/usr/bin/sync-kerberos-principal"  # Internal path, always enabled if KERBEROS_ENABLED=true
+encode_key = "${LLDAP_ENCODE_KEY}"  # Shared secret for obfuscation
