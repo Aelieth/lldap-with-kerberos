@@ -2,12 +2,13 @@
 # Real sync hook from LLDAP password change
 # Args: $1 username, $2 obfuscated_pass (base64 of XOR with ENCODE_KEY)
 
-DOCKER_CONTAINER="kerberos-test"
-USERNAME="$1"
-OBFUSCATED_PASS="$2"
-ENCODE_KEY="${ENCODE_KEY}"  # Shared from env
-REALM="${REALM_NAME:-TESTLAB.COM}"  # Flexible—env override or fallback
-LOG_FILE="/var/log/krb5/sync.log"  # Log inside container
+#!/bin/bash
+
+DOCKER_CONTAINER="${DOCKER_CONTAINER:-kerberos-test}"  # Container name for exec (optional, default test)
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Kerberos realm (optional, default TESTLAB.COM)
+LOG_FILE="${LOG_FILE:-/var/log/krb5/sync.log}"  # Log path (optional, default /var/log/krb5/sync.log)
+LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"  # Shared obfuscation key (required)
+ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat (optional)
 
 if [ -z "$ENCODE_KEY" ]; then
     echo "ERROR: ENCODE_KEY missing—cannot deobfuscate" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE

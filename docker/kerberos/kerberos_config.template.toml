@@ -1,0 +1,12 @@
+[kerberos]
+realm = "${REALM_NAME}"
+base_dn = "${BASE_DN}"
+master_pass = "${MASTER_PASS}"
+admin_pass = "${ADMIN_PASS}"
+kdc_pass = "${KDC_PASS}"
+dm_pass = "${DM_PASS}"
+encode_key = "${LLDAP_ENCODE_KEY}"
+ldap_backend = "${LDAP_BACKEND}"
+ldap_host = "${LDAP_HOST}"
+ldap_scheme = "${LDAP_SCHEME}"
+ldap_port = "${LDAP_PORT}"

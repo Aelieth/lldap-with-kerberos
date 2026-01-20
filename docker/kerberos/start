@@ -4,6 +4,8 @@ if [ "${DEBUG_MODE:-false}" == "true" ]; then
     set -o xtrace
 fi
 
+# Predefine variables at top (with defaults/placeholders; optional noted)
+FORCE_UPDATE="${FORCE_UPDATE:-false}"  # Bool to force update conf file on env change (optional, default false)
 DEBUG_MODE="${DEBUG_MODE:-false}"  # Bool for trace mode (optional, default false)
 LDAP_BACKEND="${LDAP_BACKEND:-false}"  # Bool for full LDAP mode (optional, default false - hybrid/local)
 LDAP_HOST="${LDAP_HOST:-localhost}"  # LDAP host (optional, default localhost for internal)
@@ -22,10 +24,6 @@ KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"  # KDC principal pass (required if
 DM_PASS="${DM_PASS:-adminpassword123!}"  # Dir manager pw (optional, for LDAP setup if needed)
 LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"  # Shared obfuscation key (required for sync)
 ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat (optional)
-
-if [ "${DEBUG_MODE:-false}" == "true" ]; then
-    set -o xtrace
-fi
 
 # If requested, perform a healthcheck and exit
 if [[ ${1,,} == "healthcheck" ]]; then
@@ -48,64 +46,26 @@ if [ -d "/etc/ssl/certs" ] && [ "$(ls -A /etc/ssl/certs)" ]; then
     update-ca-certificates
 fi
 
-# Hybrid mode: Default local backend (safe for LLDAP); optional full LDAP if LDAP_BACKEND=true
-LDAP_BACKEND=${LDAP_BACKEND:-false}
-if [ "$LDAP_BACKEND" == "true" ] && [ -z "${LDAP_HOST}" ]; then
-    echo "WARNING: LDAP_BACKEND=true but LDAP_HOST not set. Falling back to local."
-    LDAP_BACKEND=false
+# Load Kerberos config (replicate LLDAP model: copy/substitute template if missing or FORCE_UPDATE=true)
+KERBEROS_CONFIG="/data/kerberos_config.toml"
+FORCE_UPDATE="${FORCE_UPDATE:-false}"
+if [ "$FORCE_UPDATE" == "true" ] || [ ! -f "$KERBEROS_CONFIG" ]; then
+    echo "Generating kerberos_config.toml from template/env..."
+    envsubst < /app/kerberos_config.template.toml > "$KERBEROS_CONFIG"
+else
+    echo "kerberos_config.toml exists and FORCE_UPDATE=false—loading existing."
 fi
 
-# Flexible LDAP scheme and port (default ldap:3890 for LLDAP; override for prod)
-if [ "$LDAP_BACKEND" == "true" ]; then
-    LDAP_SCHEME=${LDAP_SCHEME:-ldap}
-    LDAP_PORT=${LDAP_PORT:-3890}
-    ldap_url=${LDAP_SCHEME}://${LDAP_HOST}:${LDAP_PORT}
-    echo "Full LDAP backend enabled (experimental with LLDAP—limitations on Kerberos subtree)."
-fi
+# Parse TOML to envs (simple grep/cut; assume [kerberos] section)
+while IFS='=' read -r key value; do
+    key=$(echo "$key" | tr -d ' ' | tr -d '[' | tr -d ']')
+    value=$(echo "$value" | tr -d '"' | tr -d "'")
+    export "$key"="$value"
+done < <(grep -A 20 "\[kerberos\]" "$KERBEROS_CONFIG" | grep -v "\[kerberos\]" | grep "=")
 
-# LLDAP UI port for lldap-cli (default 17170; assumes UI on localhost in container)
-LLDAP_UI_PORT=${LLDAP_UI_PORT:-17170}
+# Now vars loaded (REALM_NAME, BASE_DN, etc.)
 
-# usage: file_env VAR [DEFAULT]
-# Loads var from ENV or file, with default; unsets _FILE after
-file_env() {
-    local var="$1"
-    local fileVar="${var}_FILE"
-    local defaultValue="${2:-}"
-
-    local val="$defaultValue"
-
-    if [ "${!var:-}" ]; then
-        val="${!var}"
-        echo "** Using ${var} from ENV"
-    elif [ "${!fileVar:-}" ]; then
-        if [ ! -f "${!fileVar}" ]; then
-            echo "WARNING: Secret file \"${!fileVar}\" not found. Falling back to default for $var."
-        else
-            val="$(< "${!fileVar}")"
-            echo "** Using ${var} from secret file"
-        fi
-    fi
-    export "$var"="$val"
-    unset "$fileVar"
-}
-
-# Load secrets/flexible envs (synced with LLDAP where possible, e.g., LLDAP_ENCODE_KEY)
-file_env 'MASTER_PASS' 'your-strong-master-pass!'
-file_env 'ADMIN_PASS' 'your-strong-admin-pass!'
-file_env 'KDC_PASS' 'your-strong-kdc-pass!'
-file_env 'DM_PASS' 'adminpassword123!'
-file_env 'LLDAP_ENCODE_KEY' 'my-super-secret-shared-key-123!'
-ENCODE_KEY="${LLDAP_ENCODE_KEY}"
-
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
-BASE_DN="${BASE_DN:-dc=testlab,dc=com}"
-KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"
-ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"
-CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"
-DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"
-
-# Create dirs (to fix no file/pid/log)
+# Create dirs (for no file/pid/log)
 mkdir -p /var/lib/krb5kdc /var/run /var/log/krb5
 
 # Helper functions (warn instead of exit for flexibility)
@@ -152,19 +112,15 @@ if [ "$LDAP_BACKEND" == "true" ]; then
     kadmin.local -q "addprinc -pw ${ADMIN_PASS} krbadm/admin@${REALM_NAME}"
 
     # LDAP creds file
-    echo "${KDC_DN}:${KDC_PASS}" > /var/krb5kdc/ldap.creds
-    echo "${ADMIN_DN}:${ADMIN_PASS}" >> /var/krb5kdc/ldap.creds
+    echo "${KDC_DN}:${KDC_PASS}" > /var/lib/krb5kdc/ldap.creds
+    echo "${ADMIN_DN}:${ADMIN_PASS}" >> /var/lib/krb5kdc/ldap.creds
 else
     echo "Hybrid/local mode: Using local Kerberos DB (recommended for LLDAP)."
 fi
 
 # Local init always (safe fallback)
 echo "Configuring local Kerberos database."
-if [ -f "/var/lib/krb5kdc/principal" ]; then
-    echo "Kerberos DB exists—skipping init."
-else
-    kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
-fi
+kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
 status=$?
 if [ $status -ne 0 ]; then
     echo "WARNING: Local Kerberos init failed (status $status)—services may not start."
@@ -172,59 +128,8 @@ else
     echo "Adding admin principal..."
     kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
     echo "Creating admin keytab..."
-    kadmin.local -q "ktadd -norandkey -k /var/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
-    echo "*/admin@${REALM_NAME} *" > /var/krb5kdc/kadm5.acl
-fi
-
-# Generate krb5.conf with default_realm (local always, LDAP optional)
-echo " - Generating /etc/krb5.conf"
-if [ -f "/etc/krb5.conf" ]; then
-    echo "krb5.conf exists—skipping create."
-else
-    cat > /etc/krb5.conf <<EOF
-[libdefaults]
-    default_realm = ${REALM_NAME}
-EOF
-fi
-
-# Generate kdc.conf (local always, LDAP optional)
-echo " - Generating /var/krb5kdc/kdc.conf"
-if [ -f "/var/krb5kdc/kdc.conf" ]; then
-    echo "kdc.conf exists—skipping create."
-else
-    cat > /var/krb5kdc/kdc.conf <<EOF
-[kdcdefaults]
-    kdc_ports = 750,88
-[realms]
-    ${REALM_NAME} = {
-EOF
-    if [ "$LDAP_BACKEND" == "true" ]; then
-        cat >> /var/krb5kdc/kdc.conf <<EOF
-        database_module = contact_ldap
-EOF
-    fi
-    cat >> /var/krb5kdc/kdc.conf <<EOF
-    }
-[dbdefaults]
-[dbmodules]
-EOF
-    if [ "$LDAP_BACKEND" == "true" ]; then
-        cat >> /var/krb5kdc/kdc.conf <<EOF
-    contact_ldap = {
-            db_library = kldap
-            ldap_kdc_dn = "${KDC_DN}"
-            ldap_kadmind_dn = "${ADMIN_DN}"
-            ldap_kerberos_container_dn = "${CONTAINER_DN}"
-            ldap_service_password_file = /var/krb5kdc/ldap.creds
-            ldap_servers = $ldap_url
-    }
-EOF
-    fi
-    cat >> /var/krb5kdc/kdc.conf <<EOF
-[logging]
-    kdc = FILE:/var/log/krb5/krb5kdc.log
-    admin_server = FILE:/var/log/krb5/kadmind.log
-EOF
+    kadmin.local -q "ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
+    echo "*/admin@${REALM_NAME} *" > /var/lib/krb5kdc/kadm5.acl
 fi
 
 # Start Kerberos services

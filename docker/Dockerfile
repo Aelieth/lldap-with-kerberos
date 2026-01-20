@@ -39,7 +39,7 @@ RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
 ENV UID=10001
 ENV GID=10001
 
-RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 jq procps ca-certificates \
+RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 jq procps ca-certificates gettext \
     && update-ca-certificates
 
 WORKDIR /app
@@ -55,9 +55,13 @@ COPY scripts/bootstrap.sh ./
 COPY docker/kerberos/start /usr/bin/start
 COPY docker/kerberos/sync-kerberos-principal /usr/bin/sync-kerberos-principal
 COPY docker/kerberos/lldap-cli /usr/bin/lldap-cli
+COPY docker/kerberos/krb5.template.conf /app/krb5.template.conf
+COPY docker/kerberos/kdc.template.conf /app/kdc.template.conf
+COPY docker/kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
 RUN chmod +x /usr/bin/start /usr/bin/sync-kerberos-principal /usr/bin/lldap-cli ./docker-entrypoint.sh
 
-VOLUME /data /var/krb5kdc
+VOLUME /data /var/lib/krb5kdc
+
 EXPOSE 3890 17170 88/tcp 88/udp 749/tcp
 
 COPY docker/entrypoint.sh /entrypoint.sh
