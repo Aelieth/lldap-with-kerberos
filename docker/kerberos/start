@@ -1,6 +1,28 @@
 #!/bin/bash
-
 # Script trace mode (for debug)
+if [ "${DEBUG_MODE:-false}" == "true" ]; then
+    set -o xtrace
+fi
+
+DEBUG_MODE="${DEBUG_MODE:-false}"  # Bool for trace mode (optional, default false)
+LDAP_BACKEND="${LDAP_BACKEND:-false}"  # Bool for full LDAP mode (optional, default false - hybrid/local)
+LDAP_HOST="${LDAP_HOST:-localhost}"  # LDAP host (optional, default localhost for internal)
+LDAP_SCHEME="${LDAP_SCHEME:-ldap}"  # LDAP scheme (optional, default ldap)
+LDAP_PORT="${LDAP_PORT:-3890}"  # LDAP port (optional, default 3890)
+LLDAP_UI_PORT="${LLDAP_UI_PORT:-17170}"  # UI port (optional, default 17170)
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Kerberos realm (optional, default TESTLAB.COM)
+BASE_DN="${BASE_DN:-dc=testlab,dc=com}"  # Base DN (optional, default testlab)
+KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"  # KDC DN (optional, default based on base DN)
+ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"  # Admin DN (optional, default based on base DN)
+CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"  # Container DN (optional, default based on base DN)
+DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"  # Dir manager DN (optional, default based on base DN)
+MASTER_PASS="${MASTER_PASS:-your-strong-master-pass!}"  # Master DB pass (required; override with secure value)
+ADMIN_PASS="${ADMIN_PASS:-your-strong-admin-pass!}"  # Admin principal pass (required)
+KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"  # KDC principal pass (required if LDAP_BACKEND=true)
+DM_PASS="${DM_PASS:-adminpassword123!}"  # Dir manager pw (optional, for LDAP setup if needed)
+LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"  # Shared obfuscation key (required for sync)
+ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat (optional)
+
 if [ "${DEBUG_MODE:-false}" == "true" ]; then
     set -o xtrace
 fi
@@ -83,6 +105,9 @@ ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"
 CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"
 DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"
 
+# Create dirs (to fix no file/pid/log)
+mkdir -p /var/lib/krb5kdc /var/run /var/log/krb5
+
 # Helper functions (warn instead of exit for flexibility)
 ldap_create_person() {
     local ldap_url=$1
@@ -135,7 +160,11 @@ fi
 
 # Local init always (safe fallback)
 echo "Configuring local Kerberos database."
-kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
+if [ -f "/var/lib/krb5kdc/principal" ]; then
+    echo "Kerberos DB exists—skipping init."
+else
+    kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
+fi
 status=$?
 if [ $status -ne 0 ]; then
     echo "WARNING: Local Kerberos init failed (status $status)—services may not start."
@@ -147,29 +176,40 @@ else
     echo "*/admin@${REALM_NAME} *" > /var/krb5kdc/kadm5.acl
 fi
 
-# Create log dir if missing (new)
-mkdir -p /var/log/krb5
+# Generate krb5.conf with default_realm (local always, LDAP optional)
+echo " - Generating /etc/krb5.conf"
+if [ -f "/etc/krb5.conf" ]; then
+    echo "krb5.conf exists—skipping create."
+else
+    cat > /etc/krb5.conf <<EOF
+[libdefaults]
+    default_realm = ${REALM_NAME}
+EOF
+fi
 
 # Generate kdc.conf (local always, LDAP optional)
 echo " - Generating /var/krb5kdc/kdc.conf"
-cat > /var/krb5kdc/kdc.conf <<EOF
+if [ -f "/var/krb5kdc/kdc.conf" ]; then
+    echo "kdc.conf exists—skipping create."
+else
+    cat > /var/krb5kdc/kdc.conf <<EOF
 [kdcdefaults]
     kdc_ports = 750,88
 [realms]
     ${REALM_NAME} = {
 EOF
-if [ "$LDAP_BACKEND" == "true" ]; then
-    cat >> /var/krb5kdc/kdc.conf <<EOF
+    if [ "$LDAP_BACKEND" == "true" ]; then
+        cat >> /var/krb5kdc/kdc.conf <<EOF
         database_module = contact_ldap
 EOF
-fi
-cat >> /var/krb5kdc/kdc.conf <<EOF
+    fi
+    cat >> /var/krb5kdc/kdc.conf <<EOF
     }
 [dbdefaults]
 [dbmodules]
 EOF
-if [ "$LDAP_BACKEND" == "true" ]; then
-    cat >> /var/krb5kdc/kdc.conf <<EOF
+    if [ "$LDAP_BACKEND" == "true" ]; then
+        cat >> /var/krb5kdc/kdc.conf <<EOF
     contact_ldap = {
             db_library = kldap
             ldap_kdc_dn = "${KDC_DN}"
@@ -179,12 +219,13 @@ if [ "$LDAP_BACKEND" == "true" ]; then
             ldap_servers = $ldap_url
     }
 EOF
-fi
-cat >> /var/krb5kdc/kdc.conf <<EOF
+    fi
+    cat >> /var/krb5kdc/kdc.conf <<EOF
 [logging]
     kdc = FILE:/var/log/krb5/krb5kdc.log
     admin_server = FILE:/var/log/krb5/kadmind.log
 EOF
+fi
 
 # Start Kerberos services
 echo "Starting kadmind..."
