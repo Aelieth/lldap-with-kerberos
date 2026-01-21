@@ -1,29 +1,14 @@
 #!/bin/bash
-# Script trace mode (for debug)
-if [ "${DEBUG_MODE:-false}" == "true" ]; then
+
+# Script-specific vars at top (not in TOML)
+FORCE_UPDATE="${FORCE_UPDATE:-false}" # Bool to force update conf file on env change (optional, default false)
+DEBUG_MODE="${DEBUG_MODE:-false}" # Bool for trace mode (optional, default false)
+LLDAP_UI_PORT="${LLDAP_UI_PORT:-17170}" # UI port (optional, default 17170)
+
+# Script trace mode
+if [ "$DEBUG_MODE" == "true" ]; then
     set -o xtrace
 fi
-
-# Predefine variables at top (with defaults/placeholders; optional noted)
-FORCE_UPDATE="${FORCE_UPDATE:-false}"  # Bool to force update conf file on env change (optional, default false)
-DEBUG_MODE="${DEBUG_MODE:-false}"  # Bool for trace mode (optional, default false)
-LDAP_BACKEND="${LDAP_BACKEND:-false}"  # Bool for full LDAP mode (optional, default false - hybrid/local)
-LDAP_HOST="${LDAP_HOST:-localhost}"  # LDAP host (optional, default localhost for internal)
-LDAP_SCHEME="${LDAP_SCHEME:-ldap}"  # LDAP scheme (optional, default ldap)
-LDAP_PORT="${LDAP_PORT:-3890}"  # LDAP port (optional, default 3890)
-LLDAP_UI_PORT="${LLDAP_UI_PORT:-17170}"  # UI port (optional, default 17170)
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Kerberos realm (optional, default TESTLAB.COM)
-BASE_DN="${BASE_DN:-dc=testlab,dc=com}"  # Base DN (optional, default testlab)
-KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"  # KDC DN (optional, default based on base DN)
-ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"  # Admin DN (optional, default based on base DN)
-CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"  # Container DN (optional, default based on base DN)
-DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"  # Dir manager DN (optional, default based on base DN)
-MASTER_PASS="${MASTER_PASS:-your-strong-master-pass!}"  # Master DB pass (required; override with secure value)
-ADMIN_PASS="${ADMIN_PASS:-your-strong-admin-pass!}"  # Admin principal pass (required)
-KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"  # KDC principal pass (required if LDAP_BACKEND=true)
-DM_PASS="${DM_PASS:-adminpassword123!}"  # Dir manager pw (optional, for LDAP setup if needed)
-LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"  # Shared obfuscation key (required for sync)
-ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat (optional)
 
 # If requested, perform a healthcheck and exit
 if [[ ${1,,} == "healthcheck" ]]; then
@@ -46,100 +31,171 @@ if [ -d "/etc/ssl/certs" ] && [ "$(ls -A /etc/ssl/certs)" ]; then
     update-ca-certificates
 fi
 
-# Load Kerberos config (replicate LLDAP model: copy/substitute template if missing or FORCE_UPDATE=true)
-KERBEROS_CONFIG="/data/kerberos_config.toml"
-FORCE_UPDATE="${FORCE_UPDATE:-false}"
-if [ "$FORCE_UPDATE" == "true" ] || [ ! -f "$KERBEROS_CONFIG" ]; then
-    echo "Generating kerberos_config.toml from template/env..."
-    envsubst < /app/kerberos_config.template.toml > "$KERBEROS_CONFIG"
+# Create necessary directories (from original, adapted for Alpine - fix log/PID not found)
+mkdir -p /var/log/krb5 /var/lib/krb5kdc /var/run /tmp
+
+# Kerberos Config Setup (mimic LLDAP: one-time copy/substitute from template to /data/kerberos_config.toml)
+KERBEROS_CONFIG_FILE="/data/kerberos_config.toml"
+KERBEROS_TEMPLATE="/app/kerberos_config.template.toml"  # Path to template in container
+
+if [ ! -f "$KERBEROS_CONFIG_FILE" ]; then
+    echo "Kerberos config not found. Copying and substituting template to $KERBEROS_CONFIG_FILE"
+    if envsubst < "$KERBEROS_TEMPLATE" > "$KERBEROS_CONFIG_FILE"; then
+        echo "Kerberos config generated successfully."
+    else
+        echo "ERROR: Failed to generate kerberos_config.toml from template—using defaults, but may fail."
+    fi
 else
-    echo "kerberos_config.toml exists and FORCE_UPDATE=false—loading existing."
+    echo "Kerberos config already exists—skipping copy."
 fi
 
-# Parse TOML to envs (simple grep/cut; assume [kerberos] section)
-while IFS='=' read -r key value; do
-    key=$(echo "$key" | tr -d ' ' | tr -d '[' | tr -d ']')
-    value=$(echo "$value" | tr -d '"' | tr -d "'")
-    export "$key"="$value"
-done < <(grep -A 20 "\[kerberos\]" "$KERBEROS_CONFIG" | grep -v "\[kerberos\]" | grep "=")
+# Load vars from kerberos_config.toml (using Python for safe parse/export - handles odd chars)
+echo "Loading vars from $KERBEROS_CONFIG_FILE..."
+python3 - <<EOF
+import toml
+import os
 
-# Now vars loaded (REALM_NAME, BASE_DN, etc.)
+try:
+    config = toml.load("$KERBEROS_CONFIG_FILE")['kerberos']
+    for key, value in config.items():
+        os.environ[key.upper()] = str(value)
+    print("Vars loaded from TOML.")
+except Exception as e:
+    print(f"WARNING: TOML load failed ({e})—falling back to env/defaults.")
+EOF
 
-# Create dirs (for no file/pid/log)
-mkdir -p /var/lib/krb5kdc /var/run /var/log/krb5
+# Apply priority: Env (user override) > TOML > default
+# (If TOML empty on first run, env wins; else TOML persists)
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
+BASE_DN="${BASE_DN:-dc=testlab,dc=com}"
+LDAP_BACKEND="${LDAP_BACKEND:-false}"
+LDAP_HOST="${LDAP_HOST:-localhost}"
+LDAP_SCHEME="${LDAP_SCHEME:-ldap}"
+LDAP_PORT="${LDAP_PORT:-3890}"
+KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"
+ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"
+CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"
+DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"
+MASTER_PASS="${MASTER_PASS:-your-strong-master-pass!}"
+ADMIN_PASS="${ADMIN_PASS:-your-strong-admin-pass!}"
+KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"
+DM_PASS="${DM_PASS:-adminpassword123!}"
+LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"
+ENCODE_KEY="${LLDAP_ENCODE_KEY}"
 
-# Helper functions (warn instead of exit for flexibility)
-ldap_create_person() {
-    local ldap_url=$1
-    local dn=$2
-    local sn=$3
+# Echo effective vars for debug
+echo "Effective REALM_NAME=${REALM_NAME}"
+echo "Effective BASE_DN=${BASE_DN}"
+echo "Effective DM_PASS length=${#DM_PASS}"
+echo "Effective ENCODE_KEY length=${#LLDAP_ENCODE_KEY}"
 
-    echo "  - Adding user $sn at $dn"
-    ldapadd -H $ldap_url -x -D "${DM_DN}" -w "${DM_PASS}" <<EOL
-dn: $dn
-objectClass: person
-objectClass: top
-objectClass: inetOrgPerson
-objectClass: posixAccount
-sn: $sn
-cn: $sn
-uid: $sn
-mail: ${sn}@service.${REALM_NAME,,}
-EOL
-    status=$?
-    if [ $status -ne 0 ] && [ $status -ne 68 ]; then
-        echo "WARNING: Failed adding $dn (status $status)—continuing with local fallback."
-    fi
-}
+# Calculate DOMAIN for templates
+DOMAIN=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g')
+export DOMAIN
+echo "Calculated DOMAIN=${DOMAIN}"
 
-# Setup LDAP if enabled (flexible, warn on fail)
+# Generate conf from templates (every time)
+echo "Generating /etc/krb5.conf..."
+if envsubst < /app/krb5.template.conf > /etc/krb5.conf; then
+    echo "/etc/krb5.conf generated."
+    cat /etc/krb5.conf
+else
+    echo "ERROR: /etc/krb5.conf gen failed."
+    exit 1
+fi
+
+echo "Generating /var/lib/krb5kdc/kdc.conf..."
+DATABASE_MODULE_BLOCK=""
+CONTACT_LDAP_BLOCK=""
 if [ "$LDAP_BACKEND" == "true" ]; then
-    echo "Setting up full LDAP backend..."
-    # Install ldap tools if missing (Alpine flexibility)
-    if ! command -v ldapadd > /dev/null; then
-        echo "Installing openldap-clients..."
-        apk add --no-cache openldap-clients
+    DATABASE_MODULE_BLOCK="        database_module = contact_ldap"
+    CONTACT_LDAP_BLOCK="contact_ldap = {
+            db_library = kldap
+            ldap_kdc_dn = \"${KDC_DN}\"
+            ldap_kadmind_dn = \"${ADMIN_DN}\"
+            ldap_kerberos_container_dn = \"${CONTAINER_DN}\"
+            ldap_service_password_file = /var/lib/krb5kdc/ldap.creds
+            ldap_servers = $ldap_url
+    }"
+fi
+
+if envsubst <<EOF > /var/lib/krb5kdc/kdc.conf
+[kdcdefaults]
+    kdc_ports = 750,88
+
+[realms]
+    ${REALM_NAME} = {
+${DATABASE_MODULE_BLOCK}
+    }
+
+[dbdefaults]
+
+[dbmodules]
+${CONTACT_LDAP_BLOCK}
+
+[logging]
+    kdc = FILE:/var/log/krb5/krb5kdc.log
+    admin_server = FILE:/var/log/krb5/kadmind.log
+EOF
+then
+    echo "/var/lib/krb5kdc/kdc.conf generated."
+    cat /var/lib/krb5kdc/kdc.conf
+else
+    echo "ERROR: kdc.conf gen failed."
+    exit 1
+fi
+
+# One-time schema
+SCHEMA_FLAG="/var/lib/krb5kdc/schema_extended.flag"
+if [ ! -f "$SCHEMA_FLAG" ]; then
+    echo "Performing one-time schema extension..."
+    export LLDAP_HTTPURL="http://localhost:${LLDAP_UI_PORT}"
+    export LLDAP_USERNAME="admin"
+    export LLDAP_PASSWORD="${DM_PASS}"
+    echo "Using LLDAP_HTTPURL=${LLDAP_HTTPURL} LLDAP_USERNAME=admin LLDAP_PASSWORD length=${#LLDAP_PASSWORD}"
+
+    lldap-cli schema attribute user add uidNumber INTEGER -e
+    lldap-cli schema attribute user add gidNumber INTEGER -e
+    lldap-cli schema objectclass user add inetOrgPerson
+    lldap-cli schema objectclass user add posixAccount
+
+    if [ $? -eq 0 ]; then
+        echo "Schema extension success."
+        touch "$SCHEMA_FLAG"
+    else
+        echo "WARNING: Schema extension failed."
     fi
-
-    # Create container/entries if needed (warn, don't exit)
-    ldap_create_person "$ldap_url" "${CONTAINER_DN}" "kerberos"
-    ldap_create_person "$ldap_url" "${KDC_DN}" "krbkdc"
-    ldap_create_person "$ldap_url" "${ADMIN_DN}" "krbadm"
-
-    # Add principals (flexible, use defaults)
-    echo "Adding kdc/admin principals to LDAP..."
-    kadmin.local -q "addprinc -pw ${KDC_PASS} krbkdc/admin@${REALM_NAME}"
-    kadmin.local -q "addprinc -pw ${ADMIN_PASS} krbadm/admin@${REALM_NAME}"
-
-    # LDAP creds file
-    echo "${KDC_DN}:${KDC_PASS}" > /var/lib/krb5kdc/ldap.creds
-    echo "${ADMIN_DN}:${ADMIN_PASS}" >> /var/lib/krb5kdc/ldap.creds
 else
-    echo "Hybrid/local mode: Using local Kerberos DB (recommended for LLDAP)."
+    echo "Schema already extended—skipping."
 fi
 
-# Local init always (safe fallback)
-echo "Configuring local Kerberos database."
-kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
-status=$?
-if [ $status -ne 0 ]; then
-    echo "WARNING: Local Kerberos init failed (status $status)—services may not start."
-else
-    echo "Adding admin principal..."
-    kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
-    echo "Creating admin keytab..."
-    kadmin.local -q "ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
-    echo "*/admin@${REALM_NAME} *" > /var/lib/krb5kdc/kadm5.acl
+# DB init if not exist
+if [ ! -f /var/lib/krb5kdc/principal ]; then
+    echo "Kerberos database not found. Starting configuration."
+    echo "Hybrid/local mode: Using local Kerberos DB for principals (recommended for LLDAP)."
+
+    echo "Configuring local Kerberos database."
+    /usr/sbin/kdb5_util create -s -r "${REALM_NAME}" -P "${MASTER_PASS}"
+    status=$?
+    if [ $status -ne 0 ]; then
+        echo "ERROR: Local Kerberos initialization failed (status $status)."
+    else
+        echo "Adding admin principal..."
+        kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
+        echo "Creating admin keytab..."
+        kadmin.local -q "ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
+        echo "*/admin@${REALM_NAME} *" > /var/lib/krb5kdc/kadm5.acl
+    fi
 fi
 
-# Start Kerberos services
+# Start services
 echo "Starting kadmind..."
-kadmind -P /var/run/kadmind.pid
+/usr/sbin/kadmind -P /var/run/kadmind.pid
 echo "Starting krb5kdc..."
-krb5kdc -P /var/run/krb5kdc.pid
+/usr/sbin/krb5kdc -P /var/run/krb5kdc.pid
 
-# Show kdc logging as output. Tail will exit when receiving SIGTERM.
-tail -F /var/log/krb5/krb5kdc.log &
+# Tail logs
+tail -f /var/log/krb5/krb5kdc.log &
 tail_pid=$!
 trap 'kill $tail_pid' TERM INT
 wait $tail_pid
@@ -152,9 +208,9 @@ kill $(cat /var/run/kadmind.pid)
 
 # Wait for clean shutdown
 while true; do
-    ps -p $(cat /var/run/krb5kdc.pid) | grep "krb5kdc" > /dev/null
+    ps -p $(cat /var/run/krb5kdc.pid) | grep "/usr/sbin/krb5kdc" > /dev/null
     krb5kdc_status=$?
-    ps -p $(cat /var/run/kadmind.pid) | grep "kadmind" > /dev/null
+    ps -p $(cat /var/run/kadmind.pid) | grep "/usr/sbin/kadmind" > /dev/null
     kadmin_status=$?
     if [ $krb5kdc_status -ne 0 ] && [ $kadmin_status -ne 0 ]; then
         exit 0
