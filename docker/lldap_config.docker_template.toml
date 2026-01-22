@@ -99,7 +99,7 @@
 ##  - "mysql://mysql-user:password@mysql-server/my-database"
 ##
 ## This can be overridden with the LLDAP_DATABASE_URL env variable.
-database_url = "sqlite:///data/users.db?mode=rwc"
+database_url = "sqlite:////data/users.db?mode=rwc"
 
 ## Private key file.
 ## Not recommended, use key_seed instead.

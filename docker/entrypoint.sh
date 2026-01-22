@@ -3,6 +3,9 @@ set -e
 
 KERBEROS_ENABLED="${KERBEROS_ENABLED:-true}"
 
+mkdir -p /data
+chown lldap:lldap /data
+
 # Start LLDAP
 echo "Starting LLDAP..."
 ./docker-entrypoint.sh "$@" &
