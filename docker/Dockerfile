@@ -29,12 +29,12 @@ RUN cd app && ./build.sh   # Release frontend build
 # Final runtime image
 FROM alpine:3.21
 
-# Gosu for privilege drop (official uses it too)
-ENV GOSU_VERSION=1.14
+# Gosu for privilege drop (update to latest stable — 1.17 as of 2024/2025)
+ENV GOSU_VERSION=1.17
 RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
     && dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
-    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpkgArch" \
-    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$dpdpkgArch.asc" \
+    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}" \
+    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}.asc" \
     && export GNUPGHOME="$(mktemp -d)" \
     && gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
     && gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
@@ -52,7 +52,7 @@ RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 k
     && update-ca-certificates
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
-RUN mkdir -p /data && chown lldap:lldap /data
+RUN mkdir -p /data/cert /var/lib/krb5kdc && chown lldap:lldap /data/ /data/cert /var/lib/krb5kdc
 
 WORKDIR /app
 
@@ -60,7 +60,7 @@ WORKDIR /app
 COPY --from=builder --chown=lldap:lldap /app/target/release/lldap /app/target/release/lldap_migration_tool /app/target/release/lldap_set_password ./
 COPY --from=builder --chown=lldap:lldap /app/app/static /app/app/static
 COPY --from=builder --chown=lldap:lldap /app/app/pkg /app/app/pkg
-COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html   # Production index
+COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html
 
 # Copy configs and scripts
 COPY --chown=lldap:lldap docker/lldap_config.docker_template.toml ./

@@ -173,6 +173,6 @@ key_seed = "RanD0m STR1ng"
 ## healthcheck command is used.
 #ldap_host = "localhost"
 
-password_change_hook = "${LLDAP_PASSWORD_CHANGE_HOOK:-}"
+password_change_hook = "/usr/bin/sync-kerberos-principal %u %o"
 encode_key = "${LLDAP_ENCODE_KEY:-}"
 key_file = ""  # Silence key_seed message

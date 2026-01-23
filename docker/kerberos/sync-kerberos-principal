@@ -1,22 +1,29 @@
 #!/bin/bash
-# Real sync hook from LLDAP password change
+# Real sync hook from LLDAP password change (single-container version)
 # Args: $1 username, $2 obfuscated_pass (base64 of XOR with ENCODE_KEY)
 
-#!/bin/bash
+USERNAME="$1"
+OBFUSCATED_PASS="$2"
 
-DOCKER_CONTAINER="${DOCKER_CONTAINER:-kerberos-test}"  # Container name for exec (optional, default test)
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Kerberos realm (optional, default TESTLAB.COM)
-LOG_FILE="${LOG_FILE:-/var/log/krb5/sync.log}"  # Log path (optional, default /var/log/krb5/sync.log)
-LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"  # Shared obfuscation key (required)
-ENCODE_KEY="${LLDAP_ENCODE_KEY}"  # Alias for backward compat (optional)
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
+LOG_FILE="${LOG_FILE:-/var/log/krb5/sync.log}"
+ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"
+
+# Ensure log dir exists
+mkdir -p /var/log/krb5
 
 if [ -z "$ENCODE_KEY" ]; then
-    echo "ERROR: ENCODE_KEY missing—cannot deobfuscate" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+    echo "ERROR: ENCODE_KEY missing—cannot deobfuscate" | tee -a $LOG_FILE
     exit 1
 fi
 
 if [ -z "$OBFUSCATED_PASS" ]; then
-    echo "ERROR: No obfuscated password" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+    echo "ERROR: No obfuscated password" | tee -a $LOG_FILE
+    exit 1
+fi
+
+if [ -z "$USERNAME" ]; then
+    echo "ERROR: No username provided" | tee -a $LOG_FILE
     exit 1
 fi
 
@@ -34,26 +41,24 @@ sys.stdout.buffer.write(plain)
 EOF
 )
 
-# Log deobf (temp for debug—remove pw echo later!)
-# echo "Deobfuscated password: $PLAIN_PASS" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+echo "Syncing Kerberos principal $USERNAME@$REALM_NAME" | tee -a $LOG_FILE
 
-echo "Syncing Kerberos principal $USERNAME@$REALM" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
-
-# Try cpw first (update if exists)
-CPW_OUTPUT=$(docker exec $DOCKER_CONTAINER kadmin.local -q "cpw -pw \"$PLAIN_PASS\" $USERNAME@$REALM" 2>&1)
+# Try change password first (update if exists)
+CPW_OUTPUT=$(kadmin.local -q "cpw -pw \"$PLAIN_PASS\" $USERNAME@$REALM_NAME" 2>&1)
 CPW_STATUS=$?
-echo "cpw output: $CPW_OUTPUT" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+echo "cpw output: $CPW_OUTPUT" | tee -a $LOG_FILE
 if [ $CPW_STATUS -eq 0 ] && [[ $CPW_OUTPUT != *"Principal does not exist"* ]]; then
-    echo "Success: Principal $USERNAME@$REALM updated via cpw" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+    echo "Success: Principal $USERNAME@$REALM_NAME updated via cpw" | tee -a $LOG_FILE
 else
-    # Fallback to addprinc
-    ADD_OUTPUT=$(docker exec $DOCKER_CONTAINER kadmin.local -q "addprinc -pw \"$PLAIN_PASS\" $USERNAME@$REALM" 2>&1)
+    # Fallback to add principal
+    ADD_OUTPUT=$(kadmin.local -q "addprinc -pw \"$PLAIN_PASS\" $USERNAME@$REALM_NAME" 2>&1)
     ADD_STATUS=$?
-    echo "addprinc output: $ADD_OUTPUT" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+    echo "addprinc output: $ADD_OUTPUT" | tee -a $LOG_FILE
     if [ $ADD_STATUS -eq 0 ]; then
-        echo "Success: Principal $USERNAME@$REALM created via addprinc" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+        echo "Success: Principal $USERNAME@$REALM_NAME created via addprinc" | tee -a $LOG_FILE
     else
-        echo "Failed to create/update principal $USERNAME@$REALM" | docker exec -i $DOCKER_CONTAINER tee -a $LOG_FILE
+        echo "Failed to create/update principal $USERNAME@$REALM_NAME" | tee -a $LOG_FILE
+        echo "Full error: $ADD_OUTPUT" | tee -a $LOG_FILE
         exit 1
     fi
 fi
