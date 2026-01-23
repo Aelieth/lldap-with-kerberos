@@ -1,21 +1,41 @@
 use crate::{
     components::{
         form::{field::Field, submit::Submit},
-        router::{AppRoute, Link},
+            router::{AppRoute, Link},
     },
     infra::{
         api::HostService,
         common_component::{CommonComponent, CommonComponentParts},
+        obfuscate::obfuscate_password,
     },
 };
-use anyhow::{Result, anyhow, bail};
-use gloo_console::error;
+use anyhow::{Result, bail};
+use gloo_console::log as console_log;
+use graphql_client::GraphQLQuery;
 use lldap_auth::*;
 use validator_derive::Validate;
 use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/get_kerberos_info.graphql",
+response_derives = "Debug,Clone,PartialEq,Eq",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct GetKerberosInfo;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/sync_kerberos.graphql",
+response_derives = "Debug,Clone",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct SyncKerberosPassword;
 
 #[derive(PartialEq, Eq, Default)]
 enum OpaqueData {
@@ -35,8 +55,8 @@ impl OpaqueData {
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
 pub struct FormModel {
     #[validate(custom(
-        function = "empty_or_long",
-        message = "Password should be longer than 8 characters"
+    function = "empty_or_long",
+    message = "Password should be longer than 8 characters"
     ))]
     old_password: String,
     #[validate(length(min = 8, message = "Invalid password. Min length: 8"))]
@@ -56,7 +76,10 @@ fn empty_or_long(value: &str) -> Result<(), validator::ValidationError> {
 pub struct ChangePasswordForm {
     common: CommonComponentParts<Self>,
     form: Form<FormModel>,
-    opaque_data: OpaqueData,
+        opaque_data: OpaqueData,
+        kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+        fetched_kerberos: bool,
+        obfuscated_password: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Properties)]
@@ -68,10 +91,13 @@ pub struct Props {
 pub enum Msg {
     FormUpdate,
     Submit,
-    AuthenticationStartResponse(Result<Box<login::ServerLoginStartResponse>>),
-    SubmitNewPassword,
+    LoginStartResponse(Result<Box<login::ServerLoginStartResponse>>),
+    LoginFinishResponse(Result<(String, bool)>),
+    SubmitNewPassword,  // NEW: Transition msg after old pw verify
     RegistrationStartResponse(Result<Box<registration::ServerRegistrationStartResponse>>),
     RegistrationFinishResponse(Result<()>),
+    KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
+    SyncKerberosResponse(Result<sync_kerberos_password::ResponseData>),
 }
 
 impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
@@ -83,104 +109,142 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
         use anyhow::Context;
         match msg {
             Msg::FormUpdate => Ok(true),
+            Msg::KerberosInfoResponse(res) => {
+                self.kerberos_info = Some(res?.kerberos_info);
+                Ok(true)
+            }
             Msg::Submit => {
                 if !self.form.validate() {
                     bail!("Check the form for errors");
                 }
+                let new_password = self.form.model().password.clone();
                 if ctx.props().is_admin {
                     self.handle_msg(ctx, Msg::SubmitNewPassword)
                 } else {
-                    let old_password = self.form.model().old_password;
+                    let old_password = self.form.model().old_password.clone();
                     if old_password.is_empty() {
-                        bail!("Current password should not be empty");
+                        bail!("Current password required");
                     }
                     let mut rng = rand::rngs::OsRng;
-                    let login_start_request =
-                        opaque::client::login::start_login(&old_password, &mut rng)
-                            .context("Could not initialize login")?;
-                    self.opaque_data = OpaqueData::Login(login_start_request.state);
+                    let login_start_request = opaque::client::login::start_login(
+                        &old_password,
+                        &mut rng,
+                    )?;
                     let req = login::ClientLoginStartRequest {
                         username: ctx.props().username.clone().into(),
                         login_start_request: login_start_request.message,
                     };
+                    self.opaque_data = OpaqueData::Login(login_start_request.state);
                     self.common.call_backend(
                         ctx,
                         HostService::login_start(req),
-                        Msg::AuthenticationStartResponse,
+                                             Msg::LoginStartResponse,
                     );
-                    Ok(true)
+                    Ok(false)
                 }
             }
-            Msg::AuthenticationStartResponse(res) => {
-                let res = res.context("Could not initiate login")?;
-                match self.opaque_data.take() {
-                    OpaqueData::Login(l) => {
-                        opaque::client::login::finish_login(l, res.credential_response).map_err(
-                            |e| {
-                                // Common error, we want to print a full error to the console but only a
-                                // simple one to the user.
-                                error!(&format!("Invalid username or password: {}", e));
-                                anyhow!("Invalid username or password")
-                            },
-                        )?;
-                    }
-                    _ => panic!("Unexpected data in opaque_data field"),
+            Msg::LoginStartResponse(res) => {
+                let res = res.context("Login start failed")?;
+                let login = match self.opaque_data.take() {
+                    OpaqueData::Login(l) => l,
+                    _ => bail!("Invalid state"),
                 };
+                let login_finish = opaque::client::login::finish_login(
+                    login,
+                    res.credential_response,
+                )?;
+                let req = login::ClientLoginFinishRequest {
+                    server_data: res.server_data,
+                    credential_finalization: login_finish.message,
+                };
+                self.common.call_backend(
+                    ctx,
+                    HostService::login_finish(req),
+                                         Msg::LoginFinishResponse,
+                );
+                Ok(false)
+            }
+            Msg::LoginFinishResponse(res) => {
+                res.context("Old password incorrect")?;  // Verify old pw
                 self.handle_msg(ctx, Msg::SubmitNewPassword)
             }
             Msg::SubmitNewPassword => {
                 let mut rng = rand::rngs::OsRng;
-                let new_password = self.form.model().password;
-                let registration_start_request = opaque::client::registration::start_registration(
-                    new_password.as_bytes(),
-                    &mut rng,
-                )
-                .context("Could not initiate password change")?;
+                let new_password = self.form.model().password.clone();
+                let registration_start_request =
+                opaque::client::registration::start_registration(new_password.as_bytes(), &mut rng)?;
                 let req = registration::ClientRegistrationStartRequest {
                     username: ctx.props().username.clone().into(),
                     registration_start_request: registration_start_request.message,
                 };
                 self.opaque_data = OpaqueData::Registration(registration_start_request.state);
+
+                // Obfuscate new pw for Kerberos
+                if let Some(kerberos_info) = &self.kerberos_info {
+                    if kerberos_info.enabled {
+                        if let Some(key) = &kerberos_info.encode_key {
+                            self.obfuscated_password = Some(obfuscate_password(&new_password, key));
+                            console_log!("Obfuscated pw for Kerberos sync:", self.obfuscated_password.as_ref().unwrap().clone());
+                        }
+                    }
+                }
+
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
-                    Msg::RegistrationStartResponse,
+                                         Msg::RegistrationStartResponse,
                 );
-                Ok(true)
+                Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {
-                let res = res.context("Could not initiate password change")?;
-                match self.opaque_data.take() {
-                    OpaqueData::Registration(registration) => {
-                        let mut rng = rand::rngs::OsRng;
-                        let registration_finish =
-                            opaque::client::registration::finish_registration(
-                                registration,
-                                res.registration_response,
-                                &mut rng,
-                            )
-                            .context("Error during password change")?;
-                        let req = registration::ClientRegistrationFinishRequest {
-                            server_data: res.server_data,
-                            registration_upload: registration_finish.message,
-                        };
-                        self.common.call_backend(
-                            ctx,
-                            HostService::register_finish(req),
-                            Msg::RegistrationFinishResponse,
-                        );
-                    }
-                    _ => panic!("Unexpected data in opaque_data field"),
+                let res = res.context("Registration start failed")?;
+                let registration = match self.opaque_data.take() {
+                    OpaqueData::Registration(r) => r,
+                    _ => bail!("Invalid state"),
                 };
+                let mut rng = rand::rngs::OsRng;
+                let registration_finish = opaque::client::registration::finish_registration(
+                    registration,
+                    res.registration_response,
+                    &mut rng,
+                )?;
+                let req = registration::ClientRegistrationFinishRequest {
+                    server_data: res.server_data,
+                    registration_upload: registration_finish.message,
+                };
+                self.common.call_backend(
+                    ctx,
+                    HostService::register_finish(req),
+                                         Msg::RegistrationFinishResponse,
+                );
                 Ok(false)
             }
             Msg::RegistrationFinishResponse(response) => {
-                if response.is_ok() {
+                response.context("Registration finish failed")?;
+                if self.obfuscated_password.is_some() {
+                    let variables = sync_kerberos_password::Variables {
+                        user_id: ctx.props().username.clone(),
+                        obfuscated_password: self.obfuscated_password.clone().unwrap(),
+                    };
+                    self.common.call_graphql::<SyncKerberosPassword, _>(
+                        ctx,
+                        variables,
+                        Msg::SyncKerberosResponse,
+                        "Error syncing Kerberos password",
+                    );
+                    Ok(false)
+                } else {
                     ctx.link().history().unwrap().push(AppRoute::UserDetails {
                         user_id: ctx.props().username.clone(),
                     });
+                    Ok(true)
                 }
+            }
+            Msg::SyncKerberosResponse(response) => {
                 response?;
+                ctx.link().history().unwrap().push(AppRoute::UserDetails {
+                    user_id: ctx.props().username.clone(),
+                });
                 Ok(true)
             }
         }
@@ -199,7 +263,10 @@ impl Component for ChangePasswordForm {
         ChangePasswordForm {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<FormModel>::new(FormModel::default()),
-            opaque_data: OpaqueData::None,
+                opaque_data: OpaqueData::None,
+                kerberos_info: None,
+                fetched_kerberos: false,
+                obfuscated_password: None,
         }
     }
 
@@ -210,34 +277,31 @@ impl Component for ChangePasswordForm {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let is_admin = ctx.props().is_admin;
         let link = ctx.link();
-        html! {
-          <>
-            <div class="mb-2 mt-2">
-              <h5 class="fw-bold">
-                {"Change password"}
-              </h5>
-            </div>
-            {
-              if let Some(e) = &self.common.error {
-                html! {
-                  <div class="alert alert-danger mt-3 mb-3">
-                    {e.to_string() }
-                  </div>
-                }
-              } else { html! {} }
-            }
-            <form class="form">
-              {if !is_admin { html! {
+        if self.kerberos_info.is_none() {
+            html! { <div>{"Loading Kerberos info..."}</div> }
+        } else {
+            html! {
+                <>
+                <div class="mb-2 mt-2">
+                <h5 class="fw-bold">{"Change password"}</h5>
+                </div>
+                { if let Some(e) = &self.common.error {
+                    html! { <div class="alert alert-danger mt-3 mb-3">{e.to_string()}</div> }
+                } else { html! {} }}
+                <form class="form">
+                { if !is_admin {
+                    html! {
+                        <Field<FormModel>
+                        form={&self.form}
+                        required=true
+                        label="Current password"
+                        field_name="old_password"
+                        input_type="password"
+                        autocomplete="current-password"
+                        oninput={link.callback(|_| Msg::FormUpdate)} />
+                    }
+                } else { html! {} }}
                 <Field<FormModel>
-                  form={&self.form}
-                  required=true
-                  label="Current password"
-                  field_name="old_password"
-                  input_type="password"
-                  autocomplete="current-password"
-                  oninput={link.callback(|_| Msg::FormUpdate)} />
-              }} else { html! {} }}
-              <Field<FormModel>
                 form={&self.form}
                 required=true
                 label="New password"
@@ -245,7 +309,7 @@ impl Component for ChangePasswordForm {
                 input_type="password"
                 autocomplete="new-password"
                 oninput={link.callback(|_| Msg::FormUpdate)} />
-              <Field<FormModel>
+                <Field<FormModel>
                 form={&self.form}
                 required=true
                 label="Confirm password"
@@ -253,19 +317,32 @@ impl Component for ChangePasswordForm {
                 input_type="password"
                 autocomplete="new-password"
                 oninput={link.callback(|_| Msg::FormUpdate)} />
-              <Submit
+                <Submit
                 disabled={self.common.is_task_running()}
                 onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::Submit})}
-                text="Save changes" >
+                text="Save changes">
                 <Link
-                  classes="btn btn-secondary ms-2 col-auto col-form-label"
-                  to={AppRoute::UserDetails{user_id: ctx.props().username.clone()}}>
-                  <i class="bi-arrow-return-left me-2"></i>
-                  {"Back"}
+                classes="btn btn-secondary ms-2 col-auto col-form-label"
+                to={AppRoute::UserDetails{user_id: ctx.props().username.clone()}}>
+                <i class="bi-arrow-return-left me-2"></i>{"Back"}
                 </Link>
-              </Submit>
-            </form>
-          </>
+                </Submit>
+                </form>
+                </>
+            }
+        }
+    }
+
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        if first_render && !self.fetched_kerberos {
+            console_log!("Fetching Kerberos info for password change");
+            self.common.call_graphql::<GetKerberosInfo, _>(
+                ctx,
+                get_kerberos_info::Variables {},
+                Msg::KerberosInfoResponse,
+                "Error fetching Kerberos info",
+            );
+            self.fetched_kerberos = true;
         }
     }
 }
