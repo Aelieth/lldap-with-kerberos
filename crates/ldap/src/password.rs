@@ -5,7 +5,7 @@ use crate::{
     },
     handler::make_extended_response,
 };
-use anyhow::{Result, Context};  // Fixed: Added Context trait for .context() method
+use anyhow::{Result, Context};
 use ldap3_proto::proto::{
     LdapBindCred, LdapBindRequest, LdapOp, LdapPasswordModifyRequest, LdapResultCode,
 };
@@ -14,7 +14,7 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::sync_kerberos_hook;  // New: Import the crate fn
+use lldap_kerberos::{sync_kerberos_principal, obfuscate_password};
 
 pub(crate) async fn do_bind(
     ldap_info: &LdapInfo,
@@ -29,8 +29,8 @@ pub(crate) async fn do_bind(
     }
     let user_id = match get_user_id_from_distinguished_name(
         &request.dn.to_ascii_lowercase(),
-        &ldap_info.base_dn,
-        &ldap_info.base_dn_str,
+                                                            &ldap_info.base_dn,
+                                                            &ldap_info.base_dn_str,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -49,11 +49,11 @@ pub(crate) async fn do_bind(
         });
     };
     match login_handler
-        .bind(BindRequest {
-            name: user_id.clone(),
-            password: password.clone(),
-        })
-        .await
+    .bind(BindRequest {
+        name: user_id.clone(),
+          password: password.clone(),
+    })
+    .await
     {
         Ok(()) => Ok(user_id),
         Err(_) => Err(LdapError {
@@ -88,10 +88,10 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
     };
     backend_handler.registration_finish(req).await?;
 
-    // Trigger kerberos hook (obfuscate + run command)
-    // Standard crate call post-OPAQUE (convert &[u8] to &str)
-    let password_str = std::str::from_utf8(password).context("Invalid UTF-8 in password")?;
-    sync_kerberos_hook(&user.to_string(), password_str)?;
+    // NEW: Unified internal Kerberos sync (obfuscate + local kadmin)
+    if let Ok(obfuscated) = obfuscate_password(&String::from_utf8_lossy(password)) {
+        let _ = sync_kerberos_principal(&user.to_string(), &obfuscated);
+    }
 
     Ok(())
 }

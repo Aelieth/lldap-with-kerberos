@@ -19,9 +19,9 @@ use lldap_domain::{
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
-use tracing::{Instrument, debug_span};  // Fixed: Removed unused debug
+use tracing::{Instrument, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::sync_kerberos_hook;  // New: Import for hook
+use lldap_kerberos::sync_kerberos_principal;  // Updated: New internal sync fn
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
@@ -311,20 +311,34 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(Success::new())
     }
 
-    async fn delete_user(context: &Context<Handler>, user_id: String) -> FieldResult<Success> {
+    async fn delete_user(
+        context: &Context<Handler>,
+        user_id: String,
+    ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] delete_user");
         span.in_scope(|| {
             debug!(?user_id);
         });
         let user_id = UserId::new(&user_id);
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized user deletion"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized user deletion"))?;
+
         if context.validation_result.user == user_id {
             span.in_scope(|| debug!("Cannot delete current user"));
             return Err("Cannot delete current user".into());
         }
-        handler.delete_user(&user_id).instrument(span).await?;
+
+        // Delete from LLDAP
+        handler
+        .delete_user(&user_id)
+        .instrument(span.clone())
+        .await
+        .map_err(field_error_callback(&span, "Error deleting user from LLDAP"))?;
+
+        // NEW: Delete Kerberos principal via crate helper (non-fatal)
+        let _ = lldap_kerberos::delete_kerberos_principal(&user_id.to_string());
+
         Ok(Success::new())
     }
 
@@ -586,17 +600,20 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     }
 
     async fn sync_kerberos_password(
-        &self,
-        _context: &Context<Handler>,  // Underscore for unused
-        user_id: String,  // Changed: Use String for GraphQL input
+        context: &Context<Handler>,
+        user_id: String,
         obfuscated_password: String,
     ) -> FieldResult<bool> {
-        if !lldap_kerberos::is_kerberos_enabled() {
-            return Ok(false);
-        }
-        let user_id = UserId::new(&user_id);  // New: Convert String to UserId
-        lldap_kerberos::sync_kerberos_hook_obfuscated(&user_id.to_string(), &obfuscated_password)  // Changed: Use to_string() instead of .0
-        .map_err(|e| FieldError::from(format!("Kerberos sync failed: {}", e)))?;
+        let span = debug_span!("[GraphQL mutation] sync_kerberos_password");
+        let _guard = span.enter();
+        let _handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized Kerberos sync"))?;
+
+        // NEW: Unified internal sync (local kadmin in same container)
+        sync_kerberos_principal(&user_id, &obfuscated_password)
+        .map_err(|e| FieldError::new("Kerberos sync failed", graphql_value!(e.to_string())))?;
+
         Ok(true)
     }
 }
