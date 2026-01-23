@@ -5,7 +5,7 @@ use crate::{
     },
     handler::make_extended_response,
 };
-use anyhow::{Result, Context};
+use anyhow::{Result};
 use ldap3_proto::proto::{
     LdapBindCred, LdapBindRequest, LdapOp, LdapPasswordModifyRequest, LdapResultCode,
 };

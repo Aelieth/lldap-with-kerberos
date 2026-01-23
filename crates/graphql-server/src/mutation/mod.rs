@@ -8,7 +8,7 @@ pub use inputs::{
 
 use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
-use juniper::{FieldError, FieldResult, graphql_object};
+use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
 use lldap_access_control::{
     AdminBackendHandler, UserReadableBackendHandler, UserWriteableBackendHandler,
 };
@@ -21,7 +21,7 @@ use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attr
 use std::sync::Arc;
 use tracing::{Instrument, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::sync_kerberos_principal;  // Updated: New internal sync fn
+use lldap_kerberos::{sync_kerberos_principal, delete_kerberos_principal};
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
@@ -120,8 +120,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         };
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
-        // Trigger kerberos hook (obfuscate + run command)
-        sync_kerberos_hook(&user_id, &password)?;
+        if let Ok(obfuscated) = lldap_kerberos::obfuscate_password(&password) {
+            let _ = lldap_kerberos::sync_kerberos_principal(&user_id.to_string(), &obfuscated);
+        }
 
         Ok(Success::new())
     }
@@ -334,10 +335,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .delete_user(&user_id)
         .instrument(span.clone())
         .await
-        .map_err(field_error_callback(&span, "Error deleting user from LLDAP"))?;
+        .map_err(|e| FieldError::new(
+            "Error deleting user from LLDAP",
+            graphql_value!({
+                "details": (e.to_string())
+            })
+        ))?;
 
-        // NEW: Delete Kerberos principal via crate helper (non-fatal)
-        let _ = lldap_kerberos::delete_kerberos_principal(&user_id.to_string());
+        // Delete Kerberos principal (non-fatal)
+        let _ = delete_kerberos_principal(&user_id.to_string());
 
         Ok(Success::new())
     }
@@ -610,9 +616,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized Kerberos sync"))?;
 
-        // NEW: Unified internal sync (local kadmin in same container)
         sync_kerberos_principal(&user_id, &obfuscated_password)
-        .map_err(|e| FieldError::new("Kerberos sync failed", graphql_value!(e.to_string())))?;
+        .map_err(|e| FieldError::new(
+            "Kerberos sync failed",
+            graphql_value!({
+                "details": (e.to_string())
+            })
+        ))?;
 
         Ok(true)
     }

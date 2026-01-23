@@ -1,9 +1,9 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::env;
 use std::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Obfuscate the plain password (XOR + base64) using ENCODE_KEY env.
 pub fn obfuscate_password(password: &str) -> Result<String> {
@@ -66,15 +66,15 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
             return Ok(());
         }
 
-        error!("addprinc failed: {}", String::from_utf8_lossy(&add_output.stderr));
-        bail!("Failed to create principal {}", principal);
+        warn!("addprinc failed (non-fatal): {}", String::from_utf8_lossy(&add_output.stderr));
+        Ok(())  // Non-fatal for create
+    } else {
+        warn!("cpw failed (non-fatal): {}", cpw_err);
+        Ok(())  // Non-fatal for update
     }
-
-    error!("cpw failed: {}", cpw_err);
-    bail!("Failed to update principal {}", principal);
 }
 
-/// NEW: Delete Kerberos principal (local kadmin.local, non-fatal for LLDAP delete)
+/// NEW: Delete Kerberos principal (local kadmin.local, non-fatal)
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
     let realm = env::var("REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
