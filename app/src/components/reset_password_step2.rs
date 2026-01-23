@@ -10,6 +10,8 @@ use crate::{
     },
 };
 use anyhow::{Result, bail};
+use gloo_console::log as console_log;
+use graphql_client::GraphQLQuery;
 use lldap_auth::{
     opaque::client::registration as opaque_registration,
     password_reset::ServerPasswordResetResponse, registration,
@@ -19,16 +21,6 @@ use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
-use graphql_client::GraphQLQuery;
-
-/// The fields of the form, with the constraints.
-#[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
-pub struct FormModel {
-    #[validate(length(min = 8, message = "Invalid password. Min length: 8"))]
-    password: String,
-    #[validate(must_match(other = "password", message = "Passwords must match"))]
-    confirm_password: String,
-}
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -47,6 +39,15 @@ response_derives = "Debug,Clone",
 custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct SyncKerberosPassword;
+
+/// The fields of the form, with the constraints.
+#[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
+pub struct FormModel {
+    #[validate(length(min = 8, message = "Invalid password. Min length: 8"))]
+    password: String,
+    #[validate(must_match(other = "password", message = "Passwords must match"))]
+    confirm_password: String,
+}
 
 pub struct ResetPasswordStep2Form {
     common: CommonComponentParts<Self>,
@@ -94,35 +95,39 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                 if !self.form.validate() {
                     bail!("Check the form for errors");
                 }
+                if self.username.is_none() {
+                    bail!("Username not available");
+                }
                 let mut rng = rand::rngs::OsRng;
-                let new_password = self.form.model().password;
+                let new_password = self.form.model().password.clone();
                 let registration_start_request =
                 opaque_registration::start_registration(new_password.as_bytes(), &mut rng)
-                .context("Could not initiate password change")?;
+                .context("Could not initiate registration")?;
                 let req = registration::ClientRegistrationStartRequest {
                     username: self.username.as_ref().unwrap().clone().into(),
                     registration_start_request: registration_start_request.message,
                 };
                 self.opaque_data = Some(registration_start_request.state);
+
+                // Obfuscate new pw for Kerberos if enabled
+                if let Some(kerberos_info) = &self.kerberos_info {
+                    if kerberos_info.enabled {
+                        if let Some(key) = &kerberos_info.encode_key {
+                            self.obfuscated_password = Some(obfuscate_password(&new_password, key));
+                            console_log!("Obfuscated pw for Kerberos sync:", self.obfuscated_password.as_ref().unwrap().clone());
+                        }
+                    }
+                }
+
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
                                          Msg::RegistrationStartResponse,
                 );
-                if let Some(kerberos_info) = &self.kerberos_info {
-                    if kerberos_info.enabled {
-                        if let Some(key) = &kerberos_info.encode_key {
-                            self.obfuscated_password = Some(obfuscate_password(
-                                &new_password,
-                                key,
-                            ));
-                        }
-                    }
-                }
-                Ok(true)
+                Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {
-                let res = res.context("Could not initiate password change")?;
+                let res = res.context("Could not initiate registration")?;
                 let registration = self.opaque_data.take().expect("Missing registration data");
                 let mut rng = rand::rngs::OsRng;
                 let registration_finish = opaque_registration::finish_registration(
@@ -130,7 +135,7 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                     res.registration_response,
                     &mut rng,
                 )
-                .context("Error during password change")?;
+                .context("Error during registration")?;
                 let req = registration::ClientRegistrationFinishRequest {
                     server_data: res.server_data,
                     registration_upload: registration_finish.message,
@@ -140,28 +145,24 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                     HostService::register_finish(req),
                                          Msg::RegistrationFinishResponse,
                 );
-                Ok(true)
+                Ok(false)
             }
             Msg::RegistrationFinishResponse(response) => {
-                if response.is_ok() {
-                    if self.obfuscated_password.is_some() {
-                        let variables = sync_kerberos_password::Variables {
-                            user_id: self.username.clone().unwrap(),
-                            obfuscated_password: self.obfuscated_password.clone().unwrap(),
-                        };
-                        self.common.call_graphql::<SyncKerberosPassword, _>(
-                            ctx,
-                            variables,
-                            Msg::SyncKerberosResponse,
-                            "Error trying to sync Kerberos password",
-                        );
-                        Ok(false)
-                    } else {
-                        ctx.link().history().unwrap().push(AppRoute::Login);
-                        Ok(true)
-                    }
+                response.context("Could not finish registration")?;
+                if self.obfuscated_password.is_some() {
+                    let variables = sync_kerberos_password::Variables {
+                        user_id: self.username.clone().unwrap(),
+                        obfuscated_password: self.obfuscated_password.clone().unwrap(),
+                    };
+                    self.common.call_graphql::<SyncKerberosPassword, _>(
+                        ctx,
+                        variables,
+                        Msg::SyncKerberosResponse,
+                        "Error trying to sync Kerberos password",
+                    );
+                    Ok(false)
                 } else {
-                    response?;
+                    ctx.link().history().unwrap().push(AppRoute::Login);
                     Ok(true)
                 }
             }
@@ -183,22 +184,22 @@ impl Component for ResetPasswordStep2Form {
     type Properties = Props;
 
     fn create(ctx: &Context<Self>) -> Self {
-        let mut component = ResetPasswordStep2Form {
+        let mut form = ResetPasswordStep2Form {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<FormModel>::new(FormModel::default()),
-                opaque_data: None,
                 username: None,
+                opaque_data: None,
                 kerberos_info: None,
                 fetched_kerberos: false,
                 obfuscated_password: None,
         };
         let token = ctx.props().token.clone();
-        component.common.call_backend(
+        form.common.call_backend(
             ctx,
             HostService::reset_password_step2(token),
-                                      Msg::ValidateTokenResponse,
+                                 Msg::ValidateTokenResponse,
         );
-        component
+        form
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -209,9 +210,7 @@ impl Component for ResetPasswordStep2Form {
         let link = &ctx.link();
         match (&self.username, &self.common.error) {
             (None, None) => {
-                return html! {
-                    {"Validating token"}
-                };
+                return html! { {"Validating token"} };
             }
             (None, Some(e)) => {
                 return html! {
@@ -231,9 +230,7 @@ impl Component for ResetPasswordStep2Form {
             _ => (),
         };
         if self.kerberos_info.is_none() {
-            return html! {
-                <div>{"Loading Kerberos info..."}</div>
-            };
+            return html! { <div>{"Loading Kerberos info..."}</div> };
         }
         html! {
             <>
@@ -270,9 +267,10 @@ impl Component for ResetPasswordStep2Form {
             </>
         }
     }
+
     fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
         if first_render && !self.fetched_kerberos {
-            gloo_console::log!("Rendered: fetching Kerberos info");
+            console_log!("Fetching Kerberos info for password reset");
             self.common.call_graphql::<GetKerberosInfo, _>(
                 ctx,
                 get_kerberos_info::Variables {},
