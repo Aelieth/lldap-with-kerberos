@@ -80,7 +80,6 @@ MASTER_PASS="${MASTER_PASS:-your-strong-master-pass!}"
 ADMIN_PASS="${ADMIN_PASS:-your-strong-admin-pass!}"
 KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"
 DM_PASS="${DM_PASS:-adminpassword123!}"
-LLDAP_ENCODE_KEY="${LLDAP_ENCODE_KEY:-my-super-secret-shared-key-123!}"
 ENCODE_KEY="${LLDAP_ENCODE_KEY}"
 
 # Echo effective vars for debug
@@ -193,6 +192,12 @@ echo "Starting kadmind..."
 /usr/sbin/kadmind -P /var/run/kadmind.pid
 echo "Starting krb5kdc..."
 /usr/sbin/krb5kdc -P /var/run/krb5kdc.pid
+
+chown -R $UID:$GID /var/lib/krb5kdc /var/log/krb5 || echo "Warning: chown Kerberos dirs failed"
+chown -R $UID:$GID /var/lib/krb5kdc/.* 2>/dev/null || true  # Hidden stash, ignore if none
+chmod -R 700 /var/lib/krb5kdc
+chmod 600 /var/lib/krb5kdc/.k5.* 2>/dev/null || true  # Stash 600
+chmod -R 755 /var/log/krb5
 
 # Tail logs
 tail -f /var/log/krb5/krb5kdc.log &

@@ -117,7 +117,6 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                 if !self.form.validate() {
                     bail!("Check the form for errors");
                 }
-                let new_password = self.form.model().password.clone();
                 if ctx.props().is_admin {
                     self.handle_msg(ctx, Msg::SubmitNewPassword)
                 } else {

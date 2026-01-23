@@ -55,6 +55,8 @@ custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct CreateUser;
 
+use create_user::AttributeValueInput as GraphQLAttributeValue;
+
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
@@ -161,11 +163,9 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     all_values
                     .into_iter()
                     .filter(|a| !a.values.is_empty())
-                    .map(|FormAttributeValue { name, values }| {
-                        create_user::AttributeValueInput {
-                            name,
-                            value: values,
-                        }
+                    .map(|FormAttributeValue { name, values }| GraphQLAttributeValue {
+                        name,
+                        value: values,
                     })
                     .collect::<Vec<_>>(),
                 );

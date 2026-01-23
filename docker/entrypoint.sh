@@ -27,15 +27,14 @@ if [ $i -eq 60 ]; then
     exit 1
 fi
 
-# Start Kerberos if enabled
-if [ "$KERBEROS_ENABLED" = "true" ]; then
-    echo "Starting Kerberos..."
-    /usr/bin/start &
+if [ -n "${ENCODE_KEY:-}" ]; then
+    echo "ENCODE_KEY detected — starting Kerberos services..."
+    /usr/bin/kerberos-start &
     KERBEROS_PID=$!
 fi
 
 # Trap shutdown
-trap 'echo "Shutting down..."; kill $LLDAP_PID; if [ "$KERBEROS_ENABLED" = "true" ]; then kill $KERBEROS_PID; /usr/bin/start healthcheck; fi; exit' INT TERM
+trap 'echo "Shutting down..."; kill $LLDAP_PID; if [ -n "{ENCODE_KEY:-}" ]; then kill $KERBEROS_PID; /usr/bin/kerberos-start healthcheck; fi; exit' INT TERM
 
 # Wait on LLDAP
 wait $LLDAP_PID
