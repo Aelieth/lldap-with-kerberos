@@ -4,7 +4,7 @@ set -e
 KERBEROS_ENABLED="${KERBEROS_ENABLED:-true}"
 
 mkdir -p /data
-chown lldap:lldap /data
+chown $UID:$GID /data
 
 # Start LLDAP
 echo "Starting LLDAP..."

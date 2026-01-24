@@ -48,7 +48,7 @@ RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
 RUN addgroup -g 1000 lldap && adduser -D -H -u 1000 -G lldap lldap
 
 # Runtime deps (Kerberos + LLDAP needs)
-RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 py3-toml jq procps ca-certificates curl gettext \
+RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 py3-toml jq procps ca-certificates curl gettext sudo \
     && update-ca-certificates
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
@@ -74,6 +74,10 @@ COPY --chown=lldap:lldap docker/kerberos/kerberos_config.template.toml /app/kerb
 
 # Make scripts executable
 RUN chmod +x /usr/bin/kerberos-start /usr/bin/lldap-cli ./docker-entrypoint.sh
+
+# Setup sudo for root access to kerberos
+COPY docker/sudoers-lldap /etc/sudoers.d/lldap
+RUN chmod 0440 /etc/sudoers.d/lldap
 
 # Volumes for persistence
 VOLUME /data /var/lib/krb5kdc

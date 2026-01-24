@@ -193,12 +193,6 @@ echo "Starting kadmind..."
 echo "Starting krb5kdc..."
 /usr/sbin/krb5kdc -P /var/run/krb5kdc.pid
 
-chown -R $UID:$GID /var/lib/krb5kdc /var/log/krb5 || echo "Warning: chown Kerberos dirs failed"
-chown -R $UID:$GID /var/lib/krb5kdc/.* 2>/dev/null || true  # Hidden stash, ignore if none
-chmod -R 700 /var/lib/krb5kdc
-chmod 600 /var/lib/krb5kdc/.k5.* 2>/dev/null || true  # Stash 600
-chmod -R 755 /var/log/krb5
-
 # Tail logs
 tail -f /var/log/krb5/krb5kdc.log &
 tail_pid=$!

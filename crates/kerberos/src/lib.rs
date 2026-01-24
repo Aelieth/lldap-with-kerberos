@@ -41,7 +41,7 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
     debug!("Syncing principal: {} (pw length: {})", principal, plain_password.len());
 
     // Try cpw first (sh -c single query, single quotes pw safe)
-    let cpw_cmd = format!("kadmin.local -q \"cpw -pw '{}' {}\"", plain_password, principal);
+    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -pw '{}' {}\"", plain_password, principal);
     debug!("Running kadmin cpw cmd: {}", cpw_cmd);
 
     let cpw_output = Command::new("sh")
@@ -61,7 +61,7 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
     }
 
     // Fallback addprinc (sh -c single query)
-    let add_cmd = format!("kadmin.local -q \"addprinc -pw '{}' {}\"", plain_password, principal);
+    let add_cmd = format!("sudo kadmin.local -q \"addprinc -pw '{}' {}\"", plain_password, principal);
     debug!("Running kadmin addprinc cmd: {}", add_cmd);
 
     let add_output = Command::new("sh")
@@ -89,7 +89,7 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
     let realm = env::var("REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
 
-    let del_cmd = format!("kadmin.local -q \"delprinc -force {}\"", principal);
+    let del_cmd = format!("sudo kadmin.local -q \"delprinc -force {}\"", principal);
     debug!("Running kadmin delprinc cmd: {}", del_cmd);
 
     let del_output = Command::new("sh")
