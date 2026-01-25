@@ -103,44 +103,14 @@ else
     exit 1
 fi
 
-echo "Generating /var/lib/krb5kdc/kdc.conf..."
-DATABASE_MODULE_BLOCK=""
-CONTACT_LDAP_BLOCK=""
-if [ "$LDAP_BACKEND" == "true" ]; then
-    DATABASE_MODULE_BLOCK="        database_module = contact_ldap"
-    CONTACT_LDAP_BLOCK="contact_ldap = {
-            db_library = kldap
-            ldap_kdc_dn = \"${KDC_DN}\"
-            ldap_kadmind_dn = \"${ADMIN_DN}\"
-            ldap_kerberos_container_dn = \"${CONTAINER_DN}\"
-            ldap_service_password_file = /var/lib/krb5kdc/ldap.creds
-            ldap_servers = $ldap_url
-    }"
-fi
-
-if envsubst <<EOF > /var/lib/krb5kdc/kdc.conf
-[kdcdefaults]
-    kdc_ports = 750,88
-
-[realms]
-    ${REALM_NAME} = {
-${DATABASE_MODULE_BLOCK}
-    }
-
-[dbdefaults]
-
-[dbmodules]
-${CONTACT_LDAP_BLOCK}
-
-[logging]
-    kdc = FILE:/var/log/krb5/krb5kdc.log
-    admin_server = FILE:/var/log/krb5/kadmind.log
-EOF
-then
-    echo "/var/lib/krb5kdc/kdc.conf generated."
-    cat /var/lib/krb5kdc/kdc.conf
+# Generate server kdc.conf (forces single aes256 master/supported for krbtgt matching user principals)
+echo "Generating server /var/lib/krb5kdc/kdc.conf from simplified template..."
+mkdir -p /var/lib/krb5kdc
+if envsubst < /app/kdc.template.conf > /var/lib/krb5kdc/kdc.conf; then
+    echo "/var/lib/krb5kdc/kdc.conf generated successfully."
+    cat /var/lib/krb5kdc/kdc.conf  # Debug in logs
 else
-    echo "ERROR: kdc.conf gen failed."
+    echo "ERROR: Failed to generate /var/lib/krb5kdc/kdc.conf"
     exit 1
 fi
 
@@ -180,7 +150,7 @@ if [ ! -f /var/lib/krb5kdc/principal ]; then
         echo "ERROR: Local Kerberos initialization failed (status $status)."
     else
         echo "Adding admin principal..."
-        kadmin.local -q "addprinc -pw ${ADMIN_PASS} admin/admin@${REALM_NAME}"
+        kadmin.local -q "addprinc -pw ${ADMIN_PASS} -e aes256-cts-hmac-sha1-96:normal admin/admin@${REALM_NAME}"
         echo "Creating admin keytab..."
         kadmin.local -q "ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab admin/admin@${REALM_NAME}"
         echo "*/admin@${REALM_NAME} *" > /var/lib/krb5kdc/kadm5.acl

@@ -37,49 +37,54 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
     let realm = env::var("REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
 
-    let plain_password = deobfuscate_password(obfuscated_password)?;
-    debug!("Syncing principal: {} (pw length: {})", principal, plain_password.len());
+    info!("Kerberos sync triggered for principal: {}", principal);
+    debug!("Received obfuscated password from LLDAP: {}", obfuscated_password);
 
-    // Try cpw first (sh -c single query, single quotes pw safe)
-    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -pw '{}' {}\"", plain_password, principal);
-    debug!("Running kadmin cpw cmd: {}", cpw_cmd);
+    let plain_password = deobfuscate_password(obfuscated_password)?;
+    debug!("Deobfuscated password length: {} chars", plain_password.len());
+
+    // Try cpw first
+    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -keepold -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
+    debug!("Running kadmin cpw (update existing principal)");
 
     let cpw_output = Command::new("sh")
     .arg("-c")
     .arg(&cpw_cmd)
     .output()
-    .context("Failed to run kadmin.local cpw via sh")?;
+    .context("Failed to run sudo kadmin.local cpw via sh")?;
 
     let cpw_stdout = String::from_utf8_lossy(&cpw_output.stdout);
     let cpw_stderr = String::from_utf8_lossy(&cpw_output.stderr);
     debug!("cpw stdout: {}", cpw_stdout.trim());
     debug!("cpw stderr: {}", cpw_stderr.trim());
+    debug!("cpw exit status: {}", cpw_output.status);
 
     if cpw_output.status.success() && !cpw_stderr.contains("Principal does not exist") {
         info!("Updated password for principal: {}", principal);
         return Ok(());
     }
 
-    // Fallback addprinc (sh -c single query)
-    let add_cmd = format!("sudo kadmin.local -q \"addprinc -pw '{}' {}\"", plain_password, principal);
-    debug!("Running kadmin addprinc cmd: {}", add_cmd);
+    // Fallback addprinc
+    let add_cmd = format!("sudo kadmin.local -q \"addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
+    debug!("Running kadmin addprinc (create new principal)");
 
     let add_output = Command::new("sh")
     .arg("-c")
     .arg(&add_cmd)
     .output()
-    .context("Failed to run kadmin.local addprinc via sh")?;
+    .context("Failed to run sudo kadmin.local addprinc via sh")?;
 
     let add_stdout = String::from_utf8_lossy(&add_output.stdout);
     let add_stderr = String::from_utf8_lossy(&add_output.stderr);
     debug!("addprinc stdout: {}", add_stdout.trim());
     debug!("addprinc stderr: {}", add_stderr.trim());
+    debug!("addprinc exit status: {}", add_output.status);
 
     if add_output.status.success() {
         info!("Created new principal: {}", principal);
         Ok(())
     } else {
-        warn!("addprinc failed (non-fatal): {}", add_stderr);
+        warn!("addprinc failed (non-fatal): {}", add_stderr.trim());
         Ok(())
     }
 }
