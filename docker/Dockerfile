@@ -66,11 +66,11 @@ COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html
 COPY --chown=lldap:lldap docker/lldap_config.docker_template.toml ./
 COPY --chown=lldap:lldap docker/docker-entrypoint.original.sh ./docker-entrypoint.sh
 COPY --chown=lldap:lldap scripts/bootstrap.sh ./
-COPY --chown=lldap:lldap docker/kerberos/kerberos-start /usr/bin/kerberos-start
-COPY --chown=lldap:lldap docker/kerberos/lldap-cli /usr/bin/lldap-cli
-COPY --chown=lldap:lldap docker/kerberos/krb5.template.conf /app/krb5.template.conf
-COPY --chown=lldap:lldap docker/kerberos/kdc.template.conf /app/kdc.template.conf
-COPY --chown=lldap:lldap docker/kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
+COPY --chown=lldap:lldap kerberos/kerberos-start /usr/bin/kerberos-start
+COPY --chown=lldap:lldap kerberos/lldap-cli /usr/bin/lldap-cli
+COPY --chown=lldap:lldap kerberos/krb5.template.conf /app/krb5.template.conf
+COPY --chown=lldap:lldap kerberos/kdc.template.conf /app/kdc.template.conf
+COPY --chown=lldap:lldap kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
 
 # Make scripts executable
 RUN chmod +x /usr/bin/kerberos-start /usr/bin/lldap-cli ./docker-entrypoint.sh
