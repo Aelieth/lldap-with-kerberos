@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Script-specific vars at top (not in TOML)
-FORCE_UPDATE="${FORCE_UPDATE:-false}" # Bool to force update conf file on env change (optional, default false)
 DEBUG_MODE="${DEBUG_MODE:-false}" # Bool for trace mode (optional, default false)
 LLDAP_UI_PORT="${LLDAP_UI_PORT:-17170}" # UI port (optional, default 17170)
 
@@ -64,34 +63,47 @@ except Exception as e:
     print(f"WARNING: TOML load failed ({e})—falling back to env/defaults.")
 EOF
 
-# Apply priority: Env (user override) > TOML > default
-# (If TOML empty on first run, env wins; else TOML persists)
+# Apply priority: KERB_ env (user override) > TOML > LLDAP_ shared (where applicable) > default
+# Hardcode static vars (no options)
+LDAP_SCHEME="ldap"
+LDAP_PORT="3890"
+KDC_DN="uid=krbkdc,ou=people,\${BASE_DN}"  # Not used, but defined for completeness
+ADMIN_DN="uid=krbadm,ou=people,\${BASE_DN}"  # Not used
+CONTAINER_DN="cn=kerberos,ou=groups,\${BASE_DN}"  # Not used
+DM_DN="uid=admin,ou=people,\${BASE_DN}"  # Used implicitly in schema
+
+BASE_DN="${KERB_BASE_DN:-${BASE_DN:-${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}}}"
+MASTER_PASS="${KERB_MASTER_PASS:-${MASTER_PASS:-your-strong-master-pass!}}"
+ADMIN_PASS="${KERB_ADMIN_PASS:-${ADMIN_PASS:-your-strong-admin-pass!}}"
+DM_PASS="${KERB_DM_PASS:-${DM_PASS:-${LLDAP_LDAP_USER_PASS:-adminpassword123!}}}"
+
+# Derive REALM_NAME from BASE_DN if not set (uppercase domain)
+REALM_NAME="${KERB_REALM_NAME:-${REALM_NAME}}"
+if [ -z "$REALM_NAME" ]; then
+    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
+fi
 REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
-BASE_DN="${BASE_DN:-dc=testlab,dc=com}"
-LDAP_BACKEND="${LDAP_BACKEND:-false}"
-LDAP_HOST="${LDAP_HOST:-localhost}"
-LDAP_SCHEME="${LDAP_SCHEME:-ldap}"
-LDAP_PORT="${LDAP_PORT:-3890}"
-KDC_DN="${KDC_DN:-uid=krbkdc,ou=people,${BASE_DN}}"
-ADMIN_DN="${ADMIN_DN:-uid=krbadm,ou=people,${BASE_DN}}"
-CONTAINER_DN="${CONTAINER_DN:-cn=kerberos,ou=groups,${BASE_DN}}"
-DM_DN="${DM_DN:-uid=admin,ou=people,${BASE_DN}}"
-MASTER_PASS="${MASTER_PASS:-your-strong-master-pass!}"
-ADMIN_PASS="${ADMIN_PASS:-your-strong-admin-pass!}"
-KDC_PASS="${KDC_PASS:-your-strong-kdc-pass!}"
-DM_PASS="${DM_PASS:-adminpassword123!}"
+export REALM_NAME
 ENCODE_KEY="${LLDAP_ENCODE_KEY}"
 
-# Echo effective vars for debug
-echo "Effective REALM_NAME=${REALM_NAME}"
-echo "Effective BASE_DN=${BASE_DN}"
-echo "Effective DM_PASS length=${#DM_PASS}"
-echo "Effective ENCODE_KEY length=${#LLDAP_ENCODE_KEY}"
-
-# Calculate DOMAIN for templates
+# Derive DOMAIN from BASE_DN (lowercase for domain_realm)
 DOMAIN=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g')
 export DOMAIN
 echo "Calculated DOMAIN=${DOMAIN}"
+
+# Extended configurable vars (for krb5.conf and kdc.conf)
+TICKET_LIFETIME="${KERB_TICKET_LIFETIME:-24h}"
+RENEW_LIFETIME="${KERB_RENEW_LIFETIME:-7d}"
+FORWARDABLE="${KERB_FORWARDABLE:-true}"
+RDNS="${KERB_RDNS:-false}"
+
+export KDC_PORT ADMIN_PORT KDC_UDP_PORTS TICKET_LIFETIME RENEW_LIFETIME FORWARDABLE RDNS
+
+# Echo effective vars for debug (trimmed list)
+echo "Effective REALM_NAME=${REALM_NAME}"
+echo "Effective BASE_DN=${BASE_DN}"
+echo "Effective DM_PASS length=${#DM_PASS}"
+echo "Effective ENCODE_KEY=${ENCODE_KEY}"
 
 # Generate conf from templates (every time)
 echo "Generating /etc/krb5.conf..."
