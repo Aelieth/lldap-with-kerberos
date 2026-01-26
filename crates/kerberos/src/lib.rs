@@ -44,7 +44,7 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
     debug!("Deobfuscated password length: {} chars", plain_password.len());
 
     // Try cpw first
-    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -keepold -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
+    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
     debug!("Running kadmin cpw (update existing principal)");
 
     let cpw_output = Command::new("sh")
