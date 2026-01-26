@@ -84,7 +84,6 @@ if [ -z "$REALM_NAME" ]; then
 fi
 REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
 export REALM_NAME
-ENCODE_KEY="${LLDAP_ENCODE_KEY}"
 
 # Derive DOMAIN from BASE_DN (lowercase for domain_realm)
 DOMAIN=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g')
@@ -120,7 +119,7 @@ echo "Generating server /var/lib/krb5kdc/kdc.conf from simplified template..."
 mkdir -p /var/lib/krb5kdc
 if envsubst < /app/kdc.template.conf > /var/lib/krb5kdc/kdc.conf; then
     echo "/var/lib/krb5kdc/kdc.conf generated successfully."
-    cat /var/lib/krb5kdc/kdc.conf  # Debug in logs
+    cat /var/lib/krb5kdc/kdc.conf
 else
     echo "ERROR: Failed to generate /var/lib/krb5kdc/kdc.conf"
     exit 1
@@ -137,6 +136,7 @@ if [ ! -f "$SCHEMA_FLAG" ]; then
 
     lldap-cli schema attribute user add uidNumber INTEGER -e
     lldap-cli schema attribute user add gidNumber INTEGER -e
+    lldap-cli schema attribute user add loginShell STRING -e -v
     lldap-cli schema objectclass user add inetOrgPerson
     lldap-cli schema objectclass user add posixAccount
 

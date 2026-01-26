@@ -28,6 +28,21 @@ use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
 
+fn attribute_priority(name: &str) -> (i32, String) {
+    let priorities = vec![
+        "firstname",
+        "lastname",
+        "displayname",
+        "mail",
+        "avatar",
+        "uidnumber",
+        "gidnumber",
+        "loginshell",
+    ];
+    let index = priorities.iter().position(|&p| p == name).map(|i| i as i32).unwrap_or(100);
+    (index, name.to_lowercase())  // Tuple for stable sort (priority then alpha)
+}
+
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
@@ -317,11 +332,17 @@ impl Component for CreateUserForm {
                 field_name="username"
                 oninput={link.callback(|_| Msg::Update)} />
                 {
-                    self.attributes_schema.as_ref().unwrap()
-                    .iter()
-                    .filter(|a| !a.is_readonly)
-                    .map(get_custom_attribute_input)
-                    .collect::<Vec<_>>()
+                    (|| {
+                        let attrs = self.attributes_schema.as_ref().unwrap();
+                        let mut indices: Vec<usize> = (0..attrs.len())
+                        .filter(|&i| !attrs[i].is_readonly)
+                    .collect();
+                    indices.sort_by_key(|&i| attribute_priority(&attrs[i].name));
+                    indices
+                    .into_iter()
+                    .map(|i| get_custom_attribute_input(&attrs[i]))
+                    .collect::<Vec<Html>>()
+                    })()
                 }
                 <Field<CreateUserModel>
                 form={&self.form}
