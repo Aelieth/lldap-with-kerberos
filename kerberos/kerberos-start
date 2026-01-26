@@ -77,13 +77,10 @@ MASTER_PASS="${KERB_MASTER_PASS:-${MASTER_PASS:-your-strong-master-pass!}}"
 ADMIN_PASS="${KERB_ADMIN_PASS:-${ADMIN_PASS:-your-strong-admin-pass!}}"
 DM_PASS="${KERB_DM_PASS:-${DM_PASS:-${LLDAP_LDAP_USER_PASS:-adminpassword123!}}}"
 
-# Derive REALM_NAME from BASE_DN if not set (uppercase domain)
-REALM_NAME="${KERB_REALM_NAME:-${REALM_NAME}}"
-if [ -z "$REALM_NAME" ]; then
-    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
-fi
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
+# Use pre-set REALM_NAME (from entrypoint.sh), with KERB_ override and fallback
+REALM_NAME="${KERB_REALM_NAME:-${REALM_NAME:-TESTLAB.COM}}"
 export REALM_NAME
+echo "Effective REALM_NAME=${REALM_NAME} (inherited or overridden)"
 
 # Derive DOMAIN from BASE_DN (lowercase for domain_realm)
 DOMAIN=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g')

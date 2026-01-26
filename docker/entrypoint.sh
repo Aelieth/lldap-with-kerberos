@@ -3,6 +3,16 @@ set -e
 
 KERBEROS_ENABLED="${KERBEROS_ENABLED:-true}"
 
+# Early Kerberos realm setup (needed before LLDAP starts for sync)
+BASE_DN="${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}"  # Shared with LLDAP
+REALM_NAME="${KERB_REALM_NAME}"  # Allow direct override first
+if [ -z "$REALM_NAME" ]; then
+    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
+fi
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Final fallback
+export REALM_NAME
+echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
+
 mkdir -p /data
 chown $UID:$GID /data
 
