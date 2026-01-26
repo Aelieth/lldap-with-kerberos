@@ -40,7 +40,7 @@ Run with these common switches (adjust values!):
         -v /tmp/data:/data -v /tmp/krb5kdc:/var/lib/krb5kdc \
         ghcr.io/aelieth/lldap-with-kerberos:latest
 
-Access UI at http://localhost:17170 (admin / your LLDAP_LDAP_USER_PASS). Realm auto-derives as EXAMPLE.COM.
+Access UI at http://localhost:17170 (admin / your LLDAP_LDAP_USER_PASS). Realm auto-derives as TESTLAB.COM.
 
 ## Environment Variables
 
