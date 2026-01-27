@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use minijinja::{context, Environment};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::Deserialize;
@@ -84,10 +85,46 @@ fn main() -> Result<()> {
     println!("Effective config: {:?}", config);
     println!("Effective ENCODE_KEY length: {}", encode_key.len());
 
-    // TODO: Rest of the logic (templates, schema, KDC init, start daemons)
+    // Create necessary directories
+    fs::create_dir_all("/var/lib/krb5kdc").context("Failed to create /var/lib/krb5kdc")?;
+    fs::create_dir_all("/var/log/krb5").context("Failed to create /var/log/krb5")?;
+    fs::create_dir_all("/var/run").context("Failed to create /var/run")?;
+    fs::create_dir_all("/tmp").context("Failed to create /tmp")?;
+
+    // Render templates
+    println!("Generating /etc/krb5.conf...");
+    render_template("/app/krb5.template.conf", "/etc/krb5.conf", &config, &domain)?;
+
+    println!("Generating /var/lib/krb5kdc/kdc.conf...");
+    render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
+
+    // TODO: Rest of the logic (schema, KDC init, start daemons)
 
     // Block forever (simulate running services)
     std::thread::park();
+
+    Ok(())
+}
+
+fn render_template(template_path: &str, output_path: &str, config: &KerberosConfig, domain: &str) -> Result<()> {
+    let template_str = fs::read_to_string(template_path).context(format!("Failed to read template: {}", template_path))?;
+
+    let mut env = Environment::new();
+    env.add_template("template", &template_str).context("Failed to add template")?;
+
+    let tmpl = env.get_template("template").unwrap();
+    let rendered = tmpl.render(context! {
+        TICKET_LIFETIME => &config.ticket_lifetime,
+        RENEW_LIFETIME => &config.renew_lifetime,
+        FORWARDABLE => config.forwardable,
+        RDNS => config.rdns,
+        REALM_NAME => &config.realm_name,
+        DOMAIN => domain,
+    }).context("Failed to render template")?;
+
+    fs::write(output_path, rendered).context(format!("Failed to write output: {}", output_path))?;
+    println!("Generated {} successfully.", output_path);
+    println!("Content:\n{}", fs::read_to_string(output_path)?);
 
     Ok(())
 }
