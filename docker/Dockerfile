@@ -23,7 +23,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY --chown=lldap:lldap . .
-RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password
+RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password -p lldap-kerberos
 RUN cd app && ./build.sh   # Release frontend build
 
 # Final runtime image
@@ -61,13 +61,17 @@ COPY --from=builder --chown=lldap:lldap /app/target/release/lldap /app/target/re
 COPY --from=builder --chown=lldap:lldap /app/app/static /app/app/static
 COPY --from=builder --chown=lldap:lldap /app/app/pkg /app/app/pkg
 COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html
+COPY --from=builder --chown=lldap:lldap /app/target/release/kerberos_manager ./
 
 # Copy configs and scripts
 COPY --chown=lldap:lldap docker/lldap_config.docker_template.toml ./
 COPY --chown=lldap:lldap docker/docker-entrypoint.original.sh ./docker-entrypoint.sh
 COPY --chown=lldap:lldap scripts/bootstrap.sh ./
+COPY --chown=lldap:lldap kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
+COPY --chown=lldap:lldap kerberos/krb5.template.conf /app/krb5.template.conf
+COPY --chown=lldap:lldap kerberos/kdc.template.conf /app/kdc.template.conf
 
-./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
 # Setup sudo for root access to kerberos
 COPY docker/sudoers-lldap /etc/sudoers.d/lldap

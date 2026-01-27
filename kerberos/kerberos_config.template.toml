@@ -1,10 +1,5 @@
-## Default configuration for Kerberos in LLDAP integration.
-## All the values can be overridden through environment variables, prefixed
-## with "LLDAP_KERB_". For instance, "realm_name" can be overridden with the
-## "LLDAP_KERB_REALM_NAME" variable.
-
 [kerberos]
-realm_name = "TESTLAB.LOCAL"
+realm_name = "TESTLAB.COM"
 base_dn = "dc=testlab,dc=com"
 master_pass = "your-strong-master-pass!"
 admin_pass = "your-strong-admin-pass!"
@@ -13,3 +8,8 @@ ticket_lifetime = "24h"
 renew_lifetime = "7d"
 forwardable = true
 rdns = false
+
+## Default configuration for Kerberos in LLDAP integration.
+## All the values can be overridden through environment variables, prefixed
+## with "LLDAP_KERB_". For instance, "realm_name" can be overridden with the
+## "LLDAP_KERB_REALM_NAME" variable.

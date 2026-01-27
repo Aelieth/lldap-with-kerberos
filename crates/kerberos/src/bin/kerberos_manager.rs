@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
+use toml::Value;
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -33,9 +34,12 @@ fn main() -> Result<()> {
         fs::copy(template_path, config_path).context("Failed to copy config template")?;
     }
 
-    // Load TOML
+    // Load TOML robustly (handles leading comments, extra stuff like LLDAP)
     let toml_str = fs::read_to_string(config_path).context("Failed to read kerberos_config.toml")?;
-    let mut config: KerberosConfig = toml::from_str(&toml_str).context("Failed to parse TOML")?;
+    let full_config: toml::Table = toml::from_str(&toml_str).context("Failed to parse TOML file (check syntax/comments)")?;
+
+    let kerberos_value = full_config.get("kerberos").context("Missing [kerberos] table in config")?.clone();
+    let mut config: KerberosConfig = kerberos_value.try_into().context("Failed to deserialize [kerberos] table")?;
 
     // Override with env vars (LLDAP_KERB_ prefix)
     if let Ok(val) = env::var("LLDAP_KERB_REALM_NAME") {
@@ -66,7 +70,15 @@ fn main() -> Result<()> {
         config.rdns = val.parse().unwrap_or(false);
     }
 
-    // Derive DOMAIN from base_dn
+    // Sync consistency with LLDAP/entrypoint
+    if let Ok(base_dn) = env::var("LLDAP_LDAP_BASE_DN") {
+        config.base_dn = base_dn;
+    }
+    if let Ok(realm) = env::var("REALM_NAME") {
+        config.realm_name = realm;
+    }
+
+    // Derive DOMAIN from (possibly overridden) base_dn
     let domain = config.base_dn.replace("dc=", "").replace(",", ".").to_lowercase();
     println!("Calculated DOMAIN: {}", domain);
 
@@ -81,7 +93,6 @@ fn main() -> Result<()> {
         }
     };
 
-    // For now, just print effective config (later: use for templates/init)
     println!("Effective config: {:?}", config);
     println!("Effective ENCODE_KEY length: {}", encode_key.len());
 
@@ -98,9 +109,8 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kdc.conf...");
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
-    // TODO: Rest of the logic (schema, KDC init, start daemons)
+    // TODO: Schema extension, KDC init, start daemons
 
-    // Block forever (simulate running services)
     std::thread::park();
 
     Ok(())
@@ -114,11 +124,11 @@ fn render_template(template_path: &str, output_path: &str, config: &KerberosConf
 
     let tmpl = env.get_template("template").unwrap();
     let rendered = tmpl.render(context! {
-        TICKET_LIFETIME => &config.ticket_lifetime,
-        RENEW_LIFETIME => &config.renew_lifetime,
+        TICKET_LIFETIME => config.ticket_lifetime,
+        RENEW_LIFETIME => config.renew_lifetime,
         FORWARDABLE => config.forwardable,
         RDNS => config.rdns,
-        REALM_NAME => &config.realm_name,
+        REALM_NAME => config.realm_name,
         DOMAIN => domain,
     }).context("Failed to render template")?;
 
