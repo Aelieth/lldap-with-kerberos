@@ -1,11 +1,9 @@
 #!/bin/bash
 set -e
 
-KERBEROS_ENABLED="${KERBEROS_ENABLED:-true}"
-
 # Early Kerberos realm setup (needed before LLDAP starts for sync)
 BASE_DN="${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}"  # Shared with LLDAP
-REALM_NAME="${KERB_REALM_NAME}"  # Allow direct override first
+REALM_NAME="${LLDAP_KERB_REALM_NAME}"  # Allow direct override first
 if [ -z "$REALM_NAME" ]; then
     REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
 fi
@@ -37,14 +35,12 @@ if [ $i -eq 60 ]; then
     exit 1
 fi
 
-if [ -n "${ENCODE_KEY:-}" ]; then
-    echo "ENCODE_KEY detected — starting Kerberos services..."
-    /usr/bin/kerberos-start &
-    KERBEROS_PID=$!
-fi
+echo "Starting Kerberos services via kerberos_manager..."
+/app/kerberos_manager &
+KERBEROS_PID=$!
 
 # Trap shutdown
-trap 'echo "Shutting down..."; kill $LLDAP_PID; if [ -n "{ENCODE_KEY:-}" ]; then kill $KERBEROS_PID; /usr/bin/kerberos-start healthcheck; fi; exit' INT TERM
+trap 'echo "Shutting down..."; kill $LLDAP_PID; kill $KERBEROS_PID; exit' INT TERM
 
 # Wait on LLDAP
 wait $LLDAP_PID

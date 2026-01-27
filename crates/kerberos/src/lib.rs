@@ -5,9 +5,9 @@ use std::env;
 use std::process::Command;
 use tracing::{debug, info, warn};
 
-/// Obfuscate the plain password (XOR + base64) using ENCODE_KEY env.
+/// Obfuscate the plain password (XOR + base64) using LLDAP_KERB_ENCODE_KEY env.
 pub fn obfuscate_password(password: &str) -> Result<String> {
-    let encode_key = env::var("ENCODE_KEY").context("ENCODE_KEY env missing for obfuscation")?;
+    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY").context("LLDAP_KERB_ENCODE_KEY env missing for obfuscation")?;
     let key_bytes = encode_key.as_bytes();
     let xored: Vec<u8> = password
     .as_bytes()
@@ -21,7 +21,7 @@ pub fn obfuscate_password(password: &str) -> Result<String> {
 
 /// Deobfuscate (reverse XOR + base64) — internal for sync.
 fn deobfuscate_password(obfuscated: &str) -> Result<String> {
-    let encode_key = env::var("ENCODE_KEY").context("ENCODE_KEY env missing")?;
+    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY").context("LLDAP_KERB_ENCODE_KEY env missing")?;
     let key_bytes = encode_key.as_bytes();
     let xored = STANDARD.decode(obfuscated).context("Base64 decode failed")?;
     let plain: Vec<u8> = xored
@@ -34,7 +34,7 @@ fn deobfuscate_password(obfuscated: &str) -> Result<String> {
 
 /// Sync Kerberos principal with deobfuscated password (local kadmin.local via sh -c single query with ' pw).
 pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Result<()> {
-    let realm = env::var("REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
+    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
 
     info!("Kerberos sync triggered for principal: {}", principal);
@@ -44,7 +44,7 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
     debug!("Deobfuscated password length: {} chars", plain_password.len());
 
     // Try cpw first
-    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
+    let cpw_cmd = format!("sudo kadmin.local -q \"cpw -keepold -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
     debug!("Running kadmin cpw (update existing principal)");
 
     let cpw_output = Command::new("sh")
@@ -91,7 +91,7 @@ pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Res
 
 /// Delete Kerberos principal (local kadmin.local via sh -c).
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
-    let realm = env::var("REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
+    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
 
     let del_cmd = format!("sudo kadmin.local -q \"delprinc -force {}\"", principal);
@@ -118,12 +118,13 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
 }
 
 pub fn is_kerberos_enabled() -> bool {
-    env::var("ENCODE_KEY").is_ok() && env::var("REALM_NAME").is_ok()
+    // Always true in this fork, but check for key existence for sync safety
+    env::var("LLDAP_KERB_ENCODE_KEY").is_ok() && env::var("LLDAP_KERB_REALM_NAME").is_ok()
 }
 
 pub fn get_encode_key() -> Option<String> {
     if is_kerberos_enabled() {
-        env::var("ENCODE_KEY").ok()
+        env::var("LLDAP_KERB_ENCODE_KEY").ok()
     } else {
         None
     }
