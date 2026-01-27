@@ -1,6 +1,6 @@
 [package]
 name = "lldap-kerberos"
-version = "0.1.0"
+version = "0.2.0"
 authors.workspace = true
 documentation.workspace = true
 edition.workspace = true
@@ -14,3 +14,7 @@ anyhow = "1.0"
 base64 = "0.22"
 lldap_domain = { path = "../domain" }
 tracing = "0.1"
+
+[[bin]]
+name = "kerberos_manager"
+path = "src/bin/kerberos_manager.rs"

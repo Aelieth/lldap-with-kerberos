@@ -48,7 +48,7 @@ RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
 RUN addgroup -g 1000 lldap && adduser -D -H -u 1000 -G lldap lldap
 
 # Runtime deps (Kerberos + LLDAP needs)
-RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients python3 py3-toml jq procps ca-certificates curl gettext sudo \
+RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients procps ca-certificates sudo \
     && update-ca-certificates
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
@@ -66,14 +66,8 @@ COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html
 COPY --chown=lldap:lldap docker/lldap_config.docker_template.toml ./
 COPY --chown=lldap:lldap docker/docker-entrypoint.original.sh ./docker-entrypoint.sh
 COPY --chown=lldap:lldap scripts/bootstrap.sh ./
-COPY --chown=lldap:lldap kerberos/kerberos-start /usr/bin/kerberos-start
-COPY --chown=lldap:lldap kerberos/lldap-cli /usr/bin/lldap-cli
-COPY --chown=lldap:lldap kerberos/krb5.template.conf /app/krb5.template.conf
-COPY --chown=lldap:lldap kerberos/kdc.template.conf /app/kdc.template.conf
-COPY --chown=lldap:lldap kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
 
-# Make scripts executable
-RUN chmod +x /usr/bin/kerberos-start /usr/bin/lldap-cli ./docker-entrypoint.sh
+./docker-entrypoint.sh
 
 # Setup sudo for root access to kerberos
 COPY docker/sudoers-lldap /etc/sudoers.d/lldap
