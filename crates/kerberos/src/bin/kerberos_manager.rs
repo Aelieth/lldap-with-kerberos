@@ -6,7 +6,9 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use toml::Value;
+use std::process::Command;
+use reqwest::blocking::Client;
+use serde_json::json;
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -110,8 +112,175 @@ fn main() -> Result<()> {
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
     // TODO: Schema extension, KDC init, start daemons
+    // One-time KDC database initialization
+    let db_path = "/var/lib/krb5kdc/principal";
+    if !Path::new(db_path).exists() {
+        println!("Kerberos database not found. Initializing with kdb5_util...");
 
-    std::thread::park();
+        let output = Command::new("/usr/sbin/kdb5_util")
+        .arg("create")
+        .arg("-s")
+        .arg("-r")
+        .arg(&config.realm_name)
+        .arg("-P")
+        .arg(&config.master_pass)
+        .output()
+        .context("Failed to run kdb5_util create")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("kdb5_util failed: {}", stderr));
+        }
+        println!("Kerberos database initialized successfully.");
+    } else {
+        println!("Kerberos database already exists—skipping init.");
+    }
+
+    // Add/admin principal (idempotent)
+    println!("Ensuring admin/admin principal...");
+    let admin_principal = format!("admin/admin@{}", config.realm_name);
+
+    // Try change password first (updates if exists)
+    let cpw_status = Command::new("/usr/sbin/kadmin.local")
+    .arg("-q")
+    .arg(format!("cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
+    .status()
+    .context("Failed to run kadmin.local cpw")?;
+
+    if cpw_status.success() {
+        println!("Updated existing admin principal password.");
+    } else {
+        println!("Admin principal does not exist—creating new one...");
+
+        let add_output = Command::new("/usr/sbin/kadmin.local")
+        .arg("-q")
+        .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
+        .output()
+        .context("Failed to run kadmin.local addprinc")?;
+
+        if add_output.status.success() {
+            println!("Created new admin principal successfully.");
+        } else {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            println!("Warning: Failed to create admin principal: {}", stderr.trim());
+        }
+    }
+
+    // Create keytab
+    println!("Creating kadm5.keytab...");
+    fs::write("/var/lib/krb5kdc/kadm5.acl", format!("*/admin@{} *\n", config.realm_name))
+    .context("Failed to write kadm5.acl")?;
+
+    let ktadd_output = Command::new("/usr/sbin/kadmin.local")
+    .arg("-q")
+    .arg(format!("ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab {}", admin_principal))
+    .output()
+    .context("Failed to run ktadd")?;
+
+    if !ktadd_output.status.success() {
+        let stderr = String::from_utf8_lossy(&ktadd_output.stderr);
+        return Err(anyhow::anyhow!("ktadd failed: {}", stderr));
+    }
+    println!("kadm5.keytab created.");
+
+    // Start KDC services (foreground, monitor)
+    println!("Starting krb5kdc and kadmind...");
+
+    let mut kdc_child = Command::new("/usr/sbin/krb5kdc")
+    .arg("-P")
+    .arg("/var/run/krb5kdc.pid")
+    .spawn()
+    .context("Failed to start krb5kdc")?;
+
+    let mut kadmind_child = Command::new("/usr/sbin/kadmind")
+    .arg("-P")
+    .arg("/var/run/kadmind.pid")
+    .spawn()
+    .context("Failed to start kadmind")?;
+
+    println!("Kerberos services running. Blocking forever...");
+
+    // One-time schema extension for POSIX/Kerberos compatibility
+    let schema_flag = "/var/lib/krb5kdc/schema_extended.flag";
+    if !Path::new(schema_flag).exists() {
+        println!("Extending LLDAP schema for POSIX/Kerberos...");
+
+        let client = Client::new();
+        let login_url = "http://localhost:17170/auth/simple/login";
+
+        let login_body = json!({
+            "username": "admin",
+            "password": config.dm_pass
+        });
+
+        let login_resp = client.post(login_url)
+        .json(&login_body)
+        .send()
+        .context("Failed to login to LLDAP for token")?;
+
+        if !login_resp.status().is_success() {
+            let err_text = login_resp.text().unwrap_or_default();
+            return Err(anyhow::anyhow!("LLDAP login failed: {}", err_text));
+        }
+
+        let login_json: serde_json::Value = login_resp.json().context("Failed to parse login JSON")?;
+        let token = login_json["token"].as_str().context("No token in login response")?;
+
+        let graphql_url = "http://localhost:17170/api/graphql";
+
+        let mutations = vec![
+            // Attributes
+            json!({
+                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                  "variables": { "name": "uidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
+            }),
+            json!({
+                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                  "variables": { "name": "gidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
+            }),
+            json!({
+                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                  "variables": { "name": "loginShell", "type": "STRING", "isList": false, "isVisible": true, "isEditable": false }
+            }),
+            // Object classes
+            json!({
+                "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
+                  "variables": { "name": "inetOrgPerson" }
+            }),
+            json!({
+                "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
+                  "variables": { "name": "posixAccount" }
+            }),
+        ];
+
+        for mutation in mutations {
+            let resp = client.post(graphql_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&mutation)
+            .send()
+            .context("Failed to send GraphQL mutation")?;
+
+            if !resp.status().is_success() {
+                let err_text = resp.text().unwrap_or_default();
+                println!("Warning: Schema mutation failed (non-fatal): {}", err_text);
+            } else {
+                println!("Schema extension mutation succeeded.");
+            }
+        }
+
+        fs::write(schema_flag, "extended").context("Failed to write schema flag")?;
+        println!("LLDAP schema extended successfully.");
+    } else {
+        println!("Schema already extended—skipping.");
+    }
+
+    // Wait for either to exit (error)
+    let kdc_status = kdc_child.wait().context("krb5kdc exited unexpectedly")?;
+    let kadmind_status = kadmind_child.wait().context("kadmind exited unexpectedly")?;
+
+    if !kdc_status.success() || !kadmind_status.success() {
+        return Err(anyhow::anyhow!("Kerberos service failed"));
+    }
 
     Ok(())
 }
