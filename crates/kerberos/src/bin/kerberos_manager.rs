@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
 use minijinja::{context, Environment};
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -83,19 +81,10 @@ fn main() -> Result<()> {
     // Derive DOMAIN from (possibly overridden) base_dn
     let domain = config.base_dn.replace("dc=", "").replace(",", ".").to_lowercase();
     println!("Calculated DOMAIN: {}", domain);
-
-    // Generate/set LLDAP_KERB_ENCODE_KEY if missing (32 chars alphanumeric)
-    let encode_key = match env::var("LLDAP_KERB_ENCODE_KEY") {
-        Ok(key) => key,
-        Err(_) => {
-            let rand_key: String = thread_rng().sample_iter(&Alphanumeric).take(32).map(char::from).collect();
-            println!("Generated LLDAP_KERB_ENCODE_KEY: {} (save this if needed!)", rand_key);
-            unsafe { env::set_var("LLDAP_KERB_ENCODE_KEY", &rand_key) };
-            rand_key
-        }
-    };
-
     println!("Effective config: {:?}", config);
+    // ENCODE_KEY shared via env (generated/exported in entrypoint.sh)
+    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY")
+    .context("LLDAP_KERB_ENCODE_KEY missing—should be generated in entrypoint.sh")?;
     println!("Effective ENCODE_KEY length: {}", encode_key.len());
 
     // Create necessary directories
@@ -111,7 +100,6 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kdc.conf...");
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
-    // TODO: Schema extension, KDC init, start daemons
     // One-time KDC database initialization
     let db_path = "/var/lib/krb5kdc/principal";
     if !Path::new(db_path).exists() {
@@ -140,29 +128,34 @@ fn main() -> Result<()> {
     println!("Ensuring admin/admin principal...");
     let admin_principal = format!("admin/admin@{}", config.realm_name);
 
-    // Try change password first (updates if exists)
-    let cpw_status = Command::new("/usr/sbin/kadmin.local")
+    // Try cpw (updates if exists)
+    let cpw_output = Command::new("/usr/sbin/kadmin.local")
     .arg("-q")
     .arg(format!("cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
-    .status()
+    .output()
     .context("Failed to run kadmin.local cpw")?;
 
-    if cpw_status.success() {
-        println!("Updated existing admin principal password.");
+    if cpw_output.status.success() {
+        println!("Updated existing admin principal password successfully.");
     } else {
-        println!("Admin principal does not exist—creating new one...");
+        let stderr = String::from_utf8_lossy(&cpw_output.stderr);
+        if stderr.contains("Principal does not exist") {
+            println!("Admin principal does not exist—creating new one...");
 
-        let add_output = Command::new("/usr/sbin/kadmin.local")
-        .arg("-q")
-        .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
-        .output()
-        .context("Failed to run kadmin.local addprinc")?;
+            let add_output = Command::new("/usr/sbin/kadmin.local")
+            .arg("-q")
+            .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
+            .output()
+            .context("Failed to run kadmin.local addprinc")?;
 
-        if add_output.status.success() {
-            println!("Created new admin principal successfully.");
+            if add_output.status.success() {
+                println!("Created new admin principal successfully.");
+            } else {
+                let add_stderr = String::from_utf8_lossy(&add_output.stderr);
+                println!("Warning: Failed to create admin principal: {}", add_stderr.trim());
+            }
         } else {
-            let stderr = String::from_utf8_lossy(&add_output.stderr);
-            println!("Warning: Failed to create admin principal: {}", stderr.trim());
+            println!("Warning: cpw failed (unexpected): {}", stderr.trim());
         }
     }
 
@@ -272,6 +265,40 @@ fn main() -> Result<()> {
         println!("LLDAP schema extended successfully.");
     } else {
         println!("Schema already extended—skipping.");
+    }
+
+    // Sync initial admin user to Kerberos (plain dm_pass available)
+    println!("Syncing initial admin user to Kerberos...");
+    let admin_username = "admin";
+    let admin_principal = format!("{}@{}", admin_username, config.realm_name);  // Or "admin/admin@{}" if old
+
+    // Direct Command (plain available—no obfuscate needed)
+    let add_admin_output = Command::new("/usr/sbin/kadmin.local")
+    .arg("-q")
+    .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.dm_pass, admin_principal))
+    .output()
+    .context("Failed to add initial admin principal")?;
+
+    if add_admin_output.status.success() {
+        println!("Initial admin principal synced successfully.");
+    } else {
+        let stderr = String::from_utf8_lossy(&add_admin_output.stderr);
+        if stderr.contains("Principal exists") {
+            // Update if exists
+            let cpw_output = Command::new("/usr/sbin/kadmin.local")
+            .arg("-q")
+            .arg(format!("cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.dm_pass, admin_principal))
+            .output()
+            .context("Failed to update initial admin principal")?;
+
+            if cpw_output.status.success() {
+                println!("Initial admin principal password updated.");
+            } else {
+                println!("Warning: Failed to update admin principal: {}", String::from_utf8_lossy(&cpw_output.stderr).trim());
+            }
+        } else {
+            println!("Warning: Failed to sync initial admin principal: {}", stderr.trim());
+        }
     }
 
     // Wait for either to exit (error)
