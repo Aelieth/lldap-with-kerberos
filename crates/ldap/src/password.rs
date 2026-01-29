@@ -14,7 +14,6 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{sync_kerberos_principal, obfuscate_password};
 
 pub(crate) async fn do_bind(
     ldap_info: &LdapInfo,
@@ -87,11 +86,6 @@ pub(crate) async fn change_password<B: OpaqueHandler>(
         registration_upload: registration_finish.message,
     };
     backend_handler.registration_finish(req).await?;
-
-    // NEW: Unified internal Kerberos sync (obfuscate + local kadmin)
-    if let Ok(obfuscated) = obfuscate_password(&String::from_utf8_lossy(password)) {
-        let _ = sync_kerberos_principal(&user.to_string(), &obfuscated);
-    }
 
     Ok(())
 }

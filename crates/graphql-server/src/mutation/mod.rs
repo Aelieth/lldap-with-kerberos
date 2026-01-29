@@ -21,7 +21,7 @@ use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attr
 use std::sync::Arc;
 use tracing::{Instrument, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{sync_kerberos_principal, delete_kerberos_principal};
+use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal};
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
@@ -120,9 +120,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         };
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
-        if let Ok(obfuscated) = lldap_kerberos::obfuscate_password(&password) {
-            let _ = lldap_kerberos::sync_kerberos_principal(&user_id.to_string(), &obfuscated);
-        }
+        let _ = sync_kerberos_principal(&user_id.to_string(), &password);
 
         Ok(Success::new())
     }
@@ -336,10 +334,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .instrument(span.clone())
         .await
         .map_err(|e| FieldError::new(
-            "Error deleting user from LLDAP",
-            graphql_value!({
-                "details": (e.to_string())
-            })
+            "Kerberos sync failed",
+            graphql_value!({ "details": (e.to_string()) })
         ))?;
 
         // Delete Kerberos principal (non-fatal)
@@ -608,7 +604,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     async fn sync_kerberos_password(
         context: &Context<Handler>,
         user_id: String,
-        obfuscated_password: String,
+        encrypted_password: String,
     ) -> FieldResult<bool> {
         let span = debug_span!("[GraphQL mutation] sync_kerberos_password");
         let _guard = span.enter();
@@ -616,12 +612,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized Kerberos sync"))?;
 
-        sync_kerberos_principal(&user_id, &obfuscated_password)
+        let plain_password = decrypt_password(&encrypted_password)
+        .map_err(|e| FieldError::new(
+            "Kerberos password decryption failed",
+            graphql_value!({ "details": (e.to_string()) })
+        ))?;
+
+        sync_kerberos_principal(&user_id, &plain_password)
         .map_err(|e| FieldError::new(
             "Kerberos sync failed",
-            graphql_value!({
-                "details": (e.to_string())
-            })
+            graphql_value!({ "details": (e.to_string()) })
         ))?;
 
         Ok(true)

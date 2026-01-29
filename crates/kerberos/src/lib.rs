@@ -33,7 +33,7 @@ fn generate_keypair() -> Result<(RsaPrivateKey, RsaPublicKey)> {
     Ok((priv_key, pub_key))
 }
 
-fn decrypt_password(encrypted: &str) -> Result<String> {
+pub fn decrypt_password(encrypted: &str) -> Result<String> {
     let keypair = KEYPAIR.as_ref().context("Kerberos not enabled or keypair missing")?;
     let priv_key = &keypair.0;
     let dec_data = STANDARD.decode(encrypted).context("Base64 decode failed")?;
