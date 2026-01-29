@@ -6,7 +6,7 @@ use crate::{
     infra::{
         api::HostService,
         common_component::{CommonComponent, CommonComponentParts},
-        obfuscate::obfuscate_password,
+        encrypt::encrypt_password,
     },
 };
 use anyhow::{Result, bail};
@@ -18,6 +18,7 @@ use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
+use gloo_console::log;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -79,7 +80,7 @@ pub struct ChangePasswordForm {
         opaque_data: OpaqueData,
         kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
         fetched_kerberos: bool,
-        obfuscated_password: Option<String>,
+        encrypted_password: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Properties)]
@@ -178,12 +179,32 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                 };
                 self.opaque_data = OpaqueData::Registration(registration_start_request.state);
 
-                // Obfuscate new pw for Kerberos
-                if let Some(kerberos_info) = &self.kerberos_info {
-                    if kerberos_info.enabled {
-                        if let Some(key) = &kerberos_info.encode_key {
-                            self.obfuscated_password = Some(obfuscate_password(&new_password, key));
-                            console_log!("Obfuscated pw for Kerberos sync:", self.obfuscated_password.as_ref().unwrap().clone());
+                // Kerberos encryption — REQUIRED if enabled (blocks on failure for always-synced guarantee)
+                self.encrypted_password = None;
+                let new_password = self.form.model().password.clone();
+
+                if let Some(info) = &self.kerberos_info {
+                    if info.enabled {
+                        if let Some(pub_key) = &info.public_key_der_base64 {
+                            match encrypt_password(pub_key, &new_password) {
+                                Ok(enc) => {
+                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
+                                    self.encrypted_password = Some(enc);
+                                }
+                                Err(e) => {
+                                    log!("Encryption failed: {}", e.to_string());
+                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync (required). Password change aborted: {}", e));
+                                    return Ok(true);  // Block + show error
+                                }
+                            }
+                        } else {
+                            self.common.error = Some(anyhow::anyhow!("Kerberos enabled but no public key. Password change aborted (backend update needed)."));
+                            return Ok(true);
+                        }
+
+                        if self.encrypted_password.is_none() {
+                            self.common.error = Some(anyhow::anyhow!("Kerberos encryption failed. Password change aborted."));
+                            return Ok(true);
                         }
                     }
                 }
@@ -220,10 +241,10 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
             }
             Msg::RegistrationFinishResponse(response) => {
                 response.context("Registration finish failed")?;
-                if self.obfuscated_password.is_some() {
+                if let Some(enc_pw) = &self.encrypted_password {
                     let variables = sync_kerberos_password::Variables {
                         user_id: ctx.props().username.clone(),
-                        obfuscated_password: self.obfuscated_password.clone().unwrap(),
+                        encrypted_password: enc_pw.clone(),
                     };
                     self.common.call_graphql::<SyncKerberosPassword, _>(
                         ctx,
@@ -265,7 +286,7 @@ impl Component for ChangePasswordForm {
                 opaque_data: OpaqueData::None,
                 kerberos_info: None,
                 fetched_kerberos: false,
-                obfuscated_password: None,
+                encrypted_password: None,
         }
     }
 

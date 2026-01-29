@@ -6,15 +6,16 @@ use crate::{
     infra::{
         api::HostService,
         common_component::{CommonComponent, CommonComponentParts},
-        obfuscate::obfuscate_password,
+        encrypt::encrypt_password,
     },
 };
-use anyhow::{Result, bail};
-use gloo_console::log as console_log;
+use anyhow::{Context, Result, bail};
+use gloo_console::log;
 use graphql_client::GraphQLQuery;
 use lldap_auth::{
     opaque::client::registration as opaque_registration,
-    password_reset::ServerPasswordResetResponse, registration,
+    password_reset::ServerPasswordResetResponse,
+    registration,
 };
 use validator_derive::Validate;
 use yew::prelude::*;
@@ -40,7 +41,6 @@ custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct SyncKerberosPassword;
 
-/// The fields of the form, with the constraints.
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
 pub struct FormModel {
     #[validate(length(min = 8, message = "Invalid password. Min length: 8"))]
@@ -56,7 +56,7 @@ pub struct ResetPasswordStep2Form {
         opaque_data: Option<opaque_registration::ClientRegistration>,
         kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
         fetched_kerberos: bool,
-        obfuscated_password: Option<String>,
+        encrypted_password: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Properties)]
@@ -98,67 +98,92 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                 if self.username.is_none() {
                     bail!("Username not available");
                 }
+
                 let mut rng = rand::rngs::OsRng;
                 let new_password = self.form.model().password.clone();
-                let registration_start_request =
-                opaque_registration::start_registration(new_password.as_bytes(), &mut rng)
+
+                let registration_start_request = opaque_registration::start_registration(new_password.as_bytes(), &mut rng)
                 .context("Could not initiate registration")?;
+
                 let req = registration::ClientRegistrationStartRequest {
                     username: self.username.as_ref().unwrap().clone().into(),
                     registration_start_request: registration_start_request.message,
                 };
+
                 self.opaque_data = Some(registration_start_request.state);
 
-                // Obfuscate new pw for Kerberos if enabled
-                if let Some(kerberos_info) = &self.kerberos_info {
-                    if kerberos_info.enabled {
-                        if let Some(key) = &kerberos_info.encode_key {
-                            self.obfuscated_password = Some(obfuscate_password(&new_password, key));
-                            console_log!("Obfuscated pw for Kerberos sync:", self.obfuscated_password.as_ref().unwrap().clone());
+                // Kerberos encryption — REQUIRED if enabled (blocks on failure for always-synced guarantee)
+                self.encrypted_password = None;
+
+                if let Some(info) = &self.kerberos_info {
+                    if info.enabled {
+                        if let Some(pub_key) = &info.public_key_der_base64 {
+                            match encrypt_password(pub_key, &new_password) {
+                                Ok(enc) => {
+                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
+                                    self.encrypted_password = Some(enc);
+                                }
+                                Err(e) => {
+                                    log!("Encryption failed: {}", e.to_string());
+                                    self.common.error = Some(anyhow::anyhow!(
+                                        "Failed to encrypt password for Kerberos sync (required). Password reset aborted: {}",
+                                                                             e
+                                    ));
+                                    return Ok(true); // Block + show error banner
+                                }
+                            }
+                        } else {
+                            self.common.error = Some(anyhow::anyhow!(
+                                "Kerberos enabled but no public key available. Password reset aborted (backend update needed)."
+                            ));
+                            return Ok(true);
+                        }
+
+                        // Safety net
+                        if self.encrypted_password.is_none() {
+                            self.common.error = Some(anyhow::anyhow!(
+                                "Kerberos password encryption failed. Password reset aborted."
+                            ));
+                            return Ok(true);
                         }
                     }
                 }
 
                 self.common.call_backend(
                     ctx,
-                    HostService::register_start(req),
+                    HostService::registration_start(req),
                                          Msg::RegistrationStartResponse,
                 );
                 Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {
-                let res = res.context("Could not initiate registration")?;
-                let registration = self.opaque_data.take().expect("Missing registration data");
-                let mut rng = rand::rngs::OsRng;
-                let registration_finish = opaque_registration::finish_registration(
-                    registration,
-                    res.registration_response,
-                    &mut rng,
-                )
-                .context("Error during registration")?;
-                let req = registration::ClientRegistrationFinishRequest {
-                    server_data: res.server_data,
-                    registration_upload: registration_finish.message,
-                };
+                let server_response = res?;
+                let opaque_finish = self
+                .opaque_data
+                .take()
+                .unwrap()
+                .finish_registration(server_response.message)
+                .context("Could not finish registration")?;
+
                 self.common.call_backend(
                     ctx,
-                    HostService::register_finish(req),
+                    HostService::registration_finish(opaque_finish.message),
                                          Msg::RegistrationFinishResponse,
                 );
                 Ok(false)
             }
-            Msg::RegistrationFinishResponse(response) => {
-                response.context("Could not finish registration")?;
-                if self.obfuscated_password.is_some() {
+            Msg::RegistrationFinishResponse(_response) => {
+                // Sync Kerberos if we have an encrypted password
+                if let Some(enc_pw) = &self.encrypted_password {
                     let variables = sync_kerberos_password::Variables {
                         user_id: self.username.clone().unwrap(),
-                        obfuscated_password: self.obfuscated_password.clone().unwrap(),
+                        encrypted_password: enc_pw.clone(),
                     };
                     self.common.call_graphql::<SyncKerberosPassword, _>(
                         ctx,
                         variables,
                         Msg::SyncKerberosResponse,
-                        "Error trying to sync Kerberos password",
+                        "Error syncing Kerberos password",
                     );
                     Ok(false)
                 } else {
@@ -191,7 +216,7 @@ impl Component for ResetPasswordStep2Form {
                 opaque_data: None,
                 kerberos_info: None,
                 fetched_kerberos: false,
-                obfuscated_password: None,
+                encrypted_password: None,
         };
         let token = ctx.props().token.clone();
         form.common.call_backend(
@@ -207,7 +232,7 @@ impl Component for ResetPasswordStep2Form {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let link = &ctx.link();
+        let link = ctx.link();
         match (&self.username, &self.common.error) {
             (None, None) => {
                 return html! { {"Validating token"} };
@@ -216,7 +241,7 @@ impl Component for ResetPasswordStep2Form {
                 return html! {
                     <>
                     <div class="alert alert-danger">
-                    {e.to_string() }
+                    {e.to_string()}
                     </div>
                     <Link
                     classes="btn-link btn"
@@ -259,18 +284,17 @@ impl Component for ResetPasswordStep2Form {
             { if let Some(e) = &self.common.error {
                 html! {
                     <div class="alert alert-danger">
-                    {e.to_string() }
+                    {e.to_string()}
                     </div>
                 }
-            } else { html! {} }
-            }
+            } else { html! {} } }
             </>
         }
     }
 
     fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
         if first_render && !self.fetched_kerberos {
-            console_log!("Fetching Kerberos info for password reset");
+            log!("Fetching Kerberos info for password reset");
             self.common.call_graphql::<GetKerberosInfo, _>(
                 ctx,
                 get_kerberos_info::Variables {},

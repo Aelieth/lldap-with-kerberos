@@ -27,7 +27,7 @@ use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
-use gloo_console::log!;
+use gloo_console::log;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
@@ -177,30 +177,38 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let kerberos_requires_encryption = self.kerberos_info.as_ref()
                 .and_then(|info| info.public_key_der_base64.as_ref())
                 .is_some();
+                let model = self.form.model();
+                if !model.password.is_empty() {
+                    self.encrypted_password = None;
+                    let new_password = model.password.clone();
 
-                if kerberos_requires_encryption {
-                    if let Some(pub_key) = self.kerberos_info.as_ref().and_then(|info| info.public_key_der_base64.as_ref()) {
-                        match encrypt_password(pub_key, &new_password) {
-                            Ok(enc) => {
-                                log!("Encrypted pw for Kerberos sync (length):", enc.len().to_string());
-                                self.encrypted_password = Some(enc);
+                    if let Some(info) = &self.kerberos_info {
+                        if info.enabled {
+                            if let Some(pub_key) = &info.public_key_der_base64 {
+                                match encrypt_password(pub_key, &new_password) {
+                                    Ok(enc) => {
+                                        log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
+                                        self.encrypted_password = Some(enc);
+                                    }
+                                    Err(e) => {
+                                        log!("Encryption failed: {}", e.to_string());
+                                        self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync (required when enabled). User creation aborted: {}", e));
+                                        return Ok(true);  // Block + show error banner
+                                    }
+                                }
+                            } else {
+                                // Enabled but no key yet (backend not updated)—block for safety
+                                self.common.error = Some(anyhow::anyhow!("Kerberos enabled but no public key available. User creation aborted (backend update needed)."));
+                                return Ok(true);
                             }
-                            Err(e) => {
-                                log!("Encryption failed:", e.to_string());
-                                self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}. User creation aborted.", e));
-                                return Ok(true);  // Re-render with error banner, block submission
+
+                            // Safety net
+                            if self.encrypted_password.is_none() {
+                                self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
+                                return Ok(true);
                             }
                         }
                     }
-
-                    // Final check: If required but still missing, block (safety net)
-                    if self.encrypted_password.is_none() {
-                        self.common.error = Some(anyhow::anyhow!("Kerberos is enabled but password encryption failed. User creation aborted."));
-                        return Ok(true);
-                    }
-                } else {
-                    // Kerberos disabled—no encryption needed
-                    log!("Kerberos not enabled—no password encryption attempted");
                 }
 
                 let all_values = read_all_form_attributes(
@@ -223,8 +231,14 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 if !model.password.is_empty() {
                     if let Some(kerberos_info) = &self.kerberos_info {
                         if kerberos_info.enabled {
-                            if let encrypted_pw = encrypt_password(&self.kerberos_info.public_key.unwrap_or_default(), &form.model().password).unwrap();
-                            }
+                            // TEMP STUB: We'll swap this for real RSA encryption once GraphQL is updated
+                            // For now, just set a dummy encrypted value if enabled (to test state flow)
+                            let dummy_encrypted = "TEMP_DUMMY_ENCRYPTED_FOR_BUILD".to_string();
+                            log!("Kerberos enabled — stubbing encrypted pw (length):", dummy_encrypted.len().to_string());
+                            self.encrypted_password = Some(dummy_encrypted);
+                        } else {
+                            log!("Kerberos disabled — no encryption");
+                            self.encrypted_password = None;
                         }
                     }
                 }
@@ -292,16 +306,16 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::RegistrationFinishResponse(response) => {
                 response?;
-                if self.encrypted_password.is_some() {
+                if let Some(enc_pw) = &self.encrypted_password {
                     let variables = sync_kerberos_password::Variables {
                         user_id: self.user_id.clone().unwrap(),
-                        encrypted_password: self.encrypted_password.clone().unwrap(),  // We'll update state to use encrypted_password
+                        encrypted_password: enc_pw.clone(),
                     };
                     self.common.call_graphql::<SyncKerberosPassword, _>(
                         ctx,
                         variables,
                         Msg::SyncKerberosResponse,
-                        "Error trying to sync Kerberos password",
+                        "Error syncing Kerberos password",
                     );
                     Ok(false)
                 } else {
