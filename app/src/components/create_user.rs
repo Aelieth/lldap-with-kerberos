@@ -11,7 +11,6 @@ use crate::{
         api::HostService,
         common_component::{CommonComponent, CommonComponentParts},
         form_utils::{
-            AttributeValue as FormAttributeValue,
             EmailIsRequired, GraphQlAttributeSchema, IsAdmin,
             read_all_form_attributes,
         },
@@ -172,41 +171,32 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 // Encrypt password for Kerberos sync—REQUIRED if Kerberos enabled
                 self.encrypted_password = None;  // Reset in case of re-submit
-                let new_password = self.form.model().password.clone();
-
-                let kerberos_requires_encryption = self.kerberos_info.as_ref()
-                .and_then(|info| info.public_key_der_base64.as_ref())
-                .is_some();
                 let model = self.form.model();
-                if !model.password.is_empty() {
-                    self.encrypted_password = None;
-                    let new_password = model.password.clone();
+                let new_password = model.password.clone();
 
-                    if let Some(info) = &self.kerberos_info {
-                        if info.enabled {
-                            if let Some(pub_key) = &info.public_key_der_base64 {
-                                match encrypt_password(pub_key, &new_password) {
-                                    Ok(enc) => {
-                                        log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
-                                        self.encrypted_password = Some(enc);
-                                    }
-                                    Err(e) => {
-                                        log!("Encryption failed: {}", e.to_string());
-                                        self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync (required when enabled). User creation aborted: {}", e));
-                                        return Ok(true);  // Block + show error banner
-                                    }
+                if let Some(info) = &self.kerberos_info {
+                    if info.enabled {
+                        if let Some(pub_key) = &info.public_key_der_base64 {
+                            match encrypt_password(pub_key, &new_password) {
+                                Ok(enc) => {
+                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
+                                    self.encrypted_password = Some(enc);
                                 }
-                            } else {
-                                // Enabled but no key yet (backend not updated)—block for safety
-                                self.common.error = Some(anyhow::anyhow!("Kerberos enabled but no public key available. User creation aborted (backend update needed)."));
-                                return Ok(true);
+                                Err(e) => {
+                                    log!("Encryption failed: {}", e.to_string());
+                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync (required when enabled). User creation aborted: {}", e));
+                                    return Ok(true);  // Block + show error banner
+                                }
                             }
+                        } else {
+                            self.common.error = Some(anyhow::anyhow!("Kerberos enabled but no public key available. User creation aborted (backend update needed)."));
+                            return Ok(true);
+                        }
 
-                            // Safety net
-                            if self.encrypted_password.is_none() {
-                                self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
-                                return Ok(true);
-                            }
+                        // Safety net
+                        if self.encrypted_password.is_none() {
+                            self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
+                            return Ok(true);
                         }
                     }
                 }
@@ -216,32 +206,17 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                                           &self.form_ref,
                                                           IsAdmin(true),
                                                           EmailIsRequired(true),
-                );
-                let attributes = Some(
-                    all_values
-                    .into_iter()
-                    .filter(|a| !a.values.is_empty())
-                    .map(|FormAttributeValue { name, values }| GraphQLAttributeValue {
-                        name,
-                        value: values,
-                    })
-                    .collect::<Vec<_>>(),
-                );
-                let model = self.form.model();
-                if !model.password.is_empty() {
-                    if let Some(kerberos_info) = &self.kerberos_info {
-                        if kerberos_info.enabled {
-                            // TEMP STUB: We'll swap this for real RSA encryption once GraphQL is updated
-                            // For now, just set a dummy encrypted value if enabled (to test state flow)
-                            let dummy_encrypted = "TEMP_DUMMY_ENCRYPTED_FOR_BUILD".to_string();
-                            log!("Kerberos enabled — stubbing encrypted pw (length):", dummy_encrypted.len().to_string());
-                            self.encrypted_password = Some(dummy_encrypted);
-                        } else {
-                            log!("Kerberos disabled — no encryption");
-                            self.encrypted_password = None;
-                        }
-                    }
-                }
+                )?;  // Unwrap Result with ? (propagates error to banner if form read fails)
+
+                let attributes = all_values
+                .into_iter()  // Owned AttributeValue elements (move name/values)
+                .filter(|a| !a.values.is_empty())
+                .map(|a| GraphQLAttributeValue {
+                    name: a.name,
+                    value: a.values,  // Local plural 'values' moves to GraphQL singular 'value'
+                })
+                .collect::<Vec<_>>();
+
                 let user = create_user::CreateUserInput {
                     id: model.username,
                     displayName: None,
@@ -249,7 +224,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     lastName: None,
                     avatar: None,
                     email: None,
-                    attributes,
+                    attributes: Some(attributes),
                 };
                 let variables = create_user::Variables { user };
                 self.common.call_graphql::<CreateUser, _>(

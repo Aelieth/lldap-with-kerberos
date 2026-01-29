@@ -9,11 +9,12 @@ use crate::{
         encrypt::encrypt_password,
     },
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use gloo_console::log;
 use graphql_client::GraphQLQuery;
 use lldap_auth::{
     opaque::client::registration as opaque_registration,
+    opaque::client::registration::ClientRegistrationFinishParameters,
     password_reset::ServerPasswordResetResponse,
     registration,
 };
@@ -77,7 +78,7 @@ pub enum Msg {
 impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
     fn handle_msg(
         &mut self,
-        ctx: &Context<Self>,
+        ctx: &yew::html::Context<Self>,
         msg: <Self as Component>::Message,
     ) -> Result<bool> {
         use anyhow::Context;
@@ -151,25 +152,30 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
 
                 self.common.call_backend(
                     ctx,
-                    HostService::registration_start(req),
+                    HostService::register_start(req),
                                          Msg::RegistrationStartResponse,
                 );
                 Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {
                 let server_response = res?;
+                let mut rng = rand::rngs::OsRng;
                 let opaque_finish = self
                 .opaque_data
                 .take()
                 .unwrap()
-                .finish_registration(server_response.message)
+                .finish(&mut rng, server_response.registration_response, ClientRegistrationFinishParameters::default())
                 .context("Could not finish registration")?;
 
                 self.common.call_backend(
                     ctx,
-                    HostService::registration_finish(opaque_finish.message),
-                                         Msg::RegistrationFinishResponse,
+                    HostService::register_finish(registration::ClientRegistrationFinishRequest {
+                        server_data: server_response.server_data.clone(),  // Needed for final request
+                                                 registration_upload: opaque_finish.message,
+                    }),
+                    Msg::RegistrationFinishResponse,
                 );
+
                 Ok(false)
             }
             Msg::RegistrationFinishResponse(_response) => {
@@ -208,7 +214,7 @@ impl Component for ResetPasswordStep2Form {
     type Message = Msg;
     type Properties = Props;
 
-    fn create(ctx: &Context<Self>) -> Self {
+    fn create(ctx: &yew::html::Context<Self>) -> Self {
         let mut form = ResetPasswordStep2Form {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<FormModel>::new(FormModel::default()),
@@ -227,11 +233,11 @@ impl Component for ResetPasswordStep2Form {
         form
     }
 
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &yew::html::Context<Self>, msg: Self::Message) -> bool {
         CommonComponentParts::<Self>::update(self, ctx, msg)
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Html {
+    fn view(&self, ctx: &yew::html::Context<Self>) -> Html {
         let link = ctx.link();
         match (&self.username, &self.common.error) {
             (None, None) => {
@@ -292,7 +298,7 @@ impl Component for ResetPasswordStep2Form {
         }
     }
 
-    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+    fn rendered(&mut self, ctx: &yew::html::Context<Self>, first_render: bool) {
         if first_render && !self.fetched_kerberos {
             log!("Fetching Kerberos info for password reset");
             self.common.call_graphql::<GetKerberosInfo, _>(
