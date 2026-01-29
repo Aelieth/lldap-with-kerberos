@@ -8,4 +8,4 @@ pub mod graphql;
 pub mod modal;
 pub mod schema;
 pub mod tooltip;
-pub mod obfuscate;
+pub mod encrypt;

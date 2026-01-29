@@ -1,47 +1,56 @@
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use lazy_static::lazy_static;
+use rand::rngs::OsRng;
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use rsa::pkcs1::EncodeRsaPublicKey;
 use std::env;
 use std::process::Command;
 use tracing::{debug, info, warn};
 
-/// Obfuscate the plain password (XOR + base64) using LLDAP_KERB_ENCODE_KEY env.
-pub fn obfuscate_password(password: &str) -> Result<String> {
-    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY").context("LLDAP_KERB_ENCODE_KEY env missing for obfuscation")?;
-    let key_bytes = encode_key.as_bytes();
-    let xored: Vec<u8> = password
-    .as_bytes()
-    .iter()
-    .enumerate()
-    .map(|(i, &b)| b ^ key_bytes[i % key_bytes.len()])
-    .collect();
-    debug!("Obfuscated password length: {} chars", password.len());
-    Ok(STANDARD.encode(&xored))
+lazy_static! {
+    static ref KEYPAIR: Option<(RsaPrivateKey, RsaPublicKey)> = {
+        if is_kerberos_enabled() {
+            match generate_keypair() {
+                Ok(pair) => Some(pair),
+                Err(e) => {
+                    warn!("Failed to generate RSA keypair: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
 }
 
-/// Deobfuscate (reverse XOR + base64) — internal for sync.
-fn deobfuscate_password(obfuscated: &str) -> Result<String> {
-    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY").context("LLDAP_KERB_ENCODE_KEY env missing")?;
-    let key_bytes = encode_key.as_bytes();
-    let xored = STANDARD.decode(obfuscated).context("Base64 decode failed")?;
-    let plain: Vec<u8> = xored
-    .iter()
-    .enumerate()
-    .map(|(i, &b)| b ^ key_bytes[i % key_bytes.len()])
-    .collect();
-    String::from_utf8(plain).context("UTF-8 decode failed")
+fn generate_keypair() -> Result<(RsaPrivateKey, RsaPublicKey)> {
+    let mut rng = OsRng;
+    let bits = 2048;
+    let priv_key = RsaPrivateKey::new(&mut rng, bits).context("Failed to generate private key")?;
+    let pub_key = RsaPublicKey::from(&priv_key);
+    Ok((priv_key, pub_key))
 }
 
-/// Sync Kerberos principal with deobfuscated password (local kadmin.local via sh -c single query with ' pw).
-pub fn sync_kerberos_principal(username: &str, obfuscated_password: &str) -> Result<()> {
+fn decrypt_password(encrypted: &str) -> Result<String> {
+    let keypair = KEYPAIR.as_ref().context("Kerberos not enabled or keypair missing")?;
+    let priv_key = &keypair.0;
+    let dec_data = STANDARD.decode(encrypted).context("Base64 decode failed")?;
+    let plain_data = priv_key.decrypt(Pkcs1v15Encrypt, &dec_data).context("Decryption failed")?;
+    String::from_utf8(plain_data).context("UTF-8 decode failed")
+}
+
+/// Sync Kerberos principal with decrypted password (local kadmin.local via sh -c single query with ' pw).
+pub fn sync_kerberos_principal(username: &str, encrypted_password: &str) -> Result<()> {
     let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
 
     info!("Kerberos sync triggered for principal: {}", principal);
-    debug!("Received obfuscated password from LLDAP: {}", obfuscated_password);
+    debug!("Received encrypted password from LLDAP: {}", encrypted_password);
 
-    let plain_password = deobfuscate_password(obfuscated_password)?;
-    debug!("Deobfuscated password length: {} chars", plain_password.len());
+    let plain_password = decrypt_password(encrypted_password)?;
+    debug!("Decrypted password length: {} chars", plain_password.len());
 
     // Try cpw first
     let cpw_cmd = format!("sudo kadmin.local -q \"cpw -keepold -pw {} -e aes256-cts-hmac-sha1-96:normal {}\"", plain_password, principal);
@@ -118,13 +127,14 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
 }
 
 pub fn is_kerberos_enabled() -> bool {
-    // Always true in this fork, but check for key existence for sync safety
-    env::var("LLDAP_KERB_ENCODE_KEY").is_ok() && env::var("LLDAP_KERB_REALM_NAME").is_ok()
+    env::var("LLDAP_KERB_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true"
 }
 
-pub fn get_encode_key() -> Option<String> {
+pub fn get_public_key_der_base64() -> Option<String> {
     if is_kerberos_enabled() {
-        env::var("LLDAP_KERB_ENCODE_KEY").ok()
+        let keypair = KEYPAIR.as_ref()?;
+        let der = keypair.1.to_pkcs1_der().ok()?;
+        Some(STANDARD.encode(der.as_bytes()))
     } else {
         None
     }

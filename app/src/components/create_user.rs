@@ -15,7 +15,7 @@ use crate::{
             EmailIsRequired, GraphQlAttributeSchema, IsAdmin,
             read_all_form_attributes,
         },
-        obfuscate::obfuscate_password,
+        encrypt::encrypt_password,
         schema::AttributeType,
     },
 };
@@ -27,6 +27,7 @@ use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
+use gloo_console::log!;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
@@ -102,7 +103,7 @@ pub struct CreateUserForm {
         form_ref: NodeRef,
             kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
             fetched_schema: bool,
-            obfuscated_password: Option<String>,
+            encrypted_password: Option<String>,
             user_id: Option<String>,
             opaque_data: Option<opaque::client::registration::ClientRegistration>,
 }
@@ -168,12 +169,46 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 if !self.form.validate() {
                     bail!("Check the form for errors");
                 }
+
+                // Encrypt password for Kerberos sync—REQUIRED if Kerberos enabled
+                self.encrypted_password = None;  // Reset in case of re-submit
+                let new_password = self.form.model().password.clone();
+
+                let kerberos_requires_encryption = self.kerberos_info.as_ref()
+                .and_then(|info| info.public_key_der_base64.as_ref())
+                .is_some();
+
+                if kerberos_requires_encryption {
+                    if let Some(pub_key) = self.kerberos_info.as_ref().and_then(|info| info.public_key_der_base64.as_ref()) {
+                        match encrypt_password(pub_key, &new_password) {
+                            Ok(enc) => {
+                                log!("Encrypted pw for Kerberos sync (length):", enc.len().to_string());
+                                self.encrypted_password = Some(enc);
+                            }
+                            Err(e) => {
+                                log!("Encryption failed:", e.to_string());
+                                self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}. User creation aborted.", e));
+                                return Ok(true);  // Re-render with error banner, block submission
+                            }
+                        }
+                    }
+
+                    // Final check: If required but still missing, block (safety net)
+                    if self.encrypted_password.is_none() {
+                        self.common.error = Some(anyhow::anyhow!("Kerberos is enabled but password encryption failed. User creation aborted."));
+                        return Ok(true);
+                    }
+                } else {
+                    // Kerberos disabled—no encryption needed
+                    log!("Kerberos not enabled—no password encryption attempted");
+                }
+
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),
                                                           &self.form_ref,
                                                           IsAdmin(true),
                                                           EmailIsRequired(true),
-                )?;
+                );
                 let attributes = Some(
                     all_values
                     .into_iter()
@@ -188,11 +223,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 if !model.password.is_empty() {
                     if let Some(kerberos_info) = &self.kerberos_info {
                         if kerberos_info.enabled {
-                            if let Some(key) = &kerberos_info.encode_key {
-                                self.obfuscated_password = Some(obfuscate_password(
-                                    &model.password,
-                                    key,
-                                ));
+                            if let encrypted_pw = encrypt_password(&self.kerberos_info.public_key.unwrap_or_default(), &form.model().password).unwrap();
                             }
                         }
                     }
@@ -261,10 +292,10 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::RegistrationFinishResponse(response) => {
                 response?;
-                if self.obfuscated_password.is_some() {
+                if self.encrypted_password.is_some() {
                     let variables = sync_kerberos_password::Variables {
                         user_id: self.user_id.clone().unwrap(),
-                        obfuscated_password: self.obfuscated_password.clone().unwrap(),
+                        encrypted_password: self.encrypted_password.clone().unwrap(),  // We'll update state to use encrypted_password
                     };
                     self.common.call_graphql::<SyncKerberosPassword, _>(
                         ctx,
@@ -305,7 +336,7 @@ impl Component for CreateUserForm {
                 form_ref: NodeRef::default(),
                     kerberos_info: None,
                     fetched_schema: false,
-                    obfuscated_password: None,
+                    encrypted_password: None,
                     user_id: None,
                     opaque_data: None,
         }
