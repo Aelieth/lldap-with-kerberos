@@ -197,7 +197,6 @@ type AttributeList {
 }
 
 type KerberosInfo {
-  enabled: Boolean!
   publicKeyDerBase64: String
 }
 

@@ -175,8 +175,8 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let new_password = model.password.clone();
 
                 if let Some(info) = &self.kerberos_info {
-                    if info.enabled {
-                        if let Some(pub_key) = &info.public_key_der_base64 {
+                    if let Some(ref pub_key) = info.public_key_der_base64 {
+                        if !pub_key.is_empty() {
                             match encrypt_password(pub_key, &new_password) {
                                 Ok(enc) => {
                                     log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
@@ -184,21 +184,28 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                 }
                                 Err(e) => {
                                     log!("Encryption failed: {}", e.to_string());
-                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync (required when enabled). User creation aborted: {}", e));
+                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}", e));
                                     return Ok(true);  // Block + show error banner
                                 }
                             }
                         } else {
-                            self.common.error = Some(anyhow::anyhow!("Kerberos enabled but no public key available. User creation aborted (backend update needed)."));
-                            return Ok(true);
+                            self.common.error = Some(anyhow::anyhow!("Kerberos public key empty—sync skipped (backend startup issue?). Contact admin."));
+                            return Ok(true);  // Block creation
                         }
-
-                        // Safety net
-                        if self.encrypted_password.is_none() {
-                            self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
-                            return Ok(true);
-                        }
+                    } else {
+                        self.common.error = Some(anyhow::anyhow!("No Kerberos public key available—sync skipped (backend update needed). Contact admin."));
+                        return Ok(true);  // Block creation
                     }
+                } else {
+                    // No kerberos_info loaded yet—could be loading, but for safety block if not ready
+                    self.common.error = Some(anyhow::anyhow!("Kerberos info not loaded yet—try again."));
+                    return Ok(true);
+                }
+
+                // Safety net: Require encrypted password (always-on)
+                if self.encrypted_password.is_none() {
+                    self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
+                    return Ok(true);
                 }
 
                 let all_values = read_all_form_attributes(

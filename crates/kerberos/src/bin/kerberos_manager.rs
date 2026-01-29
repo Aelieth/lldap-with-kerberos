@@ -4,9 +4,11 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use reqwest::blocking::Client;
 use serde_json::json;
+use std::io::{BufRead, BufReader, Write};  // Add this to imports if not there (for reader/writer)
+
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -19,6 +21,33 @@ struct KerberosConfig {
     renew_lifetime: String,
     forwardable: bool,
         rdns: bool,
+}
+
+fn run_kadmin_interactive<F>(mut cmd_handler: F) -> Result<()>
+where
+F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout>) -> Result<()>,
+{
+    let mut child = Command::new("/usr/sbin/kadmin.local")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .context("Failed to spawn kadmin.local")?;
+
+    let mut stdin = child.stdin.take().context("Failed to take stdin")?;
+    let stdout = child.stdout.take().context("Failed to take stdout")?;
+    let mut reader = BufReader::new(stdout);
+
+    cmd_handler(&mut stdin, &mut reader)?;
+
+    writeln!(stdin, "quit")?;
+    stdin.flush()?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("kadmin.local failed: {}", stderr));
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -82,10 +111,6 @@ fn main() -> Result<()> {
     let domain = config.base_dn.replace("dc=", "").replace(",", ".").to_lowercase();
     println!("Calculated DOMAIN: {}", domain);
     println!("Effective config: {:?}", config);
-    // ENCODE_KEY shared via env (generated/exported in entrypoint.sh)
-    let encode_key = env::var("LLDAP_KERB_ENCODE_KEY")
-    .context("LLDAP_KERB_ENCODE_KEY missing—should be generated in entrypoint.sh")?;
-    println!("Effective ENCODE_KEY length: {}", encode_key.len());
 
     // Create necessary directories
     fs::create_dir_all("/var/lib/krb5kdc").context("Failed to create /var/lib/krb5kdc")?;
@@ -124,39 +149,54 @@ fn main() -> Result<()> {
         println!("Kerberos database already exists—skipping init.");
     }
 
-    // Add/admin principal (idempotent)
-    println!("Ensuring admin/admin principal...");
+    println!("Ensuring admin/admin principal.");
     let admin_principal = format!("admin/admin@{}", config.realm_name);
 
-    // Try cpw (updates if exists)
-    let cpw_output = Command::new("/usr/sbin/kadmin.local")
-    .arg("-q")
-    .arg(format!("cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
-    .output()
-    .context("Failed to run kadmin.local cpw")?;
+    run_kadmin_interactive(|stdin, reader| {
+        // Try cpw first (update if exists)
+        writeln!(stdin, "cpw -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
+        stdin.flush()?;
 
-    if cpw_output.status.success() {
-        println!("Updated existing admin principal password successfully.");
-    } else {
-        let stderr = String::from_utf8_lossy(&cpw_output.stderr);
-        if stderr.contains("Principal does not exist") {
-            println!("Admin principal does not exist—creating new one...");
-
-            let add_output = Command::new("/usr/sbin/kadmin.local")
-            .arg("-q")
-            .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.admin_pass, admin_principal))
-            .output()
-            .context("Failed to run kadmin.local addprinc")?;
-
-            if add_output.status.success() {
-                println!("Created new admin principal successfully.");
-            } else {
-                let add_stderr = String::from_utf8_lossy(&add_output.stderr);
-                println!("Warning: Failed to create admin principal: {}", add_stderr.trim());
+        // Send pw twice
+        for _ in 0..2 {
+            let mut line = String::new();
+            reader.read_line(&mut line)?;
+            if line.to_lowercase().contains("password") {
+                writeln!(stdin, "{}", config.admin_pass)?;
+                stdin.flush()?;
             }
-        } else {
-            println!("Warning: cpw failed (unexpected): {}", stderr.trim());
         }
+
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line.contains("changed") || line.contains("success") {
+            println!("Updated existing admin principal password successfully.");
+            return Ok(());
+        }
+
+        // Fallback: create if not exists
+        println!("Admin principal does not exist—creating new one...");
+        writeln!(stdin, "addprinc -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
+        stdin.flush()?;
+
+        for _ in 0..2 {
+            line.clear();
+            reader.read_line(&mut line)?;
+            if line.to_lowercase().contains("password") {
+                writeln!(stdin, "{}", config.admin_pass)?;
+                stdin.flush()?;
+            }
+        }
+
+        line.clear();
+        reader.read_line(&mut line)?;
+        if line.contains("created") || line.contains("success") {
+            println!("Created new admin principal successfully.");
+        } else {
+            println!("Warning: Failed to create admin principal: {}", line.trim());
+        }
+        Ok(())
+    }).unwrap_or_else(|e| println!("Admin principal setup failed: {}", e));
     }
 
     // Create keytab
@@ -267,38 +307,57 @@ fn main() -> Result<()> {
         println!("Schema already extended—skipping.");
     }
 
-    // Sync initial admin user to Kerberos (plain dm_pass available)
     println!("Syncing initial admin user to Kerberos...");
-    let admin_username = "admin";
-    let admin_principal = format!("{}@{}", admin_username, config.realm_name);  // Or "admin/admin@{}" if old
+    let admin_principal = format!("admin@{}", config.realm_name);
 
-    // Direct Command (plain available—no obfuscate needed)
-    let add_admin_output = Command::new("/usr/sbin/kadmin.local")
-    .arg("-q")
-    .arg(format!("addprinc -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.dm_pass, admin_principal))
-    .output()
-    .context("Failed to add initial admin principal")?;
+    run_kadmin_interactive(|stdin, reader| {
+        // Try addprinc first (your current tries add, then cpw on exists)
+        writeln!(stdin, "addprinc -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
+        stdin.flush()?;
 
-    if add_admin_output.status.success() {
-        println!("Initial admin principal synced successfully.");
-    } else {
-        let stderr = String::from_utf8_lossy(&add_admin_output.stderr);
-        if stderr.contains("Principal exists") {
+        for _ in 0..2 {
+            let mut line = String::new();
+            reader.read_line(&mut line)?;
+            if line.to_lowercase().contains("password") {
+                writeln!(stdin, "{}", config.dm_pass)?;
+                stdin.flush()?;
+            }
+        }
+
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line.contains("created") || line.contains("success") {
+            println!("Initial admin principal synced successfully.");
+            return Ok(());
+        }
+
+        if line.contains("exists") {
             // Update if exists
-            let cpw_output = Command::new("/usr/sbin/kadmin.local")
-            .arg("-q")
-            .arg(format!("cpw -pw {} -e aes256-cts-hmac-sha1-96:normal {}", config.dm_pass, admin_principal))
-            .output()
-            .context("Failed to update initial admin principal")?;
+            println!("Initial admin principal exists—updating password...");
+            writeln!(stdin, "cpw -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
+            stdin.flush()?;
 
-            if cpw_output.status.success() {
+            for _ in 0..2 {
+                line.clear();
+                reader.read_line(&mut line)?;
+                if line.to_lowercase().contains("password") {
+                    writeln!(stdin, "{}", config.dm_pass)?;
+                    stdin.flush()?;
+                }
+            }
+
+            line.clear();
+            reader.read_line(&mut line)?;
+            if line.contains("changed") || line.contains("success") {
                 println!("Initial admin principal password updated.");
             } else {
-                println!("Warning: Failed to update admin principal: {}", String::from_utf8_lossy(&cpw_output.stderr).trim());
+                println!("Warning: Failed to update admin principal: {}", line.trim());
             }
         } else {
-            println!("Warning: Failed to sync initial admin principal: {}", stderr.trim());
+            println!("Warning: Failed to sync initial admin principal: {}", line.trim());
         }
+        Ok(())
+    }).unwrap_or_else(|e| println!("Initial admin sync failed: {}", e));
     }
 
     // Wait for either to exit (error)

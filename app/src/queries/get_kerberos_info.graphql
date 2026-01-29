@@ -1,6 +1,5 @@
 query GetKerberosInfo {
   kerberosInfo {
-    enabled
     publicKeyDerBase64
   }
 }

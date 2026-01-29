@@ -31,7 +31,6 @@ pub struct Query<Handler: BackendHandler + OpaqueHandler> {
 
 #[derive(GraphQLObject)]
 pub struct KerberosInfo {
-    pub enabled: bool,
     pub public_key_der_base64: Option<String>,  // Base64 DER public key for RSA encryption (null if disabled or gen fails)
 }
 
@@ -144,9 +143,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         self.get_schema(context, span).await.map(Into::into)
     }
     fn kerberos_info(&self, _context: &Context<Handler>) -> FieldResult<KerberosInfo> {
-        let enabled = lldap_kerberos::is_kerberos_enabled();
         let public_key_der_base64 = lldap_kerberos::get_public_key_der_base64();
-        Ok(KerberosInfo { enabled, public_key_der_base64 })
+        Ok(KerberosInfo {
+            public_key_der_base64: Some(public_key_der_base64)
+        })
     }
 }
 

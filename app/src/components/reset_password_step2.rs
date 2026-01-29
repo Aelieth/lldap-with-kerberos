@@ -113,12 +113,13 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
 
                 self.opaque_data = Some(registration_start_request.state);
 
-                // Kerberos encryption — REQUIRED if enabled (blocks on failure for always-synced guarantee)
+                // Kerberos encryption — REQUIRED (always-on, blocks on failure for sync guarantee)
                 self.encrypted_password = None;
+                let new_password = self.form.model().password.clone();
 
                 if let Some(info) = &self.kerberos_info {
-                    if info.enabled {
-                        if let Some(pub_key) = &info.public_key_der_base64 {
+                    if let Some(ref pub_key) = info.public_key_der_base64 {
+                        if !pub_key.is_empty() {
                             match encrypt_password(pub_key, &new_password) {
                                 Ok(enc) => {
                                     log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
@@ -126,28 +127,27 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                                 }
                                 Err(e) => {
                                     log!("Encryption failed: {}", e.to_string());
-                                    self.common.error = Some(anyhow::anyhow!(
-                                        "Failed to encrypt password for Kerberos sync (required). Password reset aborted: {}",
-                                                                             e
-                                    ));
-                                    return Ok(true); // Block + show error banner
+                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}", e));
+                                    return Ok(true);  // Block + show error
                                 }
                             }
                         } else {
-                            self.common.error = Some(anyhow::anyhow!(
-                                "Kerberos enabled but no public key available. Password reset aborted (backend update needed)."
-                            ));
-                            return Ok(true);
+                            self.common.error = Some(anyhow::anyhow!("Kerberos public key empty—sync skipped (backend startup issue?). Contact admin."));
+                            return Ok(true);  // Block change
                         }
-
-                        // Safety net
-                        if self.encrypted_password.is_none() {
-                            self.common.error = Some(anyhow::anyhow!(
-                                "Kerberos password encryption failed. Password reset aborted."
-                            ));
-                            return Ok(true);
-                        }
+                    } else {
+                        self.common.error = Some(anyhow::anyhow!("No Kerberos public key available—sync skipped (backend update needed). Contact admin."));
+                        return Ok(true);  // Block change
                     }
+                } else {
+                    self.common.error = Some(anyhow::anyhow!("Kerberos key info not loaded—try again."));
+                    return Ok(true);
+                }
+
+                // Safety net: Require encrypted password (always-on)
+                if self.encrypted_password.is_none() {
+                    self.common.error = Some(anyhow::anyhow!("Kerberos encryption failed. Password change aborted."));
+                    return Ok(true);
                 }
 
                 self.common.call_backend(
