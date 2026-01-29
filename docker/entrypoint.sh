@@ -11,13 +11,6 @@ REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Final fallback
 export REALM_NAME
 echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
 
-# Generate/share LLDAP_KERB_ENCODE_KEY if not set (32 char alphanumeric, random)
-if [ -z "${LLDAP_KERB_ENCODE_KEY:-}" ]; then
-    LLDAP_KERB_ENCODE_KEY=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)
-    echo "Generated LLDAP_KERB_ENCODE_KEY: $LLDAP_KERB_ENCODE_KEY (save this for persistence!)"
-    export LLDAP_KERB_ENCODE_KEY
-fi
-
 mkdir -p /data
 chown $UID:$GID /data
 
