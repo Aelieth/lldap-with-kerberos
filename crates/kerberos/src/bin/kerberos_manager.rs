@@ -197,7 +197,6 @@ fn main() -> Result<()> {
         }
         Ok(())
     }).unwrap_or_else(|e| println!("Admin principal setup failed: {}", e));
-    }
 
     // Create keytab
     println!("Creating kadm5.keytab...");
@@ -358,7 +357,6 @@ fn main() -> Result<()> {
         }
         Ok(())
     }).unwrap_or_else(|e| println!("Initial admin sync failed: {}", e));
-    }
 
     // Wait for either to exit (error)
     let kdc_status = kdc_child.wait().context("krb5kdc exited unexpectedly")?;
