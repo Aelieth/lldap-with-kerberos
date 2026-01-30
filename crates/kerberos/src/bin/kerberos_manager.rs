@@ -7,7 +7,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use reqwest::blocking::Client;
 use serde_json::json;
-use std::io::{BufRead, BufReader, Write};  // Add this to imports if not there (for reader/writer)
+use std::io::{BufRead, BufReader, Write};
+use lldap_kerberos::Kadm5Handle;
+use std::thread;
+use std::time::Duration;
 
 
 #[derive(Deserialize, Debug)]
@@ -230,6 +233,27 @@ fn main() -> Result<()> {
     .spawn()
     .context("Failed to start kadmind")?;
 
+    // Wait for kadmind to be ready (test with FFI init—direct connection check)
+    println!("Waiting for kadmind to become ready...");
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match Kadm5Handle::init_with_password(&config.master_pass) {
+            Ok(handle) => {
+                drop(handle);  // Clean up test handle
+                println!("kadmind is ready after {} attempt(s)!", attempts);
+                break;
+            }
+            Err(e) => {
+                if attempts >= 30 {
+                    return Err(anyhow::anyhow!("kadmind readiness timeout after 30 attempts: {}", e));
+                }
+                println!("kadmind not ready yet (attempt {}/30): {}", attempts, e);
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+
     println!("Kerberos services running. Blocking forever...");
 
     // One-time schema extension for POSIX/Kerberos compatibility
@@ -306,57 +330,58 @@ fn main() -> Result<()> {
         println!("Schema already extended—skipping.");
     }
 
-    println!("Syncing initial admin user to Kerberos...");
-    let admin_principal = format!("admin@{}", config.realm_name);
+    println!("Syncing initial admin user to Kerberos using direct FFI...");
+    let admin_principal = format!("admin@{}", config.realm_name);  // Kept for keytab later if needed
 
-    run_kadmin_interactive(|stdin, reader| {
-        // Try addprinc first (your current tries add, then cpw on exists)
-        writeln!(stdin, "addprinc -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
-        stdin.flush()?;
+    let handle = Kadm5Handle::init_with_password(&config.master_pass)
+    .context("Failed to initialize FFI handle for initial admin sync")?;
 
-        for _ in 0..2 {
-            let mut line = String::new();
-            reader.read_line(&mut line)?;
-            if line.to_lowercase().contains("password") {
-                writeln!(stdin, "{}", config.dm_pass)?;
-                stdin.flush()?;
-            }
+    // Try change password first (common if principal already exists from previous run)
+    match handle.chpass_principal("admin", &config.dm_pass, &config.realm_name) {
+        Ok(()) => {
+            println!("Updated existing admin principal password for LLDAP sync.");
         }
-
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        if line.contains("created") || line.contains("success") {
-            println!("Initial admin principal synced successfully.");
-            return Ok(());
-        }
-
-        if line.contains("exists") {
-            // Update if exists
-            println!("Initial admin principal exists—updating password...");
-            writeln!(stdin, "cpw -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
-            stdin.flush()?;
-
-            for _ in 0..2 {
-                line.clear();
-                reader.read_line(&mut line)?;
-                if line.to_lowercase().contains("password") {
-                    writeln!(stdin, "{}", config.dm_pass)?;
-                    stdin.flush()?;
-                }
-            }
-
-            line.clear();
-            reader.read_line(&mut line)?;
-            if line.contains("changed") || line.contains("success") {
-                println!("Initial admin principal password updated.");
+        Err(e) => {
+            // Check for "principal does not exist" type error—fallback to create
+            let err_str = e.to_string();
+            if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
+                handle.create_principal("admin", &config.dm_pass, &config.realm_name)
+                .context("Failed to create new admin principal via FFI")?;
+                println!("Created new admin principal for LLDAP sync.");
             } else {
-                println!("Warning: Failed to update admin principal: {}", line.trim());
+                return Err(e.context("Unexpected error during initial admin password change"));
             }
-        } else {
-            println!("Warning: Failed to sync initial admin principal: {}", line.trim());
         }
-        Ok(())
-    }).unwrap_or_else(|e| println!("Initial admin sync failed: {}", e));
+    }
+
+    // Create persistent keytab for runtime FFI auth (no master_pass needed later, secure keytab-based)
+    println!("Creating persistent keytab at /data/kadm5.keytab...");
+    let keytab_path = "/data/kadm5.keytab";
+
+    let ktadd_cmd = format!("ktadd -norandkey -k {} {}", keytab_path, admin_principal);
+
+    let ktadd_output = Command::new("sudo")
+    .arg("/usr/sbin/kadmin.local")
+    .arg("-q")
+    .arg(&ktadd_cmd)
+    .output()
+    .context("Failed to run ktadd for keytab creation")?;
+
+    if !ktadd_output.status.success() {
+        let ktadd_stderr = String::from_utf8_lossy(&ktadd_output.stderr);
+        println!("Warning: Keytab creation failed (non-fatal—runtime sync may need manual retry): {}", ktadd_stderr.trim());
+    } else {
+        let ktadd_stdout = String::from_utf8_lossy(&ktadd_output.stdout);
+        println!("DEBUG: ktadd stdout: '{}'", ktadd_stdout.trim());
+
+        // Secure the keytab file
+        Command::new("chmod")
+        .arg("600")
+        .arg(keytab_path)
+        .output()
+        .context("Failed to secure keytab permissions")?;
+        println!("Keytab successfully created and secured at {}", keytab_path);
+    }
 
     // Wait for either to exit (error)
     let kdc_status = kdc_child.wait().context("krb5kdc exited unexpectedly")?;
