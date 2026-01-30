@@ -4,13 +4,13 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use reqwest::blocking::Client;
 use serde_json::json;
-use std::io::{BufRead, BufReader, Write};
 use lldap_kerberos::Kadm5Handle;
 use std::thread;
 use std::time::Duration;
+use std::net::TcpStream;
 
 
 #[derive(Deserialize, Debug)]
@@ -24,33 +24,6 @@ struct KerberosConfig {
     renew_lifetime: String,
     forwardable: bool,
         rdns: bool,
-}
-
-fn run_kadmin_interactive<F>(mut cmd_handler: F) -> Result<()>
-where
-F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout>) -> Result<()>,
-{
-    let mut child = Command::new("/usr/sbin/kadmin.local")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .context("Failed to spawn kadmin.local")?;
-
-    let mut stdin = child.stdin.take().context("Failed to take stdin")?;
-    let stdout = child.stdout.take().context("Failed to take stdout")?;
-    let mut reader = BufReader::new(stdout);
-
-    cmd_handler(&mut stdin, &mut reader)?;
-
-    writeln!(stdin, "quit")?;
-    stdin.flush()?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("kadmin.local failed: {}", stderr));
-    }
-    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -152,72 +125,6 @@ fn main() -> Result<()> {
         println!("Kerberos database already exists—skipping init.");
     }
 
-    println!("Ensuring admin/admin principal.");
-    let admin_principal = format!("admin/admin@{}", config.realm_name);
-
-    run_kadmin_interactive(|stdin, reader| {
-        // Try cpw first (update if exists)
-        writeln!(stdin, "cpw -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
-        stdin.flush()?;
-
-        // Send pw twice
-        for _ in 0..2 {
-            let mut line = String::new();
-            reader.read_line(&mut line)?;
-            if line.to_lowercase().contains("password") {
-                writeln!(stdin, "{}", config.admin_pass)?;
-                stdin.flush()?;
-            }
-        }
-
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        if line.contains("changed") || line.contains("success") {
-            println!("Updated existing admin principal password successfully.");
-            return Ok(());
-        }
-
-        // Fallback: create if not exists
-        println!("Admin principal does not exist—creating new one...");
-        writeln!(stdin, "addprinc -e aes256-cts-hmac-sha1-96:normal {}", admin_principal)?;
-        stdin.flush()?;
-
-        for _ in 0..2 {
-            line.clear();
-            reader.read_line(&mut line)?;
-            if line.to_lowercase().contains("password") {
-                writeln!(stdin, "{}", config.admin_pass)?;
-                stdin.flush()?;
-            }
-        }
-
-        line.clear();
-        reader.read_line(&mut line)?;
-        if line.contains("created") || line.contains("success") {
-            println!("Created new admin principal successfully.");
-        } else {
-            println!("Warning: Failed to create admin principal: {}", line.trim());
-        }
-        Ok(())
-    }).unwrap_or_else(|e| println!("Admin principal setup failed: {}", e));
-
-    // Create keytab
-    println!("Creating kadm5.keytab...");
-    fs::write("/var/lib/krb5kdc/kadm5.acl", format!("*/admin@{} *\n", config.realm_name))
-    .context("Failed to write kadm5.acl")?;
-
-    let ktadd_output = Command::new("/usr/sbin/kadmin.local")
-    .arg("-q")
-    .arg(format!("ktadd -norandkey -k /var/lib/krb5kdc/kadm5.keytab {}", admin_principal))
-    .output()
-    .context("Failed to run ktadd")?;
-
-    if !ktadd_output.status.success() {
-        let stderr = String::from_utf8_lossy(&ktadd_output.stderr);
-        return Err(anyhow::anyhow!("ktadd failed: {}", stderr));
-    }
-    println!("kadm5.keytab created.");
-
     // Start KDC services (foreground, monitor)
     println!("Starting krb5kdc and kadmind...");
 
@@ -232,6 +139,21 @@ fn main() -> Result<()> {
     .arg("/var/run/kadmind.pid")
     .spawn()
     .context("Failed to start kadmind")?;
+
+    // Quick wait for kdc port 88 (simple ping—ensures binding before FFI tests)
+    println!("Waiting for krb5kdc port 88 to be ready...");
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        if TcpStream::connect("localhost:88").is_ok() {
+            println!("krb5kdc port 88 ready after {} attempt(s)!", attempts);
+            break;
+        } else if attempts >= 30 {
+            return Err(anyhow::anyhow!("krb5kdc port 88 timeout after 30 attempts"));
+        }
+        println!("krb5kdc port 88 not ready yet (attempt {}/30)...", attempts);
+        thread::sleep(Duration::from_millis(500));  // 0.5s for faster check
+    }
 
     // Wait for kadmind to be ready (test with FFI init—direct connection check)
     println!("Waiting for kadmind to become ready...");
