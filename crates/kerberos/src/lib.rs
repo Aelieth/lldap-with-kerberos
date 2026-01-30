@@ -9,7 +9,10 @@ use lazy_static::lazy_static;
 use rand::rngs::OsRng;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
-use std::env;  // Keep for realm
+use std::ffi::{CString, CStr};
+use std::os::raw::{c_void, c_long};
+use std::mem;
+use std::{env, ptr};
 
 // Generated FFI bindings — created at compile time by build.rs
 #[allow(non_camel_case_types)]
@@ -152,4 +155,155 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
 pub fn get_public_key_der_base64() -> String {
     let der = KEYPAIR.1.to_pkcs1_der().ok();
     der.map(|d| STANDARD.encode(d.as_bytes())).unwrap_or_default()
+}
+
+// Safe direct FFI wrapper for Kadm5 admin operations (local, password-auth)
+pub struct Kadm5Handle {
+    handle: *mut c_void,
+    context: krb5_context,
+}
+
+impl Kadm5Handle {
+    /// Initialize as "admin" principal with master password (local defaults)
+    pub fn init_with_password(admin_pass: &str) -> Result<Self> {
+        let mut context: krb5_context = ptr::null_mut();
+
+        let ret = unsafe { krb5_init_context(&mut context) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("krb5_init_context failed with code {}", ret));
+        }
+
+        let mut handle: *mut c_void = ptr::null_mut();
+
+        let client_cstr = CString::new("admin")?;
+        let pass_cstr = CString::new(admin_pass)?;
+
+        // Hardcoded known constants
+        const KADM5_STRUCT_VERSION_VAL: u32 = 0x12345678;
+        const KADM5_API_VERSION_4: u32 = 4;
+
+        let ret = unsafe {
+            kadm5_init_with_password(
+                context,
+                client_cstr.as_ptr() as *mut i8,
+                                     pass_cstr.as_ptr() as *mut i8,
+                                     ptr::null_mut(),          // service_name null → defaults to "kadmin/admin"
+                                     ptr::null_mut(),          // params null → use defaults (local kadmind)
+            KADM5_STRUCT_VERSION_VAL,
+            KADM5_API_VERSION_4,
+            ptr::null_mut(),          // db_args null → default DB
+                                     &mut handle,
+            )
+        };
+
+        if ret != 0 {
+            let code = ret as i32;
+            let msg_ptr = unsafe { krb5_get_error_message(context, code) };
+            let err_msg = if msg_ptr.is_null() {
+                format!("code {}", ret)
+            } else {
+                let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                unsafe { krb5_free_error_message(context, msg_ptr) };
+                s
+            };
+            unsafe { krb5_free_context(context) };
+            return Err(anyhow::anyhow!("kadm5_init_with_password failed: {}", err_msg));
+        }
+
+        Ok(Kadm5Handle { handle, context })
+    }
+
+    /// Create principal with password (uses policy from kdc.conf for aes256 keys)
+    pub fn create_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
+        let principal_name = format!("{}@{}", username, realm);
+        let principal_cstr = CString::new(principal_name)?;
+
+        let mut princ: krb5_principal = ptr::null_mut();
+        let ret = unsafe { krb5_parse_name(self.context, principal_cstr.as_ptr(), &mut princ) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("krb5_parse_name failed with code {}", ret));
+        }
+
+        let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
+        ent.principal = princ;
+
+        // Mask: create the principal (password generates keys via policy)
+        let mask = 1 as c_long;  // KADM5_PRINCIPAL = 1 (hardcoded safe value)
+
+        let pass_cstr = CString::new(password)?;
+
+        let ret = unsafe {
+            kadm5_create_principal(
+                self.handle,
+                &mut ent,
+                mask,
+                pass_cstr.as_ptr() as *mut i8,
+            )
+        };
+
+        unsafe { krb5_free_principal(self.context, princ) };
+
+        if ret != 0 {
+            let code = ret as i32;
+            let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
+            let err_msg = if msg_ptr.is_null() {
+                format!("code {}", ret)
+            } else {
+                let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                unsafe { krb5_free_error_message(self.context, msg_ptr) };
+                s
+            };
+            return Err(anyhow::anyhow!("kadm5_create_principal failed: {}", err_msg));
+        }
+
+        Ok(())
+    }
+
+    /// Change password on existing principal (core sync operation)
+    pub fn chpass_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
+        let principal_name = format!("{}@{}", username, realm);
+        let principal_cstr = CString::new(principal_name)?;
+
+        let mut princ: krb5_principal = ptr::null_mut();
+        let ret = unsafe { krb5_parse_name(self.context, principal_cstr.as_ptr(), &mut princ) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("krb5_parse_name failed with code {}", ret));
+        }
+
+        let pass_cstr = CString::new(password)?;
+
+        let ret = unsafe {
+            kadm5_chpass_principal(
+                self.handle,
+                princ,
+                pass_cstr.as_ptr() as *mut i8,
+            )
+        };
+
+        unsafe { krb5_free_principal(self.context, princ) };
+
+        if ret != 0 {
+            let code = ret as i32;
+            let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
+            let err_msg = if msg_ptr.is_null() {
+                format!("code {}", ret)
+            } else {
+                let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                unsafe { krb5_free_error_message(self.context, msg_ptr) };
+                s
+            };
+            return Err(anyhow::anyhow!("kadm5_chpass_principal failed: {}", err_msg));
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for Kadm5Handle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = kadm5_destroy(self.handle);
+            let _ = krb5_free_context(self.context);
+        }
+    }
 }
