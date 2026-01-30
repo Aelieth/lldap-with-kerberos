@@ -11,6 +11,17 @@ use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use std::env;  // Keep for realm
 
+// Generated FFI bindings — created at compile time by build.rs
+#[allow(non_camel_case_types)]
+#[allow(non_upper_case_globals)]
+#[allow(non_snake_case)]
+#[allow(dead_code)]
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+
+pub use bindings::*; // Re-export so kerberos_manager can see them too
+
 lazy_static! {
     static ref KEYPAIR: (RsaPrivateKey, RsaPublicKey) = {
         match generate_keypair() {

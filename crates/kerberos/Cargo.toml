@@ -23,6 +23,10 @@ rsa = "0.9.6"
 rand = "0.8.5"
 lazy_static = "1.4.0"
 
+[build-dependencies]
+bindgen = "0.69.4"  # Latest stable for good C header support
+pkg-config = "0.3.30"  # To locate krb5 libs/headers
+
 [[bin]]
 name = "kerberos_manager"
 path = "src/bin/kerberos_manager.rs"

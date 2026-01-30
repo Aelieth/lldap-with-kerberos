@@ -2,7 +2,7 @@
 FROM rust:alpine3.21 AS chef
 
 # Install build deps
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig make perl curl gzip
+RUN apk add --no-cache musl-dev openssl-dev pkgconfig make perl curl gzip krb5-dev
 
 # Create lldap user early (UID/GID 1000 to match official — consistent throughout)
 RUN addgroup -g 1000 lldap && adduser -D -H -u 1000 -G lldap -h /app lldap
