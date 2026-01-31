@@ -101,6 +101,10 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kdc.conf...");
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
+    // New: Generate kadm5.acl for admin permissions (required for kadmind)
+    println!("Generating /var/lib/krb5kdc/kadm5.acl...");
+    render_template("/app/kadm5.template.acl", "/var/lib/krb5kdc/kadm5.acl", &config, &domain)?;
+
     // One-time KDC database initialization
     let db_path = "/var/lib/krb5kdc/principal";
     if !Path::new(db_path).exists() {
