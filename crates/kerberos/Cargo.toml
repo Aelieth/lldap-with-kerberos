@@ -24,8 +24,8 @@ rand = "0.8.5"
 lazy_static = "1.4.0"
 
 [build-dependencies]
-bindgen = "0.69.4"  # Latest stable for good C header support
-pkg-config = "0.3.30"  # To locate krb5 libs/headers
+bindgen = { version = "0.69.4", features = ["runtime"] }
+pkg-config = "0.3.30"
 
 [[bin]]
 name = "kerberos_manager"

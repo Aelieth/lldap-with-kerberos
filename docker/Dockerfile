@@ -1,18 +1,31 @@
-# Use Alpine 3.21 for lightweight multi-arch (ARM64/x86_64) support
-FROM rust:alpine3.21 AS chef
+# Use Fedora minimal for builder (glibc + latest Cargo via rustup + reliable bindgen)
+FROM registry.fedoraproject.org/fedora-minimal:latest AS chef
 
-# Install build deps
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig make perl curl gzip krb5-dev
+# Install build deps (Fedora packages)
+RUN microdnf install -y --assumeyes \
+    shadow-utils pkgconf openssl-devel gcc make perl curl gzip krb5-devel clang llvm \
+    && microdnf clean all
 
-# Create lldap user early (UID/GID 1000 to match official — consistent throughout)
-RUN addgroup -g 1000 lldap && adduser -D -H -u 1000 -G lldap -h /app lldap
+# Create /app directory and lldap user (home = /app)
+RUN mkdir -p /app && \
+    groupadd -g 1000 lldap && \
+    useradd -u 1000 -g lldap -d /app -s /bin/bash lldap && \
+    chown -R lldap:lldap /app
 
-# Switch to lldap for building (no separate 'app' user needed)
 USER lldap
 WORKDIR /app
 
-# Install cargo-chef and wasm-pack
-RUN RUSTFLAGS=-Ctarget-feature=-crt-static cargo install wasm-pack cargo-chef && rustup target add wasm32-unknown-unknown
+# Install latest Rust/Cargo via rustup as lldap user
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+# Add Cargo to PATH
+ENV PATH="/app/.cargo/bin:${PATH}"
+
+# Verify Rust/Cargo
+RUN rustc --version && cargo --version
+
+# Install cargo-chef for dependency caching, add wasm target
+RUN cargo install cargo-chef && rustup target add wasm32-unknown-unknown
 
 FROM chef AS planner
 COPY --chown=lldap:lldap . .
@@ -24,7 +37,9 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY --chown=lldap:lldap . .
 RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password -p lldap-kerberos
-RUN cd app && ./build.sh   # Release frontend build
+RUN cargo install wasm-pack  # Ensure wasm-pack available for frontend build
+RUN cd app && wasm-pack build --target web --release
+RUN cd app && gzip -9 -k -f pkg/lldap_app_bg.wasm
 
 # Final runtime image
 FROM alpine:3.21
