@@ -178,10 +178,6 @@ impl Kadm5Handle {
         let client_cstr = CString::new("admin")?;
         let pass_cstr = CString::new(admin_pass)?;
 
-        // Hardcoded known constants
-        const KADM5_STRUCT_VERSION_VAL: u32 = 0x12345678;
-        const KADM5_API_VERSION_4: u32 = 4;
-
         let ret = unsafe {
             kadm5_init_with_password(
                 context,
@@ -189,8 +185,8 @@ impl Kadm5Handle {
                                      pass_cstr.as_ptr() as *mut i8,
                                      ptr::null_mut(),          // service_name null → defaults to "kadmin/admin"
                                      ptr::null_mut(),          // params null → use defaults (local kadmind)
-            KADM5_STRUCT_VERSION_VAL,
-            KADM5_API_VERSION_4,
+            KADM5_STRUCT_VERSION,     // From bindings—current version
+            KADM5_API_VERSION_4,      // From bindings—current API
             ptr::null_mut(),          // db_args null → default DB
                                      &mut handle,
             )
