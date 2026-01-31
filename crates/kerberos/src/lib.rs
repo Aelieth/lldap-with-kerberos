@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::process::{Command, Stdio};
-use tracing::{debug, info, warn};
-
+use tracing::{info, warn};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use lazy_static::lazy_static;
@@ -85,57 +84,30 @@ F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
     let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
+    let admin_principal = format!("admin@{}", realm);
 
     info!("Kerberos sync triggered for principal: {}", principal);
 
-    run_kadmin_interactive(|stdin, reader| {
-        // Check if exists with getprinc
-        writeln!(stdin, "getprinc {}", principal)?;
-        stdin.flush()?;
+    let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal)
+    .context(format!("Failed to init keytab handle for sync of {}", principal))?;
 
-        let mut exists = false;
-        let mut line = String::new();
-        while reader.read_line(&mut line)? > 0 {
-            if line.contains("Principal does not exist") {
-                break;
-            }
-            if line.starts_with("Principal: ") {
-                exists = true;
-                break;
-            }
-            line.clear();
+    match handle.chpass_principal(username, plain_password, &realm) {
+        Ok(()) => {
+            info!("Kerberos password updated for {}", principal);
+            Ok(())
         }
-
-        // cpw or addprinc
-        if exists {
-            writeln!(stdin, "cpw {}", principal)?;
-        } else {
-            writeln!(stdin, "addprinc -e aes256-cts-hmac-sha1-96:normal {}", principal)?;
-        }
-        stdin.flush()?;
-
-        // Send pw twice (prompt + confirm)
-        for _ in 0..2 {
-            line.clear();
-            reader.read_line(&mut line)?;
-            debug!("kadmin prompt: {}", line.trim());
-            if line.to_lowercase().contains("password") {
-                writeln!(stdin, "{}", plain_password)?;
-                stdin.flush()?;
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
+                handle.create_principal(username, plain_password, &realm)
+                .context(format!("Failed to create principal {} after chpass fallback", principal))?;
+                info!("Kerberos principal created for {}", principal);
+                Ok(())
+            } else {
+                Err(e.context(format!("Unexpected chpass error for {}: {}", principal, err_str)))
             }
         }
-
-        // Check result
-        line.clear();
-        reader.read_line(&mut line)?;
-        debug!("kadmin result: {}", line.trim());
-        if line.contains("changed") || line.contains("created") {
-            info!("Synced principal: {}", principal);
-        } else {
-            warn!("Sync issue: {}", line.trim());
-        }
-        Ok(())
-    })
+    }
 }
 
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
@@ -157,15 +129,14 @@ pub fn get_public_key_der_base64() -> String {
     der.map(|d| STANDARD.encode(d.as_bytes())).unwrap_or_default()
 }
 
-// Safe direct FFI wrapper for Kadm5 admin operations (local, password-auth)
 pub struct Kadm5Handle {
-    handle: *mut c_void,
-    context: krb5_context,
+    pub handle: *mut c_void,
+    pub context: krb5_context,
 }
 
 impl Kadm5Handle {
-    /// Initialize as "admin" principal with master password (local defaults)
-    pub fn init_with_password(admin_pass: &str) -> Result<Self> {
+    pub fn init_with_keytab(keytab_path: &str, client_principal: &str) -> Result<Self> {
+        let mut handle: *mut c_void = ptr::null_mut();
         let mut context: krb5_context = ptr::null_mut();
 
         let ret = unsafe { krb5_init_context(&mut context) };
@@ -173,22 +144,20 @@ impl Kadm5Handle {
             return Err(anyhow::anyhow!("krb5_init_context failed with code {}", ret));
         }
 
-        let mut handle: *mut c_void = ptr::null_mut();
-
-        let client_cstr = CString::new("admin")?;
-        let pass_cstr = CString::new(admin_pass)?;
+        let client_cstr = CString::new(client_principal)?;
+        let keytab_cstr = CString::new(keytab_path)?;
 
         let ret = unsafe {
-            kadm5_init_with_password(
+            kadm5_init_with_skey(
                 context,
                 client_cstr.as_ptr() as *mut i8,
-                                     pass_cstr.as_ptr() as *mut i8,
-                                     ptr::null_mut(),          // service_name null → defaults to "kadmin/admin"
-                                     ptr::null_mut(),          // params null → use defaults (local kadmind)
-            KADM5_STRUCT_VERSION,     // From bindings—current version
-            KADM5_API_VERSION_4,      // From bindings—current API
-            ptr::null_mut(),          // db_args null → default DB
-                                     &mut handle,
+                                 keytab_cstr.as_ptr() as *mut i8,
+                                 ptr::null_mut(),  // params
+                                 ptr::null_mut(),  // unknown (likely reserved/flags, safe null)
+            1,                // struct_version
+            4,                // api_version
+            ptr::null_mut(),  // db_args
+                                 &mut handle as *mut *mut c_void,
             )
         };
 
@@ -203,7 +172,7 @@ impl Kadm5Handle {
                 s
             };
             unsafe { krb5_free_context(context) };
-            return Err(anyhow::anyhow!("kadm5_init_with_password failed: {}", err_msg));
+            return Err(anyhow::anyhow!("kadm5_init_with_skey failed: {}", err_msg));
         }
 
         Ok(Kadm5Handle { handle, context })
@@ -298,7 +267,7 @@ impl Kadm5Handle {
 impl Drop for Kadm5Handle {
     fn drop(&mut self) {
         unsafe {
-            let _ = kadm5_destroy(self.handle);
+            let _ = kadm5_destroy(self.handle as *mut c_void);
             let _ = krb5_free_context(self.context);
         }
     }

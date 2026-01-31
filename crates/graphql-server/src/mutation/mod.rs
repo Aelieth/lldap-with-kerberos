@@ -615,14 +615,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let plain_password = decrypt_password(&encrypted_password)
         .map_err(|e| FieldError::new(
             "Kerberos password decryption failed",
-            graphql_value!({ "details": (e.to_string()) })
+            graphql_value!({ "details": e.to_string() })
         ))?;
 
         sync_kerberos_principal(&user_id, &plain_password)
         .map_err(|e| FieldError::new(
             "Kerberos sync failed",
-            graphql_value!({ "details": (e.to_string()) })
+            graphql_value!({ "details": e.to_string() })
         ))?;
+
+        info!("Kerberos sync succeeded for user {}", user_id);
 
         Ok(true)
     }
