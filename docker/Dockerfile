@@ -1,4 +1,4 @@
-# Use Fedora minimal for builder (glibc + latest Cargo via rustup + reliable bindgen)
+# Use Fedora minimal for builder and runtime (glibc consistency + latest Cargo + reliable bindgen)
 FROM registry.fedoraproject.org/fedora-minimal:latest AS chef
 
 # Install build deps (Fedora packages)
@@ -41,30 +41,33 @@ RUN cargo install wasm-pack  # Ensure wasm-pack available for frontend build
 RUN cd app && wasm-pack build --target web --release
 RUN cd app && gzip -9 -k -f pkg/lldap_app_bg.wasm
 
-# Final runtime image
-FROM alpine:3.21
+# Final runtime image (Fedora-minimal for glibc consistency)
+FROM registry.fedoraproject.org/fedora-minimal:latest
 
-# Gosu for privilege drop (update to latest stable — 1.17 as of 2024/2025)
+# Gosu for privilege drop (wget pre-built binary like Alpine—reliable)
 ENV GOSU_VERSION=1.17
-RUN apk add --no-cache --virtual .gosu-deps ca-certificates dpkg gnupg \
-    && dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
-    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}" \
-    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}.asc" \
-    && export GNUPGHOME="$(mktemp -d)" \
-    && gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
-    && gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
-    && gpgconf --kill all \
-    && rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc \
-    && apk del --no-network .gosu-deps \
-    && chmod +x /usr/local/bin/gosu \
-    && gosu nobody true
+RUN microdnf install -y --assumeyes ca-certificates dpkg gnupg wget && \
+    dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" && \
+    wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}" && \
+    wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}.asc" && \
+    export GNUPGHOME="$(mktemp -d)" && \
+    gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 && \
+    gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu && \
+    gpgconf --kill all && \
+    rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc && \
+    chmod +x /usr/local/bin/gosu && \
+    gosu nobody true && \
+    microdnf clean all
 
-# Recreate lldap user (in case)
-RUN addgroup -g 1000 lldap && adduser -D -H -u 1000 -G lldap lldap
+# Recreate lldap user
+RUN groupadd -g 1000 lldap && \
+    useradd -u 1000 -g lldap -d /app -s /bin/bash lldap && \
+    chown -R lldap:lldap /app
 
-# Runtime deps (Kerberos + LLDAP needs)
-RUN apk add --no-cache tzdata bash openssl cyrus-sasl cyrus-sasl-gssapiv2 krb5 krb5-server krb5-libs openldap-clients procps ca-certificates sudo \
-    && update-ca-certificates
+# Runtime deps (Kerberos + LLDAP needs—Fedora packages)
+RUN microdnf install -y --assumeyes \
+    tzdata bash openssl cyrus-sasl-gssapi krb5-server krb5-libs openldap-clients procps-ng ca-certificates sudo \
+    && microdnf clean all
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
 RUN mkdir -p /data/cert /var/lib/krb5kdc && chown lldap:lldap /data/ /data/cert /var/lib/krb5kdc
