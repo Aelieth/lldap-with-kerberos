@@ -26,7 +26,6 @@ use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
-use gloo_console::log;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
@@ -169,44 +168,38 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     bail!("Check the form for errors");
                 }
 
-                // Encrypt password for Kerberos sync—REQUIRED if Kerberos enabled
-                self.encrypted_password = None;  // Reset in case of re-submit
+                self.encrypted_password = None;
                 let model = self.form.model();
                 let new_password = model.password.clone();
 
                 if let Some(info) = &self.kerberos_info {
-                    if let Some(ref pub_key) = info.public_key_der_base64 {
-                        if !pub_key.is_empty() {
-                            match encrypt_password(pub_key, &new_password) {
-                                Ok(enc) => {
-                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
-                                    self.encrypted_password = Some(enc);
-                                }
-                                Err(e) => {
-                                    log!("Encryption failed: {}", e.to_string());
-                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}", e));
-                                    return Ok(true);  // Block + show error banner
-                                }
+                    if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
+                        match encrypt_password(pub_key_der_base64, &new_password) {
+                            Ok(encrypted) => {
+                                self.encrypted_password = Some(encrypted);
                             }
-                        } else {
-                            self.common.error = Some(anyhow::anyhow!("Kerberos public key empty—sync skipped (backend startup issue?). Contact admin."));
-                            return Ok(true);  // Block creation
+                            Err(e) => {
+                                bail!("Failed to encrypt password for Kerberos sync: {}", e);
+                            }
                         }
                     } else {
-                        self.common.error = Some(anyhow::anyhow!("No Kerberos public key available—sync skipped (backend update needed). Contact admin."));
-                        return Ok(true);  // Block creation
+                        bail!("Kerberos enabled but no public key available—check backend startup/logs and restart container if needed");
                     }
                 } else {
-                    // No kerberos_info loaded yet—could be loading, but for safety block if not ready
-                    self.common.error = Some(anyhow::anyhow!("Kerberos info not loaded yet—try again."));
-                    return Ok(true);
+                    bail!("Kerberos info not loaded—try reloading or restart container");
                 }
 
-                // Safety net: Require encrypted password (always-on)
+                // Strict require encrypted (blocks if missing/fail)
                 if self.encrypted_password.is_none() {
-                    self.common.error = Some(anyhow::anyhow!("Kerberos password encryption failed. User creation aborted."));
-                    return Ok(true);
+                    bail!("Kerberos password encryption failed—user creation aborted (fix backend/restart container)");
                 }
+
+                let _all_values = read_all_form_attributes(
+                    self.attributes_schema.iter().flatten(),
+                                                           &self.form_ref,
+                                                           IsAdmin(true),
+                                                           EmailIsRequired(true),
+                )?;
 
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),

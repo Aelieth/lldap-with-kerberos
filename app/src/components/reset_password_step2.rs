@@ -113,48 +113,43 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
 
                 self.opaque_data = Some(registration_start_request.state);
 
-                // Kerberos encryption — REQUIRED (always-on, blocks on failure for sync guarantee)
-                self.encrypted_password = None;
-                let new_password = self.form.model().password.clone();
-
-                if let Some(info) = &self.kerberos_info {
-                    if let Some(ref pub_key) = info.public_key_der_base64 {
-                        if !pub_key.is_empty() {
-                            match encrypt_password(pub_key, &new_password) {
-                                Ok(enc) => {
-                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
-                                    self.encrypted_password = Some(enc);
-                                }
-                                Err(e) => {
-                                    log!("Encryption failed: {}", e.to_string());
-                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}", e));
-                                    return Ok(true);  // Block + show error
-                                }
-                            }
-                        } else {
-                            self.common.error = Some(anyhow::anyhow!("Kerberos public key empty—sync skipped (backend startup issue?). Contact admin."));
-                            return Ok(true);  // Block change
-                        }
-                    } else {
-                        self.common.error = Some(anyhow::anyhow!("No Kerberos public key available—sync skipped (backend update needed). Contact admin."));
-                        return Ok(true);  // Block change
-                    }
-                } else {
-                    self.common.error = Some(anyhow::anyhow!("Kerberos key info not loaded—try again."));
-                    return Ok(true);
-                }
-
-                // Safety net: Require encrypted password (always-on)
-                if self.encrypted_password.is_none() {
-                    self.common.error = Some(anyhow::anyhow!("Kerberos encryption failed. Password change aborted."));
-                    return Ok(true);
-                }
-
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
                                          Msg::RegistrationStartResponse,
                 );
+
+                // Kerberos encryption + sync (fire-and-forget)
+                self.encrypted_password = None;
+                let plain_password = self.form.model().password.clone();
+
+                if let Some(info) = &self.kerberos_info {
+                    if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
+                        match encrypt_password(pub_key_der_base64, &plain_password) {
+                            Ok(encrypted) => {
+                                self.encrypted_password = Some(encrypted);
+                            }
+                            Err(e) => {
+                                bail!("Kerberos password encryption failed: {}", e);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(encrypted) = &self.encrypted_password {
+                    let variables = sync_kerberos_password::Variables {
+                        user_id: self.username.as_ref().unwrap().clone(),
+                        encrypted_password: encrypted.clone(),
+                    };
+
+                    self.common.call_graphql::<SyncKerberosPassword, _>(
+                        ctx,
+                        variables,
+                        Msg::SyncKerberosResponse,
+                        "Error syncing Kerberos password",
+                    );
+                }
+
                 Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {

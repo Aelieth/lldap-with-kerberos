@@ -18,7 +18,6 @@ use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
-use gloo_console::log;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -172,55 +171,83 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                 let mut rng = rand::rngs::OsRng;
                 let new_password = self.form.model().password.clone();
                 let registration_start_request =
-                opaque::client::registration::start_registration(new_password.as_bytes(), &mut rng)?;
+                opaque::client::registration::start_registration(new_password.as_bytes(), &mut rng)
+                .context("Could not initiate registration")?;
+
                 let req = registration::ClientRegistrationStartRequest {
                     username: ctx.props().username.clone().into(),
                     registration_start_request: registration_start_request.message,
                 };
+
                 self.opaque_data = OpaqueData::Registration(registration_start_request.state);
-
-                // Kerberos encryption — REQUIRED (always-on, blocks on failure for sync guarantee)
-                self.encrypted_password = None;
-                let new_password = self.form.model().password.clone();
-
-                if let Some(info) = &self.kerberos_info {
-                    if let Some(ref pub_key) = info.public_key_der_base64 {
-                        if !pub_key.is_empty() {
-                            match encrypt_password(pub_key, &new_password) {
-                                Ok(enc) => {
-                                    log!("Encrypted pw for Kerberos sync (length): {}", enc.len());
-                                    self.encrypted_password = Some(enc);
-                                }
-                                Err(e) => {
-                                    log!("Encryption failed: {}", e.to_string());
-                                    self.common.error = Some(anyhow::anyhow!("Failed to encrypt password for Kerberos sync: {}", e));
-                                    return Ok(true);  // Block + show error
-                                }
-                            }
-                        } else {
-                            self.common.error = Some(anyhow::anyhow!("Kerberos public key empty—sync skipped (backend startup issue?). Contact admin."));
-                            return Ok(true);  // Block change
-                        }
-                    } else {
-                        self.common.error = Some(anyhow::anyhow!("No Kerberos public key available—sync skipped (backend update needed). Contact admin."));
-                        return Ok(true);  // Block change
-                    }
-                } else {
-                    self.common.error = Some(anyhow::anyhow!("Kerberos key info not loaded—try again."));
-                    return Ok(true);
-                }
-
-                // Safety net: Require encrypted password (always-on)
-                if self.encrypted_password.is_none() {
-                    self.common.error = Some(anyhow::anyhow!("Kerberos encryption failed. Password change aborted."));
-                    return Ok(true);
-                }
 
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
                                          Msg::RegistrationStartResponse,
                 );
+
+                // Strict Kerberos sync prep (block on any fail)
+                self.encrypted_password = None;
+                let plain_password = self.form.model().password.clone();
+
+                if let Some(info) = &self.kerberos_info {
+                    if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
+                        match encrypt_password(pub_key_der_base64, &plain_password) {
+                            Ok(encrypted) => {
+                                self.encrypted_password = Some(encrypted);
+                            }
+                            Err(e) => {
+                                bail!("Failed to encrypt password for Kerberos sync: {}", e);
+                            }
+                        }
+                    } else {
+                        bail!("Kerberos enabled but no public key available—check backend startup/logs and restart container if needed");
+                    }
+                } else {
+                    bail!("Kerberos info not loaded—try reloading or restart container");
+                }
+
+                // Require encrypted for proceed (strict)
+                if self.encrypted_password.is_none() {
+                    bail!("Kerberos password encryption failed—password change aborted (fix backend/restart container)");
+                }
+
+                // Proceed with OPAQUE registration (only if Kerberos prep succeeded)
+                let mut rng = rand::rngs::OsRng;
+                let new_password = self.form.model().password.clone();
+                let registration_start_request =
+                opaque::client::registration::start_registration(new_password.as_bytes(), &mut rng)
+                .context("Could not initiate registration")?;
+
+                let req = registration::ClientRegistrationStartRequest {
+                    username: ctx.props().username.clone().into(),
+                    registration_start_request: registration_start_request.message,
+                };
+
+                self.opaque_data = OpaqueData::Registration(registration_start_request.state);
+
+                self.common.call_backend(
+                    ctx,
+                    HostService::register_start(req),
+                                         Msg::RegistrationStartResponse,
+                );
+
+                // Kerberos sync (fire-and-forget on registration success)
+                if let Some(encrypted) = &self.encrypted_password {
+                    let variables = sync_kerberos_password::Variables {
+                        user_id: ctx.props().username.clone(),
+                        encrypted_password: encrypted.clone(),
+                    };
+
+                    self.common.call_graphql::<SyncKerberosPassword, _>(
+                        ctx,
+                        variables,
+                        Msg::SyncKerberosResponse,
+                        "Error syncing Kerberos password",
+                    );
+                }
+
                 Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {

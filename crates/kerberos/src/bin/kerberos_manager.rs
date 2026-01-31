@@ -4,14 +4,12 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use reqwest::blocking::Client;
 use serde_json::json;
-use lldap_kerberos::Kadm5Handle;
 use std::thread;
 use std::time::Duration;
 use std::net::TcpStream;
-
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -24,6 +22,27 @@ struct KerberosConfig {
     renew_lifetime: String,
     forwardable: bool,
         rdns: bool,
+}
+
+/// Run a single kadmin.local query non-interactively (with explicit krb5.conf)
+fn run_kadmin_local(query: &str) -> Result<Output> {
+    println!("Running kadmin.local -q \"{}\"", query);
+
+    let output = Command::new("/usr/sbin/kadmin.local")
+    .env("KRB5_CONFIG", "/etc/krb5.conf")
+    .arg("-q")
+    .arg(query)
+    .output()
+    .context("Failed to spawn kadmin.local")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("kadmin.local stdout: {}", stdout.trim());
+    if !stderr.is_empty() {
+        println!("kadmin.local stderr: {}", stderr.trim());
+    }
+
+    Ok(output)
 }
 
 fn main() -> Result<()> {
@@ -101,10 +120,6 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kdc.conf...");
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
-    // New: Generate kadm5.acl for admin permissions (required for kadmind)
-    println!("Generating /var/lib/krb5kdc/kadm5.acl...");
-    render_template("/app/kadm5.template.acl", "/var/lib/krb5kdc/kadm5.acl", &config, &domain)?;
-
     // One-time KDC database initialization
     let db_path = "/var/lib/krb5kdc/principal";
     if !Path::new(db_path).exists() {
@@ -129,58 +144,96 @@ fn main() -> Result<()> {
         println!("Kerberos database already exists—skipping init.");
     }
 
-    // Start KDC services (foreground, monitor)
-    println!("Starting krb5kdc and kadmind...");
+    // Bootstrap admin principal and keytab using kadmin.local (before daemons start)
+    let admin_principal = format!("admin@{}", config.realm_name);
+    let dm_pass = &config.dm_pass;
 
+    // Check if principal exists
+    let get_query = format!("getprinc {}", admin_principal);
+    let get_output = run_kadmin_local(&get_query)?;
+    let get_stderr = String::from_utf8_lossy(&get_output.stderr);
+
+    if get_stderr.contains("Principal does not exist") {
+        let add_query = format!("addprinc -pw {} {}", dm_pass, admin_principal);
+        let add_output = run_kadmin_local(&add_query)?;
+        if !add_output.status.success() {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            return Err(anyhow::anyhow!("Failed to create bootstrap admin principal: {}", stderr));
+        }
+        println!("Created new bootstrap admin principal {}", admin_principal);
+    } else {
+        let cpw_query = format!("cpw -pw {} {}", dm_pass, admin_principal);
+        let cpw_output = run_kadmin_local(&cpw_query)?;
+        if !cpw_output.status.success() {
+            let stderr = String::from_utf8_lossy(&cpw_output.stderr);
+            return Err(anyhow::anyhow!("Failed to update bootstrap admin principal: {}", stderr));
+        }
+        println!("Updated bootstrap admin principal {}", admin_principal);
+    }
+
+    // Create keytab
+    let keytab_path = "/data/kadm5.keytab";
+    let ktadd_query = format!("ktadd -norandkey -k {} {}", keytab_path, admin_principal);
+    let ktadd_output = run_kadmin_local(&ktadd_query)?;
+    if !ktadd_output.status.success() {
+        let stderr = String::from_utf8_lossy(&ktadd_output.stderr);
+        println!("Warning: Keytab creation failed (non-fatal): {}", stderr.trim());
+    } else {
+        Command::new("chmod")
+        .arg("600")
+        .arg(keytab_path)
+        .output()
+        .context("Failed to secure keytab")?;
+        println!("Keytab created and secured at {}", keytab_path);
+    }
+
+    // Start daemons (foreground with piped logs)
+    println!("Starting krb5kdc...");
     let mut kdc_child = Command::new("/usr/sbin/krb5kdc")
-    .arg("-P")
-    .arg("/var/run/krb5kdc.pid")
+    .arg("-n")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
     .spawn()
     .context("Failed to start krb5kdc")?;
 
+    println!("Starting kadmind...");
     let mut kadmind_child = Command::new("/usr/sbin/kadmind")
-    .arg("-P")
-    .arg("/var/run/kadmind.pid")
+    .arg("-nofork")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
     .spawn()
     .context("Failed to start kadmind")?;
 
-    // Quick wait for kdc port 88 (simple ping—ensures binding before FFI tests)
-    println!("Waiting for krb5kdc port 88 to be ready...");
+    // TCP readiness waits
     let mut attempts = 0;
+    println!("Waiting for krb5kdc port 88...");
     loop {
         attempts += 1;
-        if TcpStream::connect("localhost:88").is_ok() {
-            println!("krb5kdc port 88 ready after {} attempt(s)!", attempts);
+        if TcpStream::connect(("localhost", 88)).is_ok() {
+            println!("krb5kdc ready after {} attempt(s)", attempts);
             break;
-        } else if attempts >= 30 {
-            return Err(anyhow::anyhow!("krb5kdc port 88 timeout after 30 attempts"));
         }
-        println!("krb5kdc port 88 not ready yet (attempt {}/30)...", attempts);
-        thread::sleep(Duration::from_millis(500));  // 0.5s for faster check
+        if attempts >= 30 {
+            return Err(anyhow::anyhow!("krb5kdc port 88 timeout"));
+        }
+        thread::sleep(Duration::from_millis(500));
     }
 
-    // Wait for kadmind to be ready (test with FFI init—direct connection check)
-    println!("Waiting for kadmind to become ready...");
-    let mut attempts = 0;
+    attempts = 0;
+    println!("Waiting for kadmind port 749...");
     loop {
         attempts += 1;
-        match Kadm5Handle::init_with_password(&config.master_pass) {
-            Ok(handle) => {
-                drop(handle);  // Clean up test handle
-                println!("kadmind is ready after {} attempt(s)!", attempts);
-                break;
-            }
-            Err(e) => {
-                if attempts >= 30 {
-                    return Err(anyhow::anyhow!("kadmind readiness timeout after 30 attempts: {}", e));
-                }
-                println!("kadmind not ready yet (attempt {}/30): {}", attempts, e);
-                thread::sleep(Duration::from_secs(1));
-            }
+        if TcpStream::connect(("localhost", 749)).is_ok() {
+            println!("kadmind ready after {} attempt(s)", attempts);
+            break;
         }
+        if attempts >= 30 {
+            return Err(anyhow::anyhow!("kadmind port 749 timeout"));
+        }
+        thread::sleep(Duration::from_millis(500));
     }
 
-    println!("Kerberos services running. Blocking forever...");
+    println!("Kerberos services fully ready!");
 
     // One-time schema extension for POSIX/Kerberos compatibility
     let schema_flag = "/var/lib/krb5kdc/schema_extended.flag";
@@ -256,60 +309,7 @@ fn main() -> Result<()> {
         println!("Schema already extended—skipping.");
     }
 
-    println!("Syncing initial admin user to Kerberos using direct FFI...");
-    let admin_principal = format!("admin@{}", config.realm_name);  // Kept for keytab later if needed
-
-    let handle = Kadm5Handle::init_with_password(&config.master_pass)
-    .context("Failed to initialize FFI handle for initial admin sync")?;
-
-    // Try change password first (common if principal already exists from previous run)
-    match handle.chpass_principal("admin", &config.dm_pass, &config.realm_name) {
-        Ok(()) => {
-            println!("Updated existing admin principal password for LLDAP sync.");
-        }
-        Err(e) => {
-            // Check for "principal does not exist" type error—fallback to create
-            let err_str = e.to_string();
-            if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
-                handle.create_principal("admin", &config.dm_pass, &config.realm_name)
-                .context("Failed to create new admin principal via FFI")?;
-                println!("Created new admin principal for LLDAP sync.");
-            } else {
-                return Err(e.context("Unexpected error during initial admin password change"));
-            }
-        }
-    }
-
-    // Create persistent keytab for runtime FFI auth (no master_pass needed later, secure keytab-based)
-    println!("Creating persistent keytab at /data/kadm5.keytab...");
-    let keytab_path = "/data/kadm5.keytab";
-
-    let ktadd_cmd = format!("ktadd -norandkey -k {} {}", keytab_path, admin_principal);
-
-    let ktadd_output = Command::new("sudo")
-    .arg("/usr/sbin/kadmin.local")
-    .arg("-q")
-    .arg(&ktadd_cmd)
-    .output()
-    .context("Failed to run ktadd for keytab creation")?;
-
-    if !ktadd_output.status.success() {
-        let ktadd_stderr = String::from_utf8_lossy(&ktadd_output.stderr);
-        println!("Warning: Keytab creation failed (non-fatal—runtime sync may need manual retry): {}", ktadd_stderr.trim());
-    } else {
-        let ktadd_stdout = String::from_utf8_lossy(&ktadd_output.stdout);
-        println!("DEBUG: ktadd stdout: '{}'", ktadd_stdout.trim());
-
-        // Secure the keytab file
-        Command::new("chmod")
-        .arg("600")
-        .arg(keytab_path)
-        .output()
-        .context("Failed to secure keytab permissions")?;
-        println!("Keytab successfully created and secured at {}", keytab_path);
-    }
-
-    // Wait for either to exit (error)
+    // Block on children
     let kdc_status = kdc_child.wait().context("krb5kdc exited unexpectedly")?;
     let kadmind_status = kadmind_child.wait().context("kadmind exited unexpectedly")?;
 
