@@ -12,7 +12,7 @@ export REALM_NAME
 echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
 
 mkdir -p /data
-chown $UID:$GID /data
+chown lldap:lldap /data
 
 # Start LLDAP
 echo "Starting LLDAP..."
