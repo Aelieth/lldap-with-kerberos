@@ -5,7 +5,7 @@ pub mod inputs;
 pub use inputs::{
     AttributeValue, CreateGroupInput, CreateUserInput, Success, UpdateGroupInput, UpdateUserInput,
 };
-
+use tracing::{info, debug};
 use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
@@ -26,7 +26,7 @@ use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
-use tracing::debug;
+
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
@@ -615,13 +615,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let plain_password = decrypt_password(&encrypted_password)
         .map_err(|e| FieldError::new(
             "Kerberos password decryption failed",
-            graphql_value!({ "details": e.to_string() })
+            graphql_value!({ "details": (e.to_string()) })
         ))?;
 
         sync_kerberos_principal(&user_id, &plain_password)
         .map_err(|e| FieldError::new(
             "Kerberos sync failed",
-            graphql_value!({ "details": e.to_string() })
+            graphql_value!({ "details": (e.to_string()) })
         ))?;
 
         info!("Kerberos sync succeeded for user {}", user_id);
