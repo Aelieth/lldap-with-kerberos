@@ -66,7 +66,7 @@ RUN groupadd -g 1000 lldap && \
 
 # Runtime deps (Kerberos + LLDAP needs—Fedora packages)
 RUN microdnf install -y --assumeyes \
-    tzdata bash openssl cyrus-sasl-gssapi krb5-server krb5-libs openldap-clients procps-ng ca-certificates sudo \
+    tzdata bash openssl cyrus-sasl-gssapi krb5-server krb5-libs krb5-workstation openldap-clients procps-ng ca-certificates sudo \
     && microdnf clean all
 
 # Pre-create /data with correct ownership (volume will override, but safe start)

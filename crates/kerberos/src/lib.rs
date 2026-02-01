@@ -84,11 +84,11 @@ F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
     let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
     let principal = format!("{}@{}", username, realm);
-    let admin_principal = format!("admin@{}", realm);
+    let admin_principal = format!("admin/admin@{}", realm);  // Change to "admin/admin/admin@{}" if manual test shows instance needed
 
     info!("Kerberos sync triggered for principal: {}", principal);
 
-    let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal)
+    let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal, &realm)
     .context(format!("Failed to init keytab handle for sync of {}", principal))?;
 
     match handle.chpass_principal(username, plain_password, &realm) {
@@ -98,13 +98,20 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
         }
         Err(e) => {
             let err_str = e.to_string();
+            warn!("chpass failed for {}: {}", principal, err_str);
             if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
-                handle.create_principal(username, plain_password, &realm)
-                .context(format!("Failed to create principal {} after chpass fallback", principal))?;
-                info!("Kerberos principal created for {}", principal);
-                Ok(())
+                match handle.create_principal(username, plain_password, &realm) {
+                    Ok(()) => {
+                        info!("Kerberos principal created for {}", principal);
+                        Ok(())
+                    }
+                    Err(create_e) => {
+                        warn!("create fallback failed for {}: {}", principal, create_e);
+                        Err(create_e)
+                    }
+                }
             } else {
-                Err(e.context(format!("Unexpected chpass error for {}: {}", principal, err_str)))
+                Err(e)
             }
         }
     }
@@ -135,7 +142,7 @@ pub struct Kadm5Handle {
 }
 
 impl Kadm5Handle {
-    pub fn init_with_keytab(keytab_path: &str, client_principal: &str) -> Result<Self> {
+    pub fn init_with_keytab(keytab_path: &str, client_principal: &str, realm: &str) -> Result<Self> {
         let mut handle: *mut c_void = ptr::null_mut();
         let mut context: krb5_context = ptr::null_mut();
 
@@ -146,16 +153,21 @@ impl Kadm5Handle {
 
         let client_cstr = CString::new(client_principal)?;
         let keytab_cstr = CString::new(keytab_path)?;
+        let realm_cstr = CString::new(realm)?;
+
+        let mut params: kadm5_config_params = unsafe { mem::zeroed() };
+        params.mask = KADM5_CONFIG_REALM as i64;  // i64 for Fedora bindings
+        params.realm = realm_cstr.as_ptr() as *mut i8;
 
         let ret = unsafe {
             kadm5_init_with_skey(
                 context,
                 client_cstr.as_ptr() as *mut i8,
                                  keytab_cstr.as_ptr() as *mut i8,
-                                 ptr::null_mut(),  // params
-                                 ptr::null_mut(),  // unknown (likely reserved/flags, safe null)
-            1,                // struct_version
-            4,                // api_version
+                                 ptr::null_mut(),  // service_name (null for default kadmin/admin)
+            &mut params,
+            1,  // struct_version
+            4,  // api_version
             ptr::null_mut(),  // db_args
                                  &mut handle as *mut *mut c_void,
             )

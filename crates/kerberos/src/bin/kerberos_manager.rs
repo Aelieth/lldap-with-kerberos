@@ -10,6 +10,7 @@ use serde_json::json;
 use std::thread;
 use std::time::Duration;
 use std::net::TcpStream;
+use std::io::{BufRead, BufReader};
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -120,6 +121,9 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kdc.conf...");
     render_template("/app/kdc.template.conf", "/var/lib/krb5kdc/kdc.conf", &config, &domain)?;
 
+    println!("Generating /var/lib/krb5kdc/kadm5.acl...");
+    render_template("/app/kadm5.template.acl", "/var/lib/krb5kdc/kadm5.acl", &config, &domain)?;
+
     // One-time KDC database initialization
     let db_path = "/var/lib/krb5kdc/principal";
     if !Path::new(db_path).exists() {
@@ -145,7 +149,7 @@ fn main() -> Result<()> {
     }
 
     // Bootstrap admin principal and keytab using kadmin.local (before daemons start)
-    let admin_principal = format!("admin@{}", config.realm_name);
+    let admin_principal = format!("admin/admin@{}", config.realm_name);
     let dm_pass = &config.dm_pass;
 
     // Check if principal exists
@@ -185,6 +189,11 @@ fn main() -> Result<()> {
         .output()
         .context("Failed to secure keytab")?;
         println!("Keytab created and secured at {}", keytab_path);
+        Command::new("chown")
+        .arg("lldap:lldap")
+        .arg(keytab_path)
+        .output()
+        .context("Failed to chown keytab to lldap")?;
     }
 
     // Start daemons (foreground with piped logs)
@@ -196,6 +205,20 @@ fn main() -> Result<()> {
     .spawn()
     .context("Failed to start krb5kdc")?;
 
+    println!("Generating /data/kadm5.acl...");
+    render_template("/app/kadm5.template.acl", "/data/kadm5.acl", &config, &domain)?;
+
+    Command::new("chmod")
+    .arg("644")
+    .arg("/data/kadm5.acl")
+    .output()
+    .context("Failed to chmod ACL")?;
+    Command::new("chown")
+    .arg("root:root")
+    .arg("/data/kadm5.acl")
+    .output()
+    .context("Failed to chown ACL to root")?;
+
     println!("Starting kadmind...");
     let mut kadmind_child = Command::new("/usr/sbin/kadmind")
     .arg("-nofork")
@@ -203,6 +226,18 @@ fn main() -> Result<()> {
     .stderr(Stdio::piped())
     .spawn()
     .context("Failed to start kadmind")?;
+
+    // Log stderr line by line (non-blocking, shows crash reason)
+    if let Some(stderr) = kadmind_child.stderr.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    println!("kadmind stderr: {}", line.trim());
+                }
+            }
+        });
+    }
 
     // TCP readiness waits
     let mut attempts = 0;

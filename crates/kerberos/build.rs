@@ -22,6 +22,8 @@ fn main() {
     .allowlist_var("KADM5_.*")
     .allowlist_function("krb5_.*")
     .allowlist_type("krb5_.*")
+    .allowlist_type("kadm5_config_params")
+    .allowlist_var("KADM5_CONFIG_.*")
     // Common bindgen noise fixes
     .blocklist_type("_Float64x")
     .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
