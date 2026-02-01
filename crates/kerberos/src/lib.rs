@@ -97,8 +97,8 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
             Ok(())
         }
         Err(e) => {
+            warn!("chpass failed for {}: {}", principal, e);
             let err_str = e.to_string();
-            warn!("chpass failed for {}: {}", principal, err_str);
             if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
                 match handle.create_principal(username, plain_password, &realm) {
                     Ok(()) => {
@@ -148,6 +148,7 @@ impl Kadm5Handle {
 
         let ret = unsafe { krb5_init_context(&mut context) };
         if ret != 0 {
+            warn!("krb5_init_context failed with code {}", ret);
             return Err(anyhow::anyhow!("krb5_init_context failed with code {}", ret));
         }
 
@@ -156,7 +157,7 @@ impl Kadm5Handle {
         let realm_cstr = CString::new(realm)?;
 
         let mut params: kadm5_config_params = unsafe { mem::zeroed() };
-        params.mask = KADM5_CONFIG_REALM as i64;  // i64 for Fedora bindings
+        params.mask = KADM5_CONFIG_REALM as i64;
         params.realm = realm_cstr.as_ptr() as *mut i8;
 
         let ret = unsafe {
@@ -164,11 +165,11 @@ impl Kadm5Handle {
                 context,
                 client_cstr.as_ptr() as *mut i8,
                                  keytab_cstr.as_ptr() as *mut i8,
-                                 ptr::null_mut(),  // service_name (null for default kadmin/admin)
-            &mut params,
-            1,  // struct_version
-            4,  // api_version
-            ptr::null_mut(),  // db_args
+                                 ptr::null_mut(),
+                                 &mut params,
+                                 1,
+                                 4,
+                                 ptr::null_mut(),
                                  &mut handle as *mut *mut c_void,
             )
         };
@@ -183,6 +184,7 @@ impl Kadm5Handle {
                 unsafe { krb5_free_error_message(context, msg_ptr) };
                 s
             };
+            warn!("kadm5_init_with_skey failed with code {}: {}", ret, err_msg);
             unsafe { krb5_free_context(context) };
             return Err(anyhow::anyhow!("kadm5_init_with_skey failed: {}", err_msg));
         }
