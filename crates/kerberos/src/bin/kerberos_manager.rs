@@ -111,6 +111,7 @@ fn main() -> Result<()> {
     // Create necessary directories
     fs::create_dir_all("/var/lib/krb5kdc").context("Failed to create /var/lib/krb5kdc")?;
     fs::create_dir_all("/var/log/krb5").context("Failed to create /var/log/krb5")?;
+    fs::create_dir_all("/var/kerberos/krb5kdc").context("Failed to create /var/kerberos/krb5kdc")?;
     fs::create_dir_all("/var/run").context("Failed to create /var/run")?;
     fs::create_dir_all("/tmp").context("Failed to create /tmp")?;
 
@@ -205,27 +206,33 @@ fn main() -> Result<()> {
     .spawn()
     .context("Failed to start krb5kdc")?;
 
-    println!("Generating /data/kadm5.acl...");
-    render_template("/app/kadm5.template.acl", "/data/kadm5.acl", &config, &domain)?;
+    println!("Generating /var/kerberos/krb5kdc/kadm5.acl...");
+    render_template("/app/kadm5.template.acl", "/var/kerberos/krb5kdc/kadm5.acl", &config, &domain)?;
 
     Command::new("chmod")
     .arg("644")
-    .arg("/data/kadm5.acl")
+    .arg("/var/kerberos/krb5kdc/kadm5.acl")
     .output()
     .context("Failed to chmod ACL")?;
     Command::new("chown")
     .arg("root:root")
-    .arg("/data/kadm5.acl")
+    .arg("/var/kerberos/krb5kdc/kadm5.acl")
     .output()
     .context("Failed to chown ACL to root")?;
 
-    println!("Starting kadmind...");
-    let mut kadmind_child = Command::new("/usr/sbin/kadmind")
+    println!("Starting kadmind with strace for deep debug...");
+    let mut kadmind_child = Command::new("strace")
+    .arg("-f")
+    .arg("-e")
+    .arg("trace=open,openat,read,access")
+    .arg("-o")
+    .arg("/tmp/kadmind.trace")
+    .arg("/usr/sbin/kadmind")
     .arg("-nofork")
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .spawn()
-    .context("Failed to start kadmind")?;
+    .context("Failed to start kadmind with strace")?;
 
     // Log stderr line by line (non-blocking, shows crash reason)
     if let Some(stderr) = kadmind_child.stderr.take() {
