@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use std::ffi::{CString, CStr};
-use std::os::raw::{c_void, c_long};
+use std::os::raw::{c_void, c_long, c_char};
 use std::mem;
 use std::{env, ptr};
 
@@ -81,41 +81,6 @@ F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout
     Ok(())
 }
 
-pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
-    let principal = format!("{}@{}", username, realm);
-    let admin_principal = format!("admin/admin@{}", realm);  // Change to "admin/admin/admin@{}" if manual test shows instance needed
-
-    info!("Kerberos sync triggered for principal: {}", principal);
-
-    let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal, &realm)
-    .context(format!("Failed to init keytab handle for sync of {}", principal))?;
-
-    match handle.chpass_principal(username, plain_password, &realm) {
-        Ok(()) => {
-            info!("Kerberos password updated for {}", principal);
-            Ok(())
-        }
-        Err(e) => {
-            warn!("chpass failed for {}: {}", principal, e);
-            let err_str = e.to_string();
-            if err_str.contains("Principal does not exist") || err_str.contains("No such principal") {
-                match handle.create_principal(username, plain_password, &realm) {
-                    Ok(()) => {
-                        info!("Kerberos principal created for {}", principal);
-                        Ok(())
-                    }
-                    Err(create_e) => {
-                        warn!("create fallback failed for {}: {}", principal, create_e);
-                        Err(create_e)
-                    }
-                }
-            } else {
-                Err(e)
-            }
-        }
-    }
-}
 
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
     let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
@@ -142,37 +107,57 @@ pub struct Kadm5Handle {
 }
 
 impl Kadm5Handle {
-    pub fn init_with_keytab(keytab_path: &str, client_principal: &str, realm: &str) -> Result<Self> {
-        let mut handle: *mut c_void = ptr::null_mut();
+    /// Initialize a Kadm5 handle using either a password (for first-time setup) or NULL password (uses default ccache for keytab auth later)
+    pub fn init_with_password_or_ccache(pass: Option<&str>, admin_principal: &str, realm: &str) -> Result<Self> {
         let mut context: krb5_context = ptr::null_mut();
-
         let ret = unsafe { krb5_init_context(&mut context) };
         if ret != 0 {
-            warn!("krb5_init_context failed with code {}", ret);
             return Err(anyhow::anyhow!("krb5_init_context failed with code {}", ret));
         }
 
-        let client_cstr = CString::new(client_principal)?;
-        let keytab_cstr = CString::new(keytab_path)?;
-        let realm_cstr = CString::new(realm)?;
+        let mut handle: *mut c_void = ptr::null_mut();
+
+        let client_name_cstr = CString::new(admin_principal).context("Invalid admin principal")?;
+        // NULL service name means default "kadmin/admin"
+        let service_name_ptr: *mut c_char = ptr::null_mut();
+
+        let realm_cstr = CString::new(realm).context("Invalid realm")?;
 
         let mut params: kadm5_config_params = unsafe { mem::zeroed() };
-        params.mask = KADM5_CONFIG_REALM as i64;
-        params.realm = realm_cstr.as_ptr() as *mut i8;
+        params.mask = KADM5_CONFIG_REALM as c_long;
+        params.realm = realm_cstr.into_raw() as *mut i8;
+
+        let pass_ptr = match pass {
+            Some(p) => CString::new(p)?.into_raw() as *mut i8,
+            None => ptr::null_mut(),
+        };
+
+        // Correct constants for modern MIT Kerberos
+        let struct_version: krb5_ui_4 = KADM5_STRUCT_VERSION;
+        let api_version: krb5_ui_4 = KADM5_API_VERSION_4;
+
+        // db_args = NULL (no extra database args)
+        let db_args_ptr: *mut *mut c_char = ptr::null_mut();
 
         let ret = unsafe {
-            kadm5_init_with_skey(
+            kadm5_init_with_password(
                 context,
-                client_cstr.as_ptr() as *mut i8,
-                                 keytab_cstr.as_ptr() as *mut i8,
-                                 ptr::null_mut(),
-                                 &mut params,
-                                 1,
-                                 4,
-                                 ptr::null_mut(),
-                                 &mut handle as *mut *mut c_void,
+                client_name_cstr.as_ptr() as *mut c_char,  // cast to *mut
+                                     pass_ptr,
+                                     service_name_ptr,                          // already *mut null
+                                     &mut params,
+                                     struct_version,
+                                     api_version,
+                                     db_args_ptr,
+                                     &mut handle,
             )
         };
+
+        // Clean up owned raw pointers
+        if pass.is_some() {
+            unsafe { let _ = CString::from_raw(pass_ptr); }
+        }
+        unsafe { let _ = CString::from_raw(params.realm); }
 
         if ret != 0 {
             let code = ret as i32;
@@ -184,15 +169,15 @@ impl Kadm5Handle {
                 unsafe { krb5_free_error_message(context, msg_ptr) };
                 s
             };
-            warn!("kadm5_init_with_skey failed with code {}: {}", ret, err_msg);
+            warn!("kadm5_init_with_password failed with code {}: {}", ret, err_msg);
             unsafe { krb5_free_context(context) };
-            return Err(anyhow::anyhow!("kadm5_init_with_skey failed: {}", err_msg));
+            return Err(anyhow::anyhow!("kadm5_init_with_password failed: {}", err_msg));
         }
 
         Ok(Kadm5Handle { handle, context })
     }
 
-    /// Create principal with password (uses policy from kdc.conf for aes256 keys)
+    /// Create principal with password
     pub fn create_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
         let principal_name = format!("{}@{}", username, realm);
         let principal_cstr = CString::new(principal_name)?;
@@ -206,8 +191,7 @@ impl Kadm5Handle {
         let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
         ent.principal = princ;
 
-        // Mask: create the principal (password generates keys via policy)
-        let mask = 1 as c_long;  // KADM5_PRINCIPAL = 1 (hardcoded safe value)
+        let mask = KADM5_PRINCIPAL as c_long;
 
         let pass_cstr = CString::new(password)?;
 
@@ -238,7 +222,7 @@ impl Kadm5Handle {
         Ok(())
     }
 
-    /// Change password on existing principal (core sync operation)
+    /// Change password on existing principal
     pub fn chpass_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
         let principal_name = format!("{}@{}", username, realm);
         let principal_cstr = CString::new(principal_name)?;
@@ -285,4 +269,55 @@ impl Drop for Kadm5Handle {
             let _ = krb5_free_context(self.context);
         }
     }
+}
+
+pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
+    use tracing::{info, warn, error};
+
+    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
+    info!("Kerberos sync started for user '{}' in realm '{}'", username, realm);
+
+    let full_principal = format!("{}@{}", username, realm);
+    info!("Target principal: {}", full_principal);
+
+    let admin_principal = format!("admin/admin@{}", realm);
+    info!("Using admin principal: {}", admin_principal);
+
+    let dm_pass = match env::var("LLDAP_KERB_DM_PASS") {
+        Ok(pass) => {
+            info!("LLDAP_KERB_DM_PASS env var found (length: {} chars)", pass.len());
+            pass
+        }
+        Err(e) => {
+            error!("Missing LLDAP_KERB_DM_PASS env var: {}", e);
+            return Err(anyhow::anyhow!("LLDAP_KERB_DM_PASS env var required for Kerberos admin auth"));
+        }
+    };
+
+    info!("Attempting to initialize Kerberos admin handle...");
+    let handle = match Kadm5Handle::init_with_password_or_ccache(Some(&dm_pass), &admin_principal, &realm) {
+        Ok(h) => {
+            info!("Kerberos admin handle initialized successfully");
+            h
+        }
+        Err(e) => {
+            error!("Failed to initialize Kerberos admin handle: {}", e);
+            return Err(e.context("Kerberos admin authentication failed"));
+        }
+    };
+
+    info!("Trying to change password for existing principal...");
+    if handle.chpass_principal(username, plain_password, &realm).is_ok() {
+        info!("Kerberos password updated successfully for {}", full_principal);
+        return Ok(());
+    }
+
+    warn!("Change password failed (likely principal does not exist) – attempting to create new principal...");
+
+    handle.create_principal(username, plain_password, &realm)
+    .with_context(|| format!("Failed to create new Kerberos principal for {}", full_principal))?;
+
+    info!("Kerberos principal created and password set successfully for {}", full_principal);
+
+    Ok(())
 }
