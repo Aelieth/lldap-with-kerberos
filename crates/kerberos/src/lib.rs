@@ -272,39 +272,19 @@ impl Drop for Kadm5Handle {
 }
 
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-    use tracing::{info, warn, error};
+    use tracing::{info, warn};
 
     let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
-    info!("Kerberos sync started for user '{}' in realm '{}'", username, realm);
+    let realm_upper = realm.to_uppercase();
 
-    let full_principal = format!("{}@{}", username, realm);
-    info!("Target principal: {}", full_principal);
+    let full_principal = format!("{}@{}", username, realm_upper);
+    info!("Kerberos sync started for principal: {}", full_principal);
 
-    let admin_principal = format!("admin/admin@{}", realm);
-    info!("Using admin principal: {}", admin_principal);
+    let admin_principal = format!("admin/admin@{}", realm_upper);
 
-    let dm_pass = match env::var("LLDAP_KERB_DM_PASS") {
-        Ok(pass) => {
-            info!("LLDAP_KERB_DM_PASS env var found (length: {} chars)", pass.len());
-            pass
-        }
-        Err(e) => {
-            error!("Missing LLDAP_KERB_DM_PASS env var: {}", e);
-            return Err(anyhow::anyhow!("LLDAP_KERB_DM_PASS env var required for Kerberos admin auth"));
-        }
-    };
-
-    info!("Attempting to initialize Kerberos admin handle...");
-    let handle = match Kadm5Handle::init_with_password_or_ccache(Some(&dm_pass), &admin_principal, &realm) {
-        Ok(h) => {
-            info!("Kerberos admin handle initialized successfully");
-            h
-        }
-        Err(e) => {
-            error!("Failed to initialize Kerberos admin handle: {}", e);
-            return Err(e.context("Kerberos admin authentication failed"));
-        }
-    };
+    // Keytab auth—no password needed (ccache populated at startup)
+    let handle = Kadm5Handle::init_with_password_or_ccache(None, &admin_principal, &realm)
+    .context("Failed to initialize Kerberos admin handle (keytab auth)")?;
 
     info!("Trying to change password for existing principal...");
     if handle.chpass_principal(username, plain_password, &realm).is_ok() {
@@ -312,12 +292,12 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
         return Ok(());
     }
 
-    warn!("Change password failed (likely principal does not exist) – attempting to create new principal...");
+    warn!("Change password failed (likely principal does not exist)—creating new principal...");
 
     handle.create_principal(username, plain_password, &realm)
-    .with_context(|| format!("Failed to create new Kerberos principal for {}", full_principal))?;
+    .context("Failed to create new Kerberos principal")?;
 
-    info!("Kerberos principal created and password set successfully for {}", full_principal);
+    info!("Kerberos principal created and password set for {}", full_principal);
 
     Ok(())
 }

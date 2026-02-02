@@ -16,9 +16,6 @@ use std::io::{BufRead, BufReader};
 struct KerberosConfig {
     realm_name: String,
     base_dn: String,
-    master_pass: String,
-    admin_pass: String,
-    dm_pass: String,
     ticket_lifetime: String,
     renew_lifetime: String,
     forwardable: bool,
@@ -73,15 +70,6 @@ fn main() -> Result<()> {
     if let Ok(val) = env::var("LLDAP_KERB_BASE_DN") {
         config.base_dn = val;
     }
-    if let Ok(val) = env::var("LLDAP_KERB_MASTER_PASS") {
-        config.master_pass = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_ADMIN_PASS") {
-        config.admin_pass = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_DM_PASS") {
-        config.dm_pass = val;
-    }
     if let Ok(val) = env::var("LLDAP_KERB_TICKET_LIFETIME") {
         config.ticket_lifetime = val;
     }
@@ -125,18 +113,17 @@ fn main() -> Result<()> {
     println!("Generating /var/lib/krb5kdc/kadm5.acl...");
     render_template("/app/kadm5.template.acl", "/var/lib/krb5kdc/kadm5.acl", &config, &domain)?;
 
-    // One-time KDC database initialization
-    let db_path = "/var/lib/krb5kdc/principal";
-    if !Path::new(db_path).exists() {
-        println!("Kerberos database not found. Initializing with kdb5_util...");
+    // One-time KDC database initialization (password-less with stashed master key)
+    let db_principal_path = "/var/lib/krb5kdc/principal";
+    if !Path::new(db_principal_path).exists() {
+        println!("Kerberos database not found. Initializing with kdb5_util (stashed master key)...");
 
+        let realm_upper = config.realm_name.to_uppercase();
         let output = Command::new("/usr/sbin/kdb5_util")
         .arg("create")
-        .arg("-s")
+        .arg("-s")  // Stash master key automatically (no user password)
         .arg("-r")
-        .arg(&config.realm_name)
-        .arg("-P")
-        .arg(&config.master_pass)
+        .arg(&realm_upper)
         .output()
         .context("Failed to run kdb5_util create")?;
 
@@ -144,58 +131,85 @@ fn main() -> Result<()> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("kdb5_util failed: {}", stderr));
         }
-        println!("Kerberos database initialized successfully.");
+        println!("Kerberos database initialized successfully (stashed master key).");
     } else {
         println!("Kerberos database already exists—skipping init.");
     }
 
-    // Bootstrap admin principal and keytab using kadmin.local (before daemons start)
-    let admin_principal = format!("admin/admin@{}", config.realm_name);
-    let dm_pass = &config.dm_pass;
-
-    // Check if principal exists
-    let get_query = format!("getprinc {}", admin_principal);
-    let get_output = run_kadmin_local(&get_query)?;
-    let get_stderr = String::from_utf8_lossy(&get_output.stderr);
-
-    if get_stderr.contains("Principal does not exist") {
-        let add_query = format!("addprinc -pw {} {}", dm_pass, admin_principal);
-        let add_output = run_kadmin_local(&add_query)?;
-        if !add_output.status.success() {
-            let stderr = String::from_utf8_lossy(&add_output.stderr);
-            return Err(anyhow::anyhow!("Failed to create bootstrap admin principal: {}", stderr));
-        }
-        println!("Created new bootstrap admin principal {}", admin_principal);
-    } else {
-        let cpw_query = format!("cpw -pw {} {}", dm_pass, admin_principal);
-        let cpw_output = run_kadmin_local(&cpw_query)?;
-        if !cpw_output.status.success() {
-            let stderr = String::from_utf8_lossy(&cpw_output.stderr);
-            return Err(anyhow::anyhow!("Failed to update bootstrap admin principal: {}", stderr));
-        }
-        println!("Updated bootstrap admin principal {}", admin_principal);
-    }
-
-    // Create keytab
+    // --- Password-less Kerberos Bootstrap and Keytab Setup ---
+    let db_principal_path = "/var/lib/krb5kdc/principal";
     let keytab_path = "/data/kadm5.keytab";
-    let ktadd_query = format!("ktadd -norandkey -k {} {}", keytab_path, admin_principal);
-    let ktadd_output = run_kadmin_local(&ktadd_query)?;
-    if !ktadd_output.status.success() {
-        let stderr = String::from_utf8_lossy(&ktadd_output.stderr);
-        println!("Warning: Keytab creation failed (non-fatal): {}", stderr.trim());
-    } else {
+    let realm_upper = config.realm_name.to_uppercase();
+
+    let needs_bootstrap = !Path::new(db_principal_path).exists();
+
+    if needs_bootstrap {
+        println!("First run detected—no KDC database. Bootstrapping Kerberos password-less...");
+
+        // 1. Create KDC database with stashed master key (no user password)
+        println!("Creating KDC database with stashed master key...");
+        let kdb_status = Command::new("/usr/sbin/kdb5_util")
+        .arg("create")
+        .arg("-s")  // Stash master key automatically
+        .arg("-r")
+        .arg(&realm_upper)
+        .status()
+        .context("Failed to run kdb5_util create")?;
+
+        if !kdb_status.success() {
+            anyhow::bail!("kdb5_util create failed (exit code: {:?})", kdb_status.code());
+        }
+        println!("KDC database created successfully (stashed master key).");
+
+        // 2. Create admin principal with random key (no password)
+        let admin_princ = format!("admin/admin@{}", realm_upper);
+        println!("Creating admin principal with random key: {}", admin_princ);
+        run_kadmin_local(&format!("addprinc -randkey {}", admin_princ))
+        .context("Failed to create admin principal with random key")?;
+
+        // 3. Export admin principal to persistent keytab
+        fs::create_dir_all("/data").context("Failed to create /data directory")?;
+        println!("Exporting admin principal to keytab: {}", keytab_path);
+        run_kadmin_local(&format!("ktadd -k {} {}", keytab_path, admin_princ))
+        .context("Failed to export admin principal to keytab")?;
+        println!("Keytab created successfully at {}", keytab_path);
+
+        // Secure keytab permissions (readable only by lldap user)
         Command::new("chmod")
         .arg("600")
         .arg(keytab_path)
-        .output()
-        .context("Failed to secure keytab")?;
-        println!("Keytab created and secured at {}", keytab_path);
+        .status()
+        .context("Failed to set keytab permissions")?;
         Command::new("chown")
         .arg("lldap:lldap")
         .arg(keytab_path)
-        .output()
-        .context("Failed to chown keytab to lldap")?;
+        .status()
+        .context("Failed to chown keytab to lldap user")?;
+    } else {
+        println!("KDC database exists—skipping bootstrap.");
     }
+
+    // Always: Populate default credential cache with keytab for password-less runtime sync
+    if Path::new(keytab_path).exists() {
+        let admin_princ = format!("admin/admin@{}", realm_upper);
+        println!("Populating credential cache with keytab for password-less auth: {}", admin_princ);
+        let kinit_status = Command::new("/usr/bin/kinit")
+        .env("KRB5_CONFIG", "/etc/krb5.conf")
+        .arg("-k")  // Use keytab
+        .arg("-t")
+        .arg(keytab_path)
+        .arg(&admin_princ)
+        .status()
+        .context("Failed to run kinit with keytab")?;
+
+        if !kinit_status.success() {
+            anyhow::bail!("kinit with keytab failed (exit code: {:?})", kinit_status.code());
+        }
+        println!("Credential cache populated successfully—runtime Kerberos sync is fully password-less.");
+    } else {
+        anyhow::bail!("Keytab missing at {}—bootstrap failed or volume issue", keytab_path);
+    }
+    // --- End Bootstrap ---
 
     // Start daemons (foreground with piped logs)
     println!("Starting krb5kdc...");
@@ -219,6 +233,67 @@ fn main() -> Result<()> {
     .arg("/var/kerberos/krb5kdc/kadm5.acl")
     .output()
     .context("Failed to chown ACL to root")?;
+
+    // Bootstrap check: is this the first run?
+    let db_principal_path = "/var/lib/krb5kdc/principal";
+    let keytab_path = "/data/kadm5.keytab";
+    let needs_bootstrap = !Path::new(db_principal_path).exists();
+
+    if needs_bootstrap {
+        println!("First run detected—no KDC database. Bootstrapping Kerberos...");
+
+        // 1. Create the KDC database (stashed master key, no user password needed)
+        println!("Creating KDC database with kdb5_util...");
+        let realm_upper = config.realm_name.to_uppercase();
+        let kdb_output = Command::new("/usr/sbin/kdb5_util")
+        .arg("create")
+        .arg("-s")  // Stash master key
+        .arg("-r")
+        .arg(&realm_upper)
+        .output()
+        .context("Failed to run kdb5_util create")?;
+
+        if !kdb_output.status.success() {
+            let stderr = String::from_utf8_lossy(&kdb_output.stderr);
+            anyhow::bail!("kdb5_util create failed: {}", stderr);
+        }
+        println!("KDC database created successfully.");
+
+        // 2. Create admin principal with random key (no password)
+        let admin_princ = format!("admin/admin@{}", realm_upper);
+        println!("Creating admin principal: {}", admin_princ);
+        run_kadmin_local(&format!("addprinc -randkey {}", admin_princ))?;
+
+        // 3. Export admin principal to persistent keytab
+        println!("Exporting admin principal to keytab: {}", keytab_path);
+        fs::create_dir_all("/data")?;  // Ensure /data exists
+        run_kadmin_local(&format!("ktadd -k {} {}", keytab_path, admin_princ))?;
+        println!("Keytab created successfully at {}", keytab_path);
+    } else {
+        println!("KDC database exists—skipping bootstrap.");
+    }
+
+    // Always ensure keytab exists and populate ccache for runtime password-less auth
+    if Path::new(keytab_path).exists() {
+        let admin_princ = format!("admin/admin@{}", config.realm_name.to_uppercase());
+        println!("Populating credential cache with keytab for {}", admin_princ);
+        let kinit_output = Command::new("/usr/bin/kinit")
+        .env("KRB5_CONFIG", "/etc/krb5.conf")
+        .arg("-k")  // Keytab auth
+        .arg("-t")
+        .arg(keytab_path)
+        .arg(&admin_princ)
+        .output()
+        .context("Failed to run kinit with keytab")?;
+
+        if !kinit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&kinit_output.stderr);
+            anyhow::bail!("kinit with keytab failed: {}", stderr);
+        }
+        println!("Credential cache populated successfully—runtime sync will be password-less.");
+    } else {
+        anyhow::bail!("Keytab missing at {}—cannot proceed without admin auth", keytab_path);
+    }
 
     println!("Starting kadmind with strace for deep debug...");
     let mut kadmind_child = Command::new("strace")
@@ -282,12 +357,16 @@ fn main() -> Result<()> {
     if !Path::new(schema_flag).exists() {
         println!("Extending LLDAP schema for POSIX/Kerberos...");
 
+        // Get initial LLDAP admin password from env (only used on first run)
+        let initial_admin_pass = env::var("LLDAP_LDAP_USER_PASS")
+        .context("LLDAP_LDAP_USER_PASS env var required for first-run schema extension")?;
+
         let client = Client::new();
         let login_url = "http://localhost:17170/auth/simple/login";
 
         let login_body = json!({
             "username": "admin",
-            "password": config.dm_pass
+            "password": initial_admin_pass
         });
 
         let login_resp = client.post(login_url)
@@ -297,56 +376,61 @@ fn main() -> Result<()> {
 
         if !login_resp.status().is_success() {
             let err_text = login_resp.text().unwrap_or_default();
-            return Err(anyhow::anyhow!("LLDAP login failed: {}", err_text));
-        }
+            println!("Warning: LLDAP login failed for schema extension (non-fatal): {}", err_text);
+            // Continue anyway—schema extension is best-effort
+        } else {
+            let token: String = login_resp.json::<serde_json::Value>()
+            .context("Failed to parse login response")?
+            .get("token")
+            .and_then(|v| v.as_str())
+            .context("No token in login response")?
+            .to_string();
 
-        let login_json: serde_json::Value = login_resp.json().context("Failed to parse login JSON")?;
-        let token = login_json["token"].as_str().context("No token in login response")?;
+            let graphql_url = "http://localhost:17170/api/graphql";
 
-        let graphql_url = "http://localhost:17170/api/graphql";
+            let mutations = vec![
+                // User attributes
+                json!({
+                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                      "variables": { "name": "uidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
+                }),
+                json!({
+                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                      "variables": { "name": "gidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
+                }),
+                json!({
+                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
+                      "variables": { "name": "loginShell", "type": "STRING", "isList": false, "isVisible": true, "isEditable": false }
+                }),
+                // Object classes
+                json!({
+                    "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
+                      "variables": { "name": "inetOrgPerson" }
+                }),
+                json!({
+                    "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
+                      "variables": { "name": "posixAccount" }
+                }),
+            ];
 
-        let mutations = vec![
-            // Attributes
-            json!({
-                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                  "variables": { "name": "uidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
-            }),
-            json!({
-                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                  "variables": { "name": "gidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
-            }),
-            json!({
-                "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                  "variables": { "name": "loginShell", "type": "STRING", "isList": false, "isVisible": true, "isEditable": false }
-            }),
-            // Object classes
-            json!({
-                "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
-                  "variables": { "name": "inetOrgPerson" }
-            }),
-            json!({
-                "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
-                  "variables": { "name": "posixAccount" }
-            }),
-        ];
+            for mutation in mutations {
+                let resp = client.post(graphql_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .json(&mutation)
+                .send()
+                .context("Failed to send GraphQL mutation")?;
 
-        for mutation in mutations {
-            let resp = client.post(graphql_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&mutation)
-            .send()
-            .context("Failed to send GraphQL mutation")?;
-
-            if !resp.status().is_success() {
-                let err_text = resp.text().unwrap_or_default();
-                println!("Warning: Schema mutation failed (non-fatal): {}", err_text);
-            } else {
-                println!("Schema extension mutation succeeded.");
+                if !resp.status().is_success() {
+                    let err_text = resp.text().unwrap_or_default();
+                    println!("Warning: Schema mutation failed (non-fatal): {}", err_text);
+                } else {
+                    println!("Schema extension mutation succeeded.");
+                }
             }
-        }
 
-        fs::write(schema_flag, "extended").context("Failed to write schema flag")?;
-        println!("LLDAP schema extended successfully.");
+            fs::write(schema_flag, "extended").context("Failed to write schema flag")?;
+            println!("LLDAP schema extended successfully.");
+        }
     } else {
         println!("Schema already extended—skipping.");
     }
