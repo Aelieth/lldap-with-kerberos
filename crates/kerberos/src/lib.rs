@@ -177,6 +177,65 @@ impl Kadm5Handle {
         Ok(Kadm5Handle { handle, context })
     }
 
+    /// Initialize handle using keytab directly (no password/ccache needed, reliable for -randkey principals)
+    pub fn init_with_keytab(keytab_path: &str, admin_principal: &str, realm: &str) -> Result<Self> {
+        let mut context: krb5_context = ptr::null_mut();
+        let ret = unsafe { krb5_init_context(&mut context) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("krb5_init_context failed with code {}", ret));
+        }
+
+        let mut handle: *mut c_void = ptr::null_mut();
+
+        let client_name_cstr = CString::new(admin_principal).context("Invalid admin principal")?;
+        let keytab_cstr = CString::new(keytab_path).context("Invalid keytab path")?;
+        let service_name_ptr: *mut c_char = ptr::null_mut();  // NULL for default
+
+        let realm_cstr = CString::new(realm).context("Invalid realm")?;
+
+        let mut params: kadm5_config_params = unsafe { mem::zeroed() };
+        params.mask = KADM5_CONFIG_REALM as c_long;
+        params.realm = realm_cstr.into_raw() as *mut i8;
+
+        let struct_version: krb5_ui_4 = KADM5_STRUCT_VERSION;
+        let api_version: krb5_ui_4 = KADM5_API_VERSION_4;
+
+        let db_args_ptr: *mut *mut c_char = ptr::null_mut();
+
+        let ret = unsafe {
+            kadm5_init_with_skey(
+                context,
+                client_name_cstr.as_ptr() as *mut c_char,
+                                 keytab_cstr.as_ptr() as *mut c_char,
+                                 service_name_ptr,
+                                 &mut params,
+                                 struct_version,
+                                 api_version,
+                                 db_args_ptr,
+                                 &mut handle,
+            )
+        };
+
+        unsafe { let _ = CString::from_raw(params.realm); }
+
+        if ret != 0 {
+            let code = ret as i32;
+            let msg_ptr = unsafe { krb5_get_error_message(context, code) };
+            let err_msg = if msg_ptr.is_null() {
+                format!("code {}", ret)
+            } else {
+                let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                unsafe { krb5_free_error_message(context, msg_ptr) };
+                s
+            };
+            warn!("kadm5_init_with_skey failed with code {}: {}", ret, err_msg);
+            unsafe { krb5_free_context(context) };
+            return Err(anyhow::anyhow!("kadm5_init_with_skey failed: {}", err_msg));
+        }
+
+        Ok(Kadm5Handle { handle, context })
+    }
+
     /// Create principal with password
     pub fn create_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
         let principal_name = format!("{}@{}", username, realm);
@@ -191,6 +250,7 @@ impl Kadm5Handle {
         let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
         ent.principal = princ;
 
+        // Mask: create the principal (password generates keys via policy)
         let mask = KADM5_PRINCIPAL as c_long;
 
         let pass_cstr = CString::new(password)?;
@@ -216,6 +276,7 @@ impl Kadm5Handle {
                 unsafe { krb5_free_error_message(self.context, msg_ptr) };
                 s
             };
+            warn!("kadm5_create_principal failed with code {}: {}", ret, err_msg);
             return Err(anyhow::anyhow!("kadm5_create_principal failed: {}", err_msg));
         }
 
@@ -281,12 +342,14 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
     info!("Kerberos sync started for principal: {}", full_principal);
 
     let admin_principal = format!("admin/admin@{}", realm_upper);
+    let keytab_path = "/data/kadm5.keytab";
 
-    // Keytab auth—no password needed (ccache populated at startup)
-    let handle = Kadm5Handle::init_with_password_or_ccache(None, &admin_principal, &realm)
-    .context("Failed to initialize Kerberos admin handle (keytab auth)")?;
+    info!("Using direct keytab auth for admin: {} (keytab: {})", admin_principal, keytab_path);
 
-    info!("Trying to change password for existing principal...");
+    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
+    .context("Failed to initialize Kerberos admin handle with keytab (check keytab exists/permissions)")?;
+
+    // Try change password first
     if handle.chpass_principal(username, plain_password, &realm).is_ok() {
         info!("Kerberos password updated successfully for {}", full_principal);
         return Ok(());
