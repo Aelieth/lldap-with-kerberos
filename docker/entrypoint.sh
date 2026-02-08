@@ -14,33 +14,50 @@ echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
 mkdir -p /data
 chown lldap:lldap /data
 
-# Start LLDAP
+# === Required environment variable checks ===
+if [ -z "$LLDAP_JWT_SECRET" ]; then
+    echo "ERROR: LLDAP_JWT_SECRET is required."
+    echo "Please set a strong random secret (32+ characters) via environment variable."
+    echo "Example: -e LLDAP_JWT_SECRET=\"$(openssl rand -hex 32)\""
+    exit 1
+fi
+
+if [ -z "$LLDAP_LDAP_BASE_DN" ]; then
+    echo "ERROR: LLDAP_LDAP_BASE_DN is required."
+    echo "Example: -e LLDAP_LDAP_BASE_DN=\"dc=homelab,dc=local\""
+    exit 1
+fi
+
+# Start LLDAP (original entrypoint)
 echo "Starting LLDAP..."
 ./docker-entrypoint.sh "$@" &
 LLDAP_PID=$!
 
-# Sleep 1 for head start, then healthcheck
-sleep 1
-echo "Waiting for LLDAP..."
-for i in {1..60}; do
-    if /app/lldap healthcheck; then
-        echo "LLDAP ready!"
+# Wait for LLDAP to be healthy
+echo "Waiting for LLDAP to become ready (up to 60 seconds)..."
+for i in $(seq 1 60); do
+    if /app/lldap healthcheck --quiet; then
+        echo "LLDAP is ready!"
         break
     fi
     sleep 1
 done
-if [ $i -eq 60 ]; then
-    echo "ERROR: LLDAP timeout."
-    kill $LLDAP_PID
+
+if [ "$i" -eq 60 ]; then
+    echo "ERROR: LLDAP failed to start within 60 seconds."
+    echo "Check logs above for details (likely missing configuration)."
+    kill $LLDAP_PID 2>/dev/null || true
+    wait $LLDAP_PID 2>/dev/null || true
     exit 1
 fi
 
-echo "Starting Kerberos services via kerberos_manager..."
+# Now start Kerberos services
+echo "Starting Kerberos manager..."
 /app/kerberos_manager &
 KERBEROS_PID=$!
 
-# Trap shutdown
-trap 'echo "Shutting down..."; kill $LLDAP_PID; kill $KERBEROS_PID; exit' INT TERM
+# Clean shutdown on signals
+trap 'echo "Shutting down..."; kill $LLDAP_PID $KERBEROS_PID 2>/dev/null; wait; exit' INT TERM
 
-# Wait on LLDAP
+# Wait for LLDAP (primary process)
 wait $LLDAP_PID
