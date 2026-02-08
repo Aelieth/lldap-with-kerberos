@@ -70,7 +70,8 @@ RUN microdnf install -y --assumeyes \
     && microdnf clean all
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
-RUN mkdir -p /data/cert /var/lib/krb5kdc && chown lldap:lldap /data/ /data/cert /var/lib/krb5kdc
+RUN mkdir -p /data/cert /var/kerberos/krb5kdc && \
+    chown -R lldap:lldap /data /data/cert /var/kerberos/krb5kdc
 
 WORKDIR /app
 
@@ -97,7 +98,7 @@ COPY docker/sudoers-lldap /etc/sudoers.d/lldap
 RUN chmod 0440 /etc/sudoers.d/lldap
 
 # Volumes for persistence
-VOLUME /data /var/lib/krb5kdc
+VOLUME /data /var/kerberos/krb5kdc
 
 # Ports
 EXPOSE 3890 17170 88/tcp 88/udp 749/tcp
