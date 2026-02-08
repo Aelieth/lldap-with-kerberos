@@ -168,7 +168,7 @@ fn main() -> Result<()> {
     // --- End Part 1 ---
 
     // One-time schema extension for POSIX/Kerberos compatibility
-    let schema_flag = "/var/lib/krb5kdc/schema_extended.flag";
+    let schema_flag = "/var/kerberos/krb5kdc/schema_extended.flag";
     if !Path::new(schema_flag).exists() {
         println!("Extending LLDAP schema for POSIX/Kerberos...");
 
