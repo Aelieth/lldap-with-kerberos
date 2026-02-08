@@ -335,7 +335,26 @@ impl Drop for Kadm5Handle {
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
     use tracing::{info, warn};
 
-    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
+    // === Dynamic realm derivation (matches kerberos_manager) ===
+    // Start with base_dn from env (LLDAP requires it)
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .unwrap_or_else(|_| "dc=example,dc=com".to_string());  // Safe fallback if missing (should never happen)
+
+    // Derive domain (lowercase)
+    let domain = base_dn
+    .split(',')
+    .filter_map(|part| part.strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_lowercase();
+
+    // Derive realm (uppercase domain)
+    let derived_realm = domain.to_uppercase();
+
+    // Final realm: explicit env override wins, else derived
+    let realm = env::var("LLDAP_KERB_REALM_NAME")
+    .unwrap_or(derived_realm);
+
     let realm_upper = realm.to_uppercase();
 
     let full_principal = format!("{}@{}", username, realm_upper);
@@ -346,6 +365,7 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
 
     info!("Using direct keytab auth for admin: {} (keytab: {})", admin_principal, keytab_path);
 
+    // Rest of function unchanged...
     let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
     .context("Failed to initialize Kerberos admin handle with keytab (check keytab exists/permissions)")?;
 

@@ -61,36 +61,36 @@ fn main() -> Result<()> {
     let full_config: toml::Table = toml::from_str(&toml_str).context("Failed to parse TOML file (check syntax/comments)")?;
 
     let kerberos_value = full_config.get("kerberos").context("Missing [kerberos] table in config")?.clone();
-    let mut config: KerberosConfig = kerberos_value.try_into().context("Failed to deserialize [kerberos] table")?;
+    let mut config: KerberosConfig = kerberos_value.try_into().context("Failed to deserialize [kerberos] section")?;
 
-    // Override with env vars (LLDAP_KERB_ prefix)
-    if let Ok(val) = env::var("LLDAP_KERB_REALM_NAME") {
-        config.realm_name = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_BASE_DN") {
-        config.base_dn = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_TICKET_LIFETIME") {
-        config.ticket_lifetime = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_RENEW_LIFETIME") {
-        config.renew_lifetime = val;
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_FORWARDABLE") {
-        config.forwardable = val.parse().unwrap_or(true);
-    }
-    if let Ok(val) = env::var("LLDAP_KERB_RDNS") {
-        config.rdns = val.parse().unwrap_or(false);
-    }
+    // === Precedence: Explicit env > Auto-derive from LLDAP base_dn > TOML fallback ===
 
-    // Sync consistency with LLDAP/entrypoint
-    if let Ok(base_dn) = env::var("LLDAP_LDAP_BASE_DN") {
-        config.base_dn = base_dn;
-    }
+    // Always start with current base_dn from env (LLDAP requires it anyway)
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .unwrap_or_else(|_| config.base_dn.clone());
 
-    // Derive DOMAIN from (possibly overridden) base_dn
-    let domain = config.base_dn.replace("dc=", "").replace(",", ".").to_lowercase();
+    // Derive domain (lowercase, e.g., testlab.local)
+    let domain = base_dn
+    .split(',')
+    .filter_map(|part| part.strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_lowercase();
+
+    // Derive realm (uppercase domain)
+    let derived_realm = domain.to_uppercase();
+
+    // Final realm: explicit env override wins, else derived (ignore TOML entirely for realm)
+    let realm_name = env::var("LLDAP_KERB_REALM_NAME")
+    .unwrap_or(derived_realm)
+    .to_uppercase();
+
+    // Update config
+    config.base_dn = base_dn;
+    config.realm_name = realm_name;
+
     println!("Calculated DOMAIN: {}", domain);
+    println!("Effective REALM_NAME: {}", config.realm_name);
     println!("Effective config: {:?}", config);
 
     // Render templates

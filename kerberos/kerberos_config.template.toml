@@ -1,15 +1,15 @@
 [kerberos]
-realm_name = "TESTLAB.COM"
-base_dn = "dc=testlab,dc=com"
-master_pass = "your-strong-master-pass!"
-admin_pass = "your-strong-admin-pass!"
-dm_pass = "adminpassword123!"
+# Realm will be auto-derived from LLDAP_LDAP_BASE_DN (e.g., dc=homelab,dc=local → HOMELAB.LOCAL)
+# Override with LLDAP_KERB_REALM_NAME env if needed.
+realm_name = ""
+
+# Base DN shared with LLDAP — auto-set from LLDAP_LDAP_BASE_DN env.
+base_dn = ""
+
 ticket_lifetime = "24h"
 renew_lifetime = "7d"
 forwardable = true
 rdns = false
 
-## Default configuration for Kerberos in LLDAP integration.
-## All the values can be overridden through environment variables, prefixed
-## with "LLDAP_KERB_". For instance, "realm_name" can be overridden with the
-## "LLDAP_KERB_REALM_NAME" variable.
+## All values can be overridden with LLDAP_KERB_ prefixed env vars.
+## Realm and base_dn are auto-derived for consistency if not overridden.

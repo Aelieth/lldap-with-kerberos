@@ -70,8 +70,8 @@ RUN microdnf install -y --assumeyes \
     && microdnf clean all
 
 # Pre-create /data with correct ownership (volume will override, but safe start)
-RUN mkdir -p /data/cert /var/kerberos/krb5kdc && \
-    chown -R lldap:lldap /data /data/cert /var/kerberos/krb5kdc
+RUN mkdir -p /data/cert /var/kerberos/krb5kdc /var/log/krb5 && \
+    chown -R lldap:lldap /data /data/cert /var/kerberos/krb5kdc /var/log/krb5
 
 WORKDIR /app
 
