@@ -36,7 +36,7 @@ LLDAP_PID=$!
 # Wait for LLDAP to be healthy
 echo "Waiting for LLDAP to become ready (up to 60 seconds)..."
 for i in $(seq 1 60); do
-    if /app/lldap healthcheck --quiet; then
+    if /app/lldap healthcheck >/dev/null 2>&1; then
         echo "LLDAP is ready!"
         break
     fi
