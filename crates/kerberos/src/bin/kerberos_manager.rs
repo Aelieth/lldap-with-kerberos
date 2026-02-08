@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 use std::net::TcpStream;
 use std::io::{Write};
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
@@ -24,14 +25,15 @@ struct KerberosConfig {
 
 /// Run a single kadmin.local query non-interactively (with explicit krb5.conf)
 fn run_kadmin_local(query: &str) -> Result<Output> {
-    println!("Running kadmin.local -q \"{}\"", query);
+    println!("Running sudo kadmin.local -q \"{}\"", query);
 
-    let output = Command::new("/usr/sbin/kadmin.local")
+    let output = Command::new("sudo")
+    .arg("/usr/sbin/kadmin.local")
     .env("KRB5_CONFIG", "/etc/krb5.conf")
     .arg("-q")
     .arg(query)
     .output()
-    .context("Failed to spawn kadmin.local")?;
+    .context("Failed to spawn sudo kadmin.local")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -99,17 +101,31 @@ fn main() -> Result<()> {
     render_template("/app/kdc.template.conf", "/var/kerberos/krb5kdc/kdc.conf", &config, &domain)?;
     render_template("/app/kadm5.template.acl", "/var/kerberos/krb5kdc/kadm5.acl", &config, &domain)?;
 
-    // --- Password-less Kerberos Bootstrap Part 1 (DB and keytab before daemons) ---
-    let db_principal_path = "/var/lib/krb5kdc/principal";
-    let keytab_path = "/data/kadm5.keytab";
-    let realm_upper = config.realm_name.to_uppercase();
+    // --- Part 1: Kerberos Bootstrap (password-less) ---
+    let db_path = Path::new("/var/kerberos/krb5kdc/principal");
 
-    let needs_bootstrap = !Path::new(db_principal_path).exists();
+    // Debug: Check DB existence and list dir
+    println!("DB check: path = {:?}, exists = {}, is_file = {}", db_path, db_path.exists(), db_path.is_file());
+    match db_path.metadata() {
+        Ok(meta) => println!("DB metadata: len = {}, perms = {:?}", meta.len(), meta.permissions()),
+        Err(e) => println!("DB metadata error: {}", e),
+    }
+    match fs::read_dir("/var/kerberos/krb5kdc") {
+        Ok(entries) => {
+            println!("Files in DB dir:");
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    println!("- {:?}", entry.path());
+                }
+            }
+        }
+        Err(e) => println!("Read DB dir error: {}", e),
+    }
 
-    if needs_bootstrap {
+    if !db_path.exists() {
         println!("First run detected—no KDC database. Bootstrapping password-less...");
 
-        // Generate random master password
+        // Generate random master password (in-memory only)
         let master_pass_output = Command::new("openssl")
         .arg("rand")
         .arg("-hex")
@@ -119,51 +135,83 @@ fn main() -> Result<()> {
         let master_pass = String::from_utf8_lossy(&master_pass_output.stdout).trim().to_string();
         println!("Generated random master password (length: {} chars).", master_pass.len());
 
-        // Create DB with pipe
+        // Pipe to kdb5_util create -s (non-interactive)
         println!("Creating KDC database with piped password...");
-        let mut kdb_child = Command::new("/usr/sbin/kdb5_util")
+        let mut child = Command::new("sudo")
+        .arg("kdb5_util")
+        .env("KRB5_CONFIG", "/etc/krb5.conf")
         .arg("create")
         .arg("-s")
-        .arg("-r")
-        .arg(&realm_upper)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("Failed to spawn kdb5_util")?;
+        .context("Failed to spawn sudo kdb5_util")?;
 
-        {
-            let stdin = kdb_child.stdin.as_mut().context("Failed to take stdin")?;
-            stdin.write_all(master_pass.as_bytes())?;
-            stdin.write_all(b"\n")?;
-            stdin.flush()?;
-            stdin.write_all(master_pass.as_bytes())?;
-            stdin.write_all(b"\n")?;
-            stdin.flush()?;
+        // Write password twice (master + confirm)
+        if let Some(mut stdin) = child.stdin.take() {
+            writeln!(stdin, "{}", master_pass).context("Failed to pipe master password")?;
+            writeln!(stdin, "{}", master_pass).context("Failed to pipe confirm password")?;
         }
 
-        let kdb_output = kdb_child.wait_with_output().context("Failed to wait for kdb5_util")?;
-        if !kdb_output.status.success() {
-            anyhow::bail!("kdb5_util failed: STDOUT: {}\nSTDERR: {}",
-                          String::from_utf8_lossy(&kdb_output.stdout), String::from_utf8_lossy(&kdb_output.stderr));
+        let output = child.wait_with_output().context("Failed to wait on kdb5_util")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        println!("kdb5_util stdout: {}", stdout.trim());
+        if !stderr.is_empty() {
+            println!("kdb5_util stderr: {}", stderr.trim());
+        }
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Error: kdb5_util failed: STDOUT: {}\nSTDERR: {}", stdout, stderr));
         }
         println!("KDC database created successfully.");
 
-        // Admin principal with random key
-        let admin_princ = format!("admin/admin@{}", realm_upper);
+        // Create admin principal with random key (no password)
+        let admin_princ = format!("admin/admin@{}", config.realm_name.to_uppercase());
         println!("Creating admin principal with random key: {}", admin_princ);
-        run_kadmin_local(&format!("addprinc -randkey {}", admin_princ))?;
+        let add_output = run_kadmin_local(&format!("addprinc -randkey {}", admin_princ))?;
+        if !add_output.status.success() {
+            return Err(anyhow::anyhow!("Error: addprinc failed: STDOUT: {}\nSTDERR: {}",
+                                       String::from_utf8_lossy(&add_output.stdout),
+                                       String::from_utf8_lossy(&add_output.stderr)));
+        }
 
-        // Export keytab
-        fs::create_dir_all("/data")?;
+        // Export to keytab (persistent)
+        let keytab_path = "/data/kadm5.keytab";
         println!("Exporting admin principal to keytab: {}", keytab_path);
-        run_kadmin_local(&format!("ktadd -k {} {}", keytab_path, admin_princ))?;
+        let ktadd_output = run_kadmin_local(&format!("ktadd -k {} {}", keytab_path, admin_princ))?;
+        if !ktadd_output.status.success() {
+            return Err(anyhow::anyhow!("Error: ktadd failed: STDOUT: {}\nSTDERR: {}",
+                                       String::from_utf8_lossy(&ktadd_output.stdout),
+                                       String::from_utf8_lossy(&ktadd_output.stderr)));
+        }
         println!("Keytab created.");
 
-        Command::new("chmod").arg("600").arg(keytab_path).status()?;
-        Command::new("chown").arg("lldap:lldap").arg(keytab_path).status()?;
+        // Chown keytab to lldap (for runtime access)
+        Command::new("sudo")
+        .arg("chown")
+        .arg("lldap:lldap")
+        .arg(keytab_path)
+        .status()
+        .context("Failed to chown keytab")?;
+        println!("Ownership set on keytab.");
+
+        // Chown keytab and DB files to lldap (safe permissions)
+        fs::set_permissions(keytab_path, fs::Permissions::from_mode(0o600)).context("Failed to chmod keytab")?;
+        Command::new("sudo")
+        .arg("chown")
+        .arg("-R")
+        .arg("lldap:lldap")
+        .arg("/var/kerberos/krb5kdc")
+        .status()
+        .context("Failed to chown DB dir")?;
+        println!("Ownership set on keytab and DB files.");
+
+        // Discard random master (never persisted)
     } else {
-        println!("KDC database exists—skipping bootstrap.");
+        println!("Existing KDC database detected—skipping bootstrap.");
     }
     // --- End Part 1 ---
 
