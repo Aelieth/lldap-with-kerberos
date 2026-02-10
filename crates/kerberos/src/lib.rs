@@ -9,7 +9,7 @@ use rand::rngs::OsRng;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use std::ffi::{CString, CStr};
-use std::os::raw::{c_void, c_long, c_char};
+use std::os::raw::{c_int, c_void, c_long, c_char};
 use std::mem;
 use std::{env, ptr};
 
@@ -321,6 +321,71 @@ impl Kadm5Handle {
 
         Ok(())
     }
+
+    pub fn set_random_key_for_service(&self, principal_name: &str) -> Result<()> {
+        let principal_cstr = CString::new(principal_name).context("Invalid principal name")?;
+
+        let mut princ: krb5_principal = ptr::null_mut();
+        let ret = unsafe { krb5_parse_name(self.context, principal_cstr.as_ptr(), &mut princ) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("krb5_parse_name failed with code {}", ret));
+        }
+
+        // Try to rotate key (fails if principal doesn't exist)
+        let mut keyblocks = ptr::null_mut::<krb5_keyblock>();
+        let mut n_keys: c_int = 0;
+        let ret = unsafe { kadm5_randkey_principal(self.handle, princ, &mut keyblocks, &mut n_keys) };
+
+        if ret != 0 {
+            // Get error message for robust check (no constant dependency)
+            let code = ret as i32;
+            let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
+            let err_msg = if msg_ptr.is_null() {
+                format!("code {}", ret)
+            } else {
+                let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                unsafe { krb5_free_error_message(self.context, msg_ptr) };
+                s
+            };
+
+            if err_msg.contains("Principal does not exist") || err_msg.contains("No such principal") {
+                // Create with random key (NULL password + KADM5_KEY mask)
+                let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
+                ent.principal = princ;
+
+                // Hardcoded masks (reliable if bindings miss them)
+                const KADM5_PRINCIPAL: c_long = 0x00000001;
+                const KADM5_KEY: c_long = 0x00000020;
+                let mask = (KADM5_PRINCIPAL | KADM5_KEY) as c_long;
+
+                let ret = unsafe { kadm5_create_principal(self.handle, &mut ent, mask, ptr::null_mut()) };
+
+                if ret != 0 {
+                    let code = ret as i32;
+                    let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
+                    let create_err = if msg_ptr.is_null() {
+                        format!("code {}", ret)
+                    } else {
+                        let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
+                        unsafe { krb5_free_error_message(self.context, msg_ptr) };
+                        s
+                    };
+                    unsafe { krb5_free_principal(self.context, princ) };
+                    return Err(anyhow::anyhow!("Failed to create service principal with random key: {}", create_err));
+                }
+
+                info!("Created new service principal with random key: {}", principal_name);
+            } else {
+                unsafe { krb5_free_principal(self.context, princ) };
+                return Err(anyhow::anyhow!("kadm5_randkey_principal failed: {}", err_msg));
+            }
+        } else {
+            info!("Rotated random key for existing service principal: {}", principal_name);
+        }
+
+        unsafe { krb5_free_principal(self.context, princ) };
+        Ok(())
+    }
 }
 
 impl Drop for Kadm5Handle {
@@ -382,5 +447,51 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
 
     info!("Kerberos principal created and password set for {}", full_principal);
 
+    Ok(())
+}
+
+pub fn create_service_principal(full_principal: &str) -> Result<()> {
+    // Reuse exact realm derivation from sync_kerberos_principal
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .context("Missing LLDAP_LDAP_BASE_DN for realm derivation")?;
+    let derived_realm = base_dn
+    .split(',')
+    .filter_map(|part| part.trim().strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_uppercase();
+    let realm = env::var("LLDAP_KERB_REALM_NAME")
+    .ok()
+    .filter(|s| !s.is_empty())
+    .unwrap_or(derived_realm);
+
+    let admin_principal = format!("admin/admin@{}", realm.to_uppercase());
+    let keytab_path = "/data/kadm5.keytab";
+
+    info!("Initializing Kerberos admin handle for service principal creation/rotation");
+    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
+    .context("Failed to initialize admin handle with keytab (check /data/kadm5.keytab exists/permissions)")?;
+
+    handle.set_random_key_for_service(full_principal)
+    .context("Failed to create or rotate service principal keys")?;
+
+    Ok(())
+}
+
+pub fn export_keytab(full_principal: &str, keytab_path: &str) -> Result<()> {
+    let ktadd_cmd = format!("ktadd -norandkey -k {} {}", keytab_path, full_principal);
+
+    let output = Command::new("/usr/sbin/kadmin.local")
+    .arg("-q")
+    .arg(&ktadd_cmd)
+    .output()
+    .context("Failed to spawn kadmin.local for keytab export")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("Keytab export failed: {}", stderr.trim()));
+    }
+
+    info!("Exported current keytab for {} to {}", full_principal, keytab_path);
     Ok(())
 }

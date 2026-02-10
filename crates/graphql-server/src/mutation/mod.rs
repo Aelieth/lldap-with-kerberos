@@ -21,12 +21,19 @@ use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attr
 use std::sync::Arc;
 use tracing::{Instrument, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal};
+use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal,
+    create_service_principal, export_keytab};
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
+use std::env;
 
+#[derive(juniper::GraphQLInputObject)]
+struct CreateServicePrincipalInput {
+    service_name: String,  // e.g., "HTTP" or "host"
+    hostname: String,      // e.g., "keycloak.example.com"
+}
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
@@ -601,6 +608,65 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(Success::new())
     }
 
+    async fn create_service_principal(
+        context: &Context<Handler>,
+        input: CreateServicePrincipalInput,
+    ) -> FieldResult<Success> {
+        let span = debug_span!("[GraphQL mutation] create_service_principal");
+        span.in_scope(|| {
+            debug!(service_name = ?input.service_name, hostname = ?input.hostname);
+        });
+
+        // Ensure admin only
+        let handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized service principal creation"))?;
+
+        // Derive realm from env vars (matches our bootstrap logic: override or from BASE_DN)
+        let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+        .map_err(|_| FieldError::new("Missing LLDAP_LDAP_BASE_DN env var", graphql_value!({ "details": "Required for Kerberos realm derivation" })))?;
+        let realm = env::var("LLDAP_KERB_REALM_NAME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            base_dn
+            .split(',')
+            .filter_map(|part| part.trim().strip_prefix("dc="))
+            .map(|dc| dc.to_uppercase())
+            .collect::<Vec<_>>()
+            .join(".")
+        });
+        if realm.is_empty() {
+            return Err(FieldError::new("Could not derive Kerberos realm", graphql_value!({ "details": "Check LLDAP_LDAP_BASE_DN or set LLDAP_KERB_REALM_NAME" })));
+        }
+        debug!(%realm, "Derived/resolved Kerberos realm");
+
+        let principal = format!("{}/{}@{}", input.service_name, input.hostname, realm.to_uppercase());
+
+        let keytab_path = format!("/data/keytabs/{}-{}.keytab", input.service_name, input.hostname);
+
+        // Run sync Kerberos calls with tracing span active
+        span.in_scope(|| {
+            create_service_principal(&principal)
+            .map_err(|e| {
+                let details = e.to_string();
+                FieldError::new("Failed to create/rotate service principal", graphql_value!({ "details": details }))
+            })?;
+
+            export_keytab(&principal, &keytab_path)
+            .map_err(|e| {
+                let details = e.to_string();
+                FieldError::new("Failed to export keytab", graphql_value!({ "details": details }))
+            })?;
+
+            Ok::<(), FieldError>(())
+        })?;
+
+        info!("Created/rotated service principal {} and exported keytab to {}", principal, keytab_path);
+
+        Ok(Success::new())
+    }
+
     async fn sync_kerberos_password(
         context: &Context<Handler>,
         user_id: String,
@@ -962,5 +1028,49 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_service_principal() {
+        const QUERY: &str = r#"
+        mutation CreateServicePrincipal($input: CreateServicePrincipalInput!) {
+        createServicePrincipal(input: $input) {
+        ok
+    }
+    }
+    "#;
+    let mut mock = MockTestBackendHandler::new();
+    mock.expect_get_kerberos_realm().return_once(|| Ok("TEST.REALM".to_string()));
+    // Mock kerberos calls if needed (once we have them)
+
+    let context = Context::<MockTestBackendHandler>::new_for_tests(
+        mock,
+        ValidationResults {
+            user: UserId::new("admin"),
+                                                                   permission: Permission::Admin,
+        },
+    );
+    let vars = Variables::from([(
+        "input".to_string(),
+                                 InputValue::object(vec![
+                                     ("service_name".to_string(), InputValue::scalar("HTTP")),
+                                                    ("hostname".to_string(), InputValue::scalar("keycloak.example.com")),
+                                 ].into_iter().collect()),
+    )]);
+    let schema = mutation_schema(
+        Query::<MockTestBackendHandler>::new(),
+                                 Mutation::<MockTestBackendHandler>::new(),
+    );
+    assert_eq!(
+        execute(QUERY, None, &schema, &vars, &context).await,
+               Ok((
+                   graphql_value!({
+                       "createServicePrincipal": {
+                           "ok": true
+                       }
+                   }),
+                   vec![]
+               ))
+    );
     }
 }
