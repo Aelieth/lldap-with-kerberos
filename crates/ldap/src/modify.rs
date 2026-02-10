@@ -11,6 +11,8 @@ use lldap_access_control::UserReadableBackendHandler;
 use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_opaque_handler::OpaqueHandler;
+use lldap_kerberos::sync_kerberos_principal;
+use tracing::{info, warn};
 
 async fn handle_modify_change(
     opaque_handler: &impl OpaqueHandler,
@@ -24,41 +26,50 @@ async fn handle_modify_change(
         .atype
         .eq_ignore_ascii_case("userpassword")
         || change.operation != LdapModifyType::Replace
-    {
-        return Err(LdapError {
-            code: LdapResultCode::UnwillingToPerform,
-            message: format!(
-                r#"Unsupported operation: `{:?}` for `{}`"#,
-                change.operation, change.modification.atype
-            ),
-        });
-    }
-    if !credentials.can_change_password(&user_id, user_is_admin) {
-        return Err(LdapError {
-            code: LdapResultCode::InsufficentAccessRights,
-            message: format!(
-                r#"User `{}` cannot modify the password of user `{}`"#,
-                &credentials.user, &user_id
-            ),
-        });
-    }
-    if let [value] = &change.modification.vals.as_slice() {
-        password::change_password(opaque_handler, user_id, value)
+        {
+            return Err(LdapError {
+                code: LdapResultCode::UnwillingToPerform,
+                message: format!(
+                    r#"Unsupported operation: `{:?}` for `{}`"#,
+                    change.operation, change.modification.atype
+                ),
+            });
+        }
+        if !credentials.can_change_password(&user_id, user_is_admin) {
+            return Err(LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: format!(
+                    r#"User `{}` cannot modify the password of user `{}`"#,
+                    &credentials.user, &user_id
+                ),
+            });
+        }
+        if let [value] = &change.modification.vals.as_slice() {
+            password::change_password(opaque_handler, user_id.clone(), value)
             .await
             .map_err(|e| LdapError {
                 code: LdapResultCode::Other,
                 message: format!("Error while changing the password: {e:#?}"),
             })?;
-    } else {
-        return Err(LdapError {
-            code: LdapResultCode::InvalidAttributeSyntax,
-            message: format!(
-                r#"Wrong number of values for password attribute: {}"#,
-                change.modification.vals.len()
-            ),
-        });
-    }
-    Ok(())
+
+            // Kerberos sync on LDAP password change
+            if let Ok(plain_pass) = std::str::from_utf8(value) {
+                if let Err(e) = sync_kerberos_principal(user_id.as_str(), plain_pass) {
+                    warn!("Kerberos sync failed after LDAP password change: {}", e);
+                } else {
+                    info!("Kerberos sync triggered on LDAP password change for {}", user_id);
+                }
+            }
+        } else {
+            return Err(LdapError {
+                code: LdapResultCode::InvalidAttributeSyntax,
+                message: format!(
+                    r#"Wrong number of values for password attribute: {}"#,
+                    change.modification.vals.len()
+                ),
+            });
+        }
+        Ok(())
 }
 
 pub(crate) async fn handle_modify_request<'cred, UserBackendHandler>(
