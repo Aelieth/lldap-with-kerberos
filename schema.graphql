@@ -23,6 +23,7 @@ type Mutation {
   deleteUserObjectClass(name: String!): Success!
   deleteGroupObjectClass(name: String!): Success!
   syncKerberosPassword(userId: ID!, encryptedPassword: String!): Boolean!
+  createServicePrincipal(input: CreateServicePrincipalInput!): Success!
 }
 
 type Group {
@@ -166,6 +167,14 @@ input AttributeValueInput {
 input CreateGroupInput {
   displayName: String!
   "User-defined attributes." attributes: [AttributeValueInput!]
+}
+
+"The details required to create a service principal (e.g., for Keycloak or SSSD host)."
+input CreateServicePrincipalInput {
+  "The service type (e.g., HTTP for web, host for desktops)."
+  serviceName: String!
+  "The fully qualified hostname (e.g., keycloak.mylab.local or desktop.mylab.local)."
+  hostname: String!
 }
 
 type User {

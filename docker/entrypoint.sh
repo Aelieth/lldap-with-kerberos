@@ -1,18 +1,11 @@
 #!/bin/bash
 set -e
 
-# Early Kerberos realm setup (needed before LLDAP starts for sync)
-BASE_DN="${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}"  # Shared with LLDAP
-REALM_NAME="${LLDAP_KERB_REALM_NAME}"  # Allow direct override first
-if [ -z "$REALM_NAME" ]; then
-    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
-fi
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Final fallback
-export REALM_NAME
-echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
-
 mkdir -p /data
 chown lldap:lldap /data
+mkdir -p /data/keytabs
+chown lldap:lldap /data/keytabs
+chmod 755 /data/keytabs
 
 # === Required environment variable checks ===
 if [ -z "$LLDAP_JWT_SECRET" ]; then
@@ -27,6 +20,16 @@ if [ -z "$LLDAP_LDAP_BASE_DN" ]; then
     echo "Example: -e LLDAP_LDAP_BASE_DN=\"dc=homelab,dc=local\""
     exit 1
 fi
+
+# Early Kerberos realm setup (needed before LLDAP starts for sync)
+BASE_DN="${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}"  # Shared with LLDAP
+REALM_NAME="${LLDAP_KERB_REALM_NAME}"  # Allow direct override first
+if [ -z "$REALM_NAME" ]; then
+    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
+fi
+REALM_NAME="${REALM_NAME:-TESTLAB.COM}"  # Final fallback
+export REALM_NAME
+echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
 
 # Start LLDAP (original entrypoint)
 echo "Starting LLDAP..."
