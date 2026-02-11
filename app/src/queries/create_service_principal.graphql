@@ -1,0 +1,5 @@
+mutation CreateServicePrincipal($input: CreateServicePrincipalInput!) {
+  createServicePrincipal(input: $input) {
+    ok
+  }
+}
