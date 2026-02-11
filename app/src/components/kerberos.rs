@@ -104,7 +104,7 @@ impl Component for Kerberos {
             })} required=true />
             </div>
             <div class="mb-3">
-            <label class="form-label">{ "Hostname (e.g., keycloak.testlob.local):" }</label>
+            <label class="form-label">{ "Hostname (e.g., keycloak.testlab.local):" }</label>
             <input type="text" class="form-control" value={self.hostname.clone()} oninput={link.callback(|e: InputEvent| {
                 let input = e.target_unchecked_into::<web_sys::HtmlInputElement>();
                 Msg::UpdateHostname(input.value())
