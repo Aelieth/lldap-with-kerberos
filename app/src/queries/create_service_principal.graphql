@@ -1,5 +1,8 @@
 mutation CreateServicePrincipal($input: CreateServicePrincipalInput!) {
   createServicePrincipal(input: $input) {
     ok
+    principal
+    realm
+    keytabPath
   }
 }

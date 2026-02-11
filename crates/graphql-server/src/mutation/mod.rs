@@ -35,6 +35,14 @@ struct CreateServicePrincipalInput {
     hostname: String,      // e.g., "keycloak.example.com"
 }
 
+#[derive(juniper::GraphQLObject)]
+struct CreateServicePrincipalResponse {
+    ok: bool,
+    principal: String,
+    realm: String,
+    keytab_path: String,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
 pub struct Mutation<Handler: BackendHandler + OpaqueHandler> {
@@ -611,7 +619,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     async fn create_service_principal(
         context: &Context<Handler>,
         input: CreateServicePrincipalInput,
-    ) -> FieldResult<Success> {
+    ) -> FieldResult<CreateServicePrincipalResponse> {  // New return type
         let span = debug_span!("[GraphQL mutation] create_service_principal");
         span.in_scope(|| {
             debug!(service_name = ?input.service_name, hostname = ?input.hostname);
@@ -641,9 +649,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         }
         debug!(%realm, "Derived/resolved Kerberos realm");
 
-        let principal = format!("{}/{}@{}", input.service_name, input.hostname, realm.to_uppercase());
+        // Uppercase service name for convention (e.g., "HTTP")
+        let service_name = input.service_name.to_uppercase();
 
-        let keytab_path = format!("/data/keytabs/{}-{}.keytab", input.service_name, input.hostname);
+        let principal = format!("{}/{}@{}", service_name, input.hostname, realm.to_uppercase());
+
+        let keytab_path = format!("/data/keytabs/{}-{}.keytab", service_name, input.hostname);
 
         // Run sync Kerberos calls with tracing span active
         span.in_scope(|| {
@@ -664,7 +675,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         info!("Created/rotated service principal {} and exported keytab to {}", principal, keytab_path);
 
-        Ok(Success::new())
+        Ok(CreateServicePrincipalResponse {
+            ok: true,
+            principal,
+            realm: realm.to_uppercase(),
+           keytab_path,
+        })
     }
 
     async fn sync_kerberos_password(

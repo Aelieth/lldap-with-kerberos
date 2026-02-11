@@ -20,10 +20,13 @@ type Mutation {
   createServicePrincipal(input: CreateServicePrincipalInput!): CreateServicePrincipalResponse!
 }
 
+"Response from creating/rotating a service principal."
 type CreateServicePrincipalResponse {
   ok: Boolean!
   "Full principal (e.g., HTTP/keycloak.testlab.local@REALM)"
   principal: String!
+  "Realm (e.g., TESTLAB.LOCAL)"
+  realm: String!
   "Path to exported keytab (volume-mounted)"
   keytabPath: String!
 }

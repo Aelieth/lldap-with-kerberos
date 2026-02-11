@@ -58,9 +58,8 @@ impl CommonComponent<Kerberos> for Kerberos {
             Msg::CreateResponse(res) => {
                 let data = res?;
                 if data.create_service_principal.ok {
-                    let principal = format!("{}/{}@YOUR_REALM", self.service_name, self.hostname);  // Placeholder - enhance backend for real realm later
-                    let path = format!("/data/keytabs/{}-{}.keytab", self.service_name, self.hostname);
-                    self.result = Some(format!("Success! Created/rotated principal: {}\nKeytab exported to: {}", principal, path));
+                    let d = &data.create_service_principal;
+                    self.result = Some(format!("Success! Created/rotated principal: {}\nRealm: {}\nKeytab exported to: {}", d.principal, d.realm, d.keytab_path));
                 }
                 Ok(true)
             }
