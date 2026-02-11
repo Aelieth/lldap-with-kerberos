@@ -1,9 +1,3 @@
-type AttributeValue {
-  name: String!
-  value: [String!]!
-  schema: AttributeSchema!
-}
-
 type Mutation {
   createUser(user: CreateUserInput!): User!
   createGroup(name: String!): Group!
@@ -23,7 +17,21 @@ type Mutation {
   deleteUserObjectClass(name: String!): Success!
   deleteGroupObjectClass(name: String!): Success!
   syncKerberosPassword(userId: ID!, encryptedPassword: String!): Boolean!
-  createServicePrincipal(input: CreateServicePrincipalInput!): Success!
+  createServicePrincipal(input: CreateServicePrincipalInput!): CreateServicePrincipalResponse!
+}
+
+type CreateServicePrincipalResponse {
+  ok: Boolean!
+  "Full principal (e.g., HTTP/keycloak.testlab.local@REALM)"
+  principal: String!
+  "Path to exported keytab (volume-mounted)"
+  keytabPath: String!
+}
+
+type AttributeValue {
+  name: String!
+  value: [String!]!
+  schema: AttributeSchema!
 }
 
 type Group {
