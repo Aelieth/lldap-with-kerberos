@@ -9,7 +9,7 @@ pub fn kerberos() -> Html {
     let on_service_change = {
         let service_name = service_name.clone();
         Callback::from(move |e: InputEvent| {
-            let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+            let input = e.target_unchecked_into::<web_sys::HtmlInputElement>();
             service_name.set(input.value());
         })
     };
@@ -17,7 +17,7 @@ pub fn kerberos() -> Html {
     let on_hostname_change = {
         let hostname = hostname.clone();
         Callback::from(move |e: InputEvent| {
-            let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+            let input = e.target_unchecked_into::<web_sys::HtmlInputElement>();
             hostname.set(input.value());
         })
     };
@@ -27,7 +27,7 @@ pub fn kerberos() -> Html {
         let hostname = hostname.clone();
         let result = result.clone();
 
-        Callback::from(move |_ : MouseEvent| {  // Ignore event if not used
+        Callback::from(move |_: MouseEvent| {
             let service = (*service_name).clone();
             let host = (*hostname).clone();
             let res = result.clone();
