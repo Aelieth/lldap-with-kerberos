@@ -618,7 +618,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         });
 
         // Ensure admin only
-        let handler = context
+        let _handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized service principal creation"))?;
 
