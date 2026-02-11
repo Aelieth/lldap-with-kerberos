@@ -16,6 +16,7 @@ use crate::{
         user_details::UserDetails,
         user_schema_table::ListUserSchema,
         user_table::UserTable,
+        kerberos::Kerberos,
     },
     infra::{api::HostService, cookies::get_cookie},
 };
