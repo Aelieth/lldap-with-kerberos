@@ -245,6 +245,9 @@ impl App {
             AppRoute::ListGroupSchema => html! {
                 <ListGroupSchema />
             },
+            AppRoute::Kerberos => html! {  // NEW
+                <Kerberos />
+            },
             AppRoute::GroupDetails { group_id } => html! {
                 <GroupDetails group_id={*group_id} is_admin={is_admin} />
             },
