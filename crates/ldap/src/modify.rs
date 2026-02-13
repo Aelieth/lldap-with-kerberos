@@ -15,6 +15,7 @@ use lldap_kerberos::sync_kerberos_principal;
 use tracing::{info, warn};
 
 async fn handle_modify_change(
+    readable_handler: &impl UserReadableBackendHandler,
     opaque_handler: &impl OpaqueHandler,
     user_id: UserId,
     credentials: &ValidationResults,
@@ -52,39 +53,61 @@ async fn handle_modify_change(
                 message: format!("Error while changing the password: {e:#?}"),
             })?;
 
-            // Kerberos sync on LDAP password change
+            // Kerberos sync on LDAP password change (with sync check)
             if let Ok(plain_pass) = std::str::from_utf8(value) {
-                if let Err(e) = sync_kerberos_principal(user_id.as_str(), plain_pass) {
-                    warn!("Kerberos sync failed after LDAP password change: {}", e);
+                // Fetch user to check kerberossync attribute
+                let user = match readable_handler.get_user_details(&user_id).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        warn!("Failed to fetch user for Kerberos sync check during LDAP password change: {}", e);
+                        return Ok(());
+                    }
+                };
+
+                info!("LDAP Kerberos sync check for user {}: attributes = {:?}", user_id,
+                       user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
+
+                let sync_enabled = user.attributes.iter().any(|attr| {
+                    attr.name.as_str() == "kerberossync"
+                    && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
+                });
+
+                info!("LDAP kerberossync enabled for user {}: {}", user_id, sync_enabled);
+
+                if sync_enabled {
+                    if let Err(e) = sync_kerberos_principal(user_id.as_str(), plain_pass) {
+                        warn!("Kerberos sync failed after LDAP password change: {}", e);
+                    } else {
+                        info!("Kerberos sync triggered on LDAP password change for {}", user_id);
+                    }
                 } else {
-                    info!("Kerberos sync triggered on LDAP password change for {}", user_id);
+                    info!("Kerberos sync disabled for user {} on LDAP password change (kerberossync != '1'), skipping", user_id);
                 }
             }
+            Ok(())
         } else {
-            return Err(LdapError {
+            Err(LdapError {
                 code: LdapResultCode::InvalidAttributeSyntax,
                 message: format!(
                     r#"Wrong number of values for password attribute: {}"#,
                     change.modification.vals.len()
                 ),
-            });
+            })
         }
-        Ok(())
 }
 
 pub(crate) async fn handle_modify_request<'cred, UserBackendHandler>(
     opaque_handler: &impl OpaqueHandler,
-    get_readable_handler: impl FnOnce(
-        &'cred ValidationResults,
-        UserId,
+    get_readable_handler: impl Fn(  // Changed from FnOnce to Fn
+    &'cred ValidationResults,
+    UserId,
     ) -> Option<&'cred UserBackendHandler>,
     ldap_info: &LdapInfo,
     credentials: &'cred ValidationResults,
     request: &LdapModifyRequest,
 ) -> LdapResult<Vec<LdapOp>>
 where
-    // Note: ideally, get_readable_handler would take UserId by reference, but I couldn't make the lifetimes work.
-    UserBackendHandler: UserReadableBackendHandler + 'cred,
+UserBackendHandler: UserReadableBackendHandler + 'cred,
 {
     match get_user_id_from_distinguished_name(
         &request.dn,
@@ -92,15 +115,18 @@ where
         &ldap_info.base_dn_str,
     ) {
         Ok(uid) => {
-            let user_is_admin = get_readable_handler(credentials, uid.clone())
+            for change in &request.changes {
+                let readable_handler = get_readable_handler(credentials, uid.clone())
                 .ok_or_else(|| LdapError {
                     code: LdapResultCode::InsufficentAccessRights,
                     message: format!(
                         "User `{}` cannot modify user `{}`",
                         credentials.user.as_str(),
-                        uid.as_str()
+                                     uid.as_str()
                     ),
-                })?
+                })?;
+
+                let user_is_admin = readable_handler
                 .get_user_groups(&uid)
                 .await
                 .map_err(|e| LdapError {
@@ -109,16 +135,18 @@ where
                 })?
                 .iter()
                 .any(|g| g.display_name == "lldap_admin".into());
-            for change in &request.changes {
+
                 handle_modify_change(
+                    readable_handler,
                     opaque_handler,
                     uid.clone(),
-                    credentials,
-                    user_is_admin,
-                    change,
+                                     credentials,
+                                     user_is_admin,
+                                     change,
                 )
-                .await?
+                .await?;
             }
+
             Ok(vec![make_modify_response(
                 LdapResultCode::Success,
                 String::new(),

@@ -99,11 +99,12 @@ pub struct CreateUserForm {
     form: yew_form::Form<CreateUserModel>,
         attributes_schema: Option<Vec<Attribute>>,
         form_ref: NodeRef,
-            kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
             fetched_schema: bool,
             encrypted_password: Option<String>,
             user_id: Option<String>,
             opaque_data: Option<opaque::client::registration::ClientRegistration>,
+            kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+            kerberossync_enabled: bool,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -137,6 +138,7 @@ pub enum Msg {
     RegistrationStartResponse(Result<Box<registration::ServerRegistrationStartResponse>>),
     RegistrationFinishResponse(Result<()>),
     SyncKerberosResponse(Result<sync_kerberos_password::ResponseData>),
+    ToggleKerberosSync(bool),
 }
 
 impl CommonComponent<CreateUserForm> for CreateUserForm {
@@ -163,6 +165,10 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.kerberos_info = Some(res?.kerberos_info);
                 Ok(true)
             }
+            Msg::ToggleKerberosSync(enabled) => {
+                self.kerberossync_enabled = enabled;
+                Ok(true)
+            }
             Msg::SubmitForm => {
                 if !self.form.validate() {
                     bail!("Check the form for errors");
@@ -172,6 +178,8 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let model = self.form.model();
                 let new_password = model.password.clone();
 
+                // Encrypt password unconditionally (cheap, and keeps code simple)
+                // We'll only use it later if sync is enabled
                 if let Some(info) = &self.kerberos_info {
                     if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
                         match encrypt_password(pub_key_der_base64, &new_password) {
@@ -194,13 +202,6 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     bail!("Kerberos password encryption failed—user creation aborted (fix backend/restart container)");
                 }
 
-                let _all_values = read_all_form_attributes(
-                    self.attributes_schema.iter().flatten(),
-                                                           &self.form_ref,
-                                                           IsAdmin(true),
-                                                           EmailIsRequired(true),
-                )?;
-
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),
                                                           &self.form_ref,
@@ -208,7 +209,8 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                                           EmailIsRequired(true),
                 )?;  // Unwrap Result with ? (propagates error to banner if form read fails)
 
-                let attributes = all_values
+                // Make mutable so we can conditionally add kerberossync="0"
+                let mut attributes = all_values
                 .into_iter()  // Owned AttributeValue elements (move name/values)
                 .filter(|a| !a.values.is_empty())
                 .map(|a| GraphQLAttributeValue {
@@ -216,6 +218,14 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     value: a.values,  // Local plural 'values' moves to GraphQL singular 'value'
                 })
                 .collect::<Vec<_>>();
+
+                // If sync disabled, explicitly send kerberossync="0" to override backend default
+                if !self.kerberossync_enabled {
+                    attributes.push(GraphQLAttributeValue {
+                        name: "kerberossync".to_string(),
+                                    value: vec!["0".to_string()],
+                    });
+                }
 
                 let user = create_user::CreateUserInput {
                     id: model.username,
@@ -281,19 +291,26 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::RegistrationFinishResponse(response) => {
                 response?;
-                if let Some(enc_pw) = &self.encrypted_password {
-                    let variables = sync_kerberos_password::Variables {
-                        user_id: self.user_id.clone().unwrap(),
-                        encrypted_password: enc_pw.clone(),
-                    };
-                    self.common.call_graphql::<SyncKerberosPassword, _>(
-                        ctx,
-                        variables,
-                        Msg::SyncKerberosResponse,
-                        "Error syncing Kerberos password",
-                    );
-                    Ok(false)
+                // Only sync if checkbox was enabled AND we have an encrypted password
+                if self.kerberossync_enabled {
+                    if let Some(enc_pw) = &self.encrypted_password {
+                        let variables = sync_kerberos_password::Variables {
+                            user_id: self.user_id.clone().unwrap(),
+                            encrypted_password: enc_pw.clone(),
+                        };
+                        self.common.call_graphql::<SyncKerberosPassword, _>(
+                            ctx,
+                            variables,
+                            Msg::SyncKerberosResponse,
+                            "Error syncing Kerberos password",
+                        );
+                        Ok(false)
+                    } else {
+                        // Shouldn't happen, but fall back to success
+                        self.handle_msg(ctx, Msg::SuccessfulCreation)
+                    }
                 } else {
+                    // Sync disabled → go straight to success
                     self.handle_msg(ctx, Msg::SuccessfulCreation)
                 }
             }
@@ -328,6 +345,7 @@ impl Component for CreateUserForm {
                     encrypted_password: None,
                     user_id: None,
                     opaque_data: None,
+                    kerberossync_enabled: true,
         }
     }
 
@@ -355,15 +373,35 @@ impl Component for CreateUserForm {
                     (|| {
                         let attrs = self.attributes_schema.as_ref().unwrap();
                         let mut indices: Vec<usize> = (0..attrs.len())
-                        .filter(|&i| !attrs[i].is_readonly)
-                    .collect();
-                    indices.sort_by_key(|&i| attribute_priority(&attrs[i].name));
-                    indices
-                    .into_iter()
-                    .map(|i| get_custom_attribute_input(&attrs[i]))
-                    .collect::<Vec<Html>>()
+                        .filter(|&i| !attrs[i].is_readonly && attrs[i].name != "kerberossync")
+                        .collect();
+                        indices.sort_by_key(|&i| attribute_priority(&attrs[i].name));
+                        indices
+                        .into_iter()
+                        .map(|i| get_custom_attribute_input(&attrs[i]))
+                        .collect::<Vec<Html>>()
                     })()
                 }
+                // NEW: Kerberos sync checkbox — placed here for good UX flow
+                <div class="mb-3 form-check">
+                <input
+                type="checkbox"
+                class="form-check-input"
+                id="kerberossync_checkbox"
+                checked={self.kerberossync_enabled}
+                onchange={ctx.link().callback(|e: Event| {
+                    let checked = e.target_unchecked_into::<web_sys::HtmlInputElement>().checked();
+                    Msg::ToggleKerberosSync(checked)
+                })}
+                />
+                <label class="form-check-label" for="kerberossync_checkbox">
+                {"Enable Kerberos SSO sync"}
+                </label>
+                <div class="form-text text-muted">
+                {"Sync Kerberos principal and password for SSO."}
+                </div>
+                </div>
+                // End new checkbox
                 <Field<CreateUserModel>
                 form={&self.form}
                 label="Password"

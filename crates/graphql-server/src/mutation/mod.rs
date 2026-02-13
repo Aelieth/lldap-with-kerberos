@@ -5,7 +5,7 @@ pub mod inputs;
 pub use inputs::{
     AttributeValue, CreateGroupInput, CreateUserInput, Success, UpdateGroupInput, UpdateUserInput,
 };
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
@@ -105,12 +105,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         user_id: String,
         password: String,
     ) -> FieldResult<Success> {
-        use tracing::{debug_span}; // For logging
+        use tracing::{debug_span};
         let span = debug_span!("[GraphQL mutation] set_user_password");
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized password set"))?;
-        // Simulate OPAQUE client-side (blinds pw, registers server-side)
+        // OPAQUE registration
         use lldap_auth::{opaque, registration};
         use anyhow::Context;
         use rand::rngs::OsRng;
@@ -135,7 +135,31 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         };
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
-        let _ = sync_kerberos_principal(&user_id.to_string(), &password);
+
+        // NEW: Kerberos sync if enabled
+        let user_id_typed = UserId::new(&user_id);
+        let user = handler.get_user_details(&user_id_typed).await
+        .context("Failed to fetch user for Kerberos sync check")?;
+
+        debug!("Admin set password Kerberos sync check for user {}: attributes = {:?}", user_id,
+               user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
+
+        let sync_enabled = user.attributes.iter().any(|attr| {
+            attr.name.as_str() == "kerberossync"
+            && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
+        });
+
+        debug!("Admin set password kerberossync enabled for user {}: {}", user_id, sync_enabled);
+
+        if sync_enabled {
+            if let Err(e) = sync_kerberos_principal(&user_id, &password) {
+                warn!("Kerberos sync failed after admin password set: {}", e);
+            } else {
+                info!("Kerberos sync succeeded after admin password set for user {}", user_id);
+            }
+        } else {
+            info!("Kerberos sync disabled for user {} (kerberossync != '1'), skipping", user_id);
+        }
 
         Ok(Success::new())
     }
@@ -690,7 +714,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     ) -> FieldResult<bool> {
         let span = debug_span!("[GraphQL mutation] sync_kerberos_password");
         let _guard = span.enter();
-        let _handler = context
+        let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized Kerberos sync"))?;
 
@@ -700,13 +724,33 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        sync_kerberos_principal(&user_id, &plain_password)
+        let user_id_typed = UserId::new(&user_id);
+        let user = handler.get_user_details(&user_id_typed).await
         .map_err(|e| FieldError::new(
-            "Kerberos sync failed",
+            "Failed to fetch user for Kerberos sync check",
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        info!("Kerberos sync succeeded for user {}", user_id);
+        info!("GraphQL Kerberos sync check for user {}: attributes = {:?}", user_id,
+               user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
+
+        let sync_enabled = user.attributes.iter().any(|attr| {
+            attr.name.as_str() == "kerberossync"
+            && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
+        });
+
+        info!("GraphQL kerberossync enabled for user {}: {}", user_id, sync_enabled);
+
+        if sync_enabled {
+            sync_kerberos_principal(&user_id, &plain_password)
+            .map_err(|e| FieldError::new(
+                "Kerberos sync failed",
+                graphql_value!({ "details": (e.to_string()) })
+            ))?;
+            info!("Kerberos sync succeeded for user {}", user_id);
+        } else {
+            info!("Kerberos sync disabled for user {} (kerberossync != '1'), skipping", user_id);
+        }
 
         Ok(true)
     }

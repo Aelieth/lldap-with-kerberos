@@ -145,7 +145,7 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
             .user_attributes
             .attributes
             .iter()
-            .filter(|a| a.is_hardcoded)
+            .filter(|a| a.is_hardcoded && a.name.as_str() != "kerberossync")
             .flat_map(|attribute_schema| {
                 let value: Option<DomainAttributeValue> = match attribute_schema.name.as_str() {
                     "user_id" => Some(user.user_id.clone().into_string().into()),

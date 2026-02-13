@@ -333,7 +333,15 @@ impl UserBackendHandler for SqlBackendHandler {
     }
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
-    async fn create_user(&self, request: CreateUserRequest) -> Result<()> {
+    async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
+        // Default kerberossync to "1" (true) if not provided
+        if !request.attributes.iter().any(|attr| attr.name.as_str() == "kerberossync") {
+            request.attributes.push(Attribute {
+                name: "kerberossync".into(),
+                                    value: "1".to_string().into(),
+            });
+        }
+
         let now = chrono::Utc::now().naive_utc();
         let uuid = Uuid::from_name_and_date(request.user_id.as_str(), &now);
         let lower_email = request.email.as_str().to_lowercase();
@@ -350,38 +358,38 @@ impl UserBackendHandler for SqlBackendHandler {
         };
         let mut new_user_attributes = Vec::new();
         self.sql_pool
-            .transaction::<_, (), DomainError>(|transaction| {
-                Box::pin(async move {
-                    let schema = Self::get_schema_with_transaction(transaction).await?;
-                    for attribute in request.attributes {
-                        if schema
-                            .user_attributes
-                            .get_attribute_type(&attribute.name)
-                            .is_some()
+        .transaction::<_, (), DomainError>(|transaction| {
+            Box::pin(async move {
+                let schema = Self::get_schema_with_transaction(transaction).await?;
+                for attribute in request.attributes {
+                    if schema
+                        .user_attributes
+                        .get_attribute_type(&attribute.name)
+                        .is_some()
                         {
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
-                                attribute_name: Set(attribute.name),
-                                value: Set(attribute.value.into()),
+                                                     attribute_name: Set(attribute.name),
+                                                     value: Set(attribute.value.into()),
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
                                 "Attribute name {} doesn't exist in the user schema,
-                                    yet was attempted to be inserted in the database",
+                                yet was attempted to be inserted in the database",
                                 &attribute.name
                             )));
                         }
-                    }
-                    new_user.insert(transaction).await?;
-                    if !new_user_attributes.is_empty() {
-                        model::UserAttributes::insert_many(new_user_attributes)
-                            .exec(transaction)
-                            .await?;
-                    }
-                    Ok(())
-                })
+                }
+                new_user.insert(transaction).await?;
+                if !new_user_attributes.is_empty() {
+                    model::UserAttributes::insert_many(new_user_attributes)
+                    .exec(transaction)
+                    .await?;
+                }
+                Ok(())
             })
-            .await?;
+        })
+        .await?;
         Ok(())
     }
 

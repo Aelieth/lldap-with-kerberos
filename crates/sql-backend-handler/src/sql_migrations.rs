@@ -5,8 +5,8 @@ use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
     sea_query::{
-        BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query, SimpleExpr,
-        Table, Value, all,
+        Alias, BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query,
+        SimpleExpr, Table, Value, all,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -1162,6 +1162,89 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
     Ok(transaction)
 }
 
+async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
+    let backend = transaction.get_database_backend();
+
+    // Check if kerberossync already exists
+    let count_row = transaction
+    .query_one(
+        backend.build(
+            &Query::select()
+            .from(UserAttributeSchema::Table)
+            .expr_as(
+                Func::count(Expr::col(UserAttributeSchema::UserAttributeSchemaName)),
+                     Alias::new("count"),
+            )
+            .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq("kerberossync"))
+            .to_owned(),
+        ),
+    )
+    .await?;
+
+    let count: i64 = count_row.and_then(|row| row.try_get("", "count").ok()).unwrap_or(0);
+
+    if count == 0 {
+        info!("Adding kerberossync to user_attribute_schema during migration");
+        transaction
+        .execute(
+            backend.build(
+                &Query::insert()
+                .into_table(UserAttributeSchema::Table)
+                .columns([
+                    UserAttributeSchema::UserAttributeSchemaName,
+                    UserAttributeSchema::UserAttributeSchemaType,
+                    UserAttributeSchema::UserAttributeSchemaIsList,
+                    UserAttributeSchema::UserAttributeSchemaIsUserVisible,
+                    UserAttributeSchema::UserAttributeSchemaIsUserEditable,
+                    UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                ])
+                .values_panic([
+                    "kerberossync".into(),
+                              AttributeType::Integer.into(),
+                              false.into(),
+                              true.into(),
+                              true.into(),
+                              true.into(),
+                ])
+                .to_owned(),
+            ),
+        )
+        .await?;
+
+        // Set kerberossync="0" for existing users using raw SQL
+        info!("Setting default kerberossync='0' for existing users during migration");
+
+        let insert_sql = format!(
+            "INSERT INTO {} ({}, {}, {})
+        SELECT u.{}, 'kerberossync', '0'
+        FROM {} u
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {} ua
+            WHERE ua.{} = u.{}
+            AND ua.{} = 'kerberossync'
+        )",
+        UserAttributes::Table.to_string(),
+                                 UserAttributes::UserAttributeUserId.to_string(),
+                                 UserAttributes::UserAttributeName.to_string(),
+                                 UserAttributes::UserAttributeValue.to_string(),
+                                 Users::UserId.to_string(),
+                                 Users::Table.to_string(),
+                                 UserAttributes::Table.to_string(),
+                                 UserAttributes::UserAttributeUserId.to_string(),
+                                 Users::UserId.to_string(),
+                                 UserAttributes::UserAttributeName.to_string()
+        );
+
+        transaction
+        .execute(sea_orm::Statement::from_string(backend, insert_sql))
+        .await?;
+    } else {
+        info!("kerberossync already exists, skipping migration");
+    }
+
+    Ok(transaction)
+}
+
 // This is needed to make an array of async functions.
 macro_rules! to_sync {
     ($l:ident) => {
@@ -1193,6 +1276,7 @@ pub(crate) async fn migrate_from_version(
         to_sync!(migrate_to_v9),
         to_sync!(migrate_to_v10),
         to_sync!(migrate_to_v11),
+        to_sync!(migrate_to_v12),
     ];
     assert_eq!(migrations.len(), (LAST_SCHEMA_VERSION.0 - 1) as usize);
     for migration in 2..=last_version.0 {
