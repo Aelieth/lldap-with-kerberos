@@ -1165,7 +1165,6 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    // Check if kerberossync already exists
     let count_row = transaction
     .query_one(
         backend.build(
@@ -1184,7 +1183,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     let count: i64 = count_row.and_then(|row| row.try_get("", "count").ok()).unwrap_or(0);
 
     if count == 0 {
-        info!("Adding kerberossync to user_attribute_schema during migration");
+        info!("Adding kerberossync (Integer flag: 1=enabled) to user_attribute_schema");
         transaction
         .execute(
             backend.build(
@@ -1202,8 +1201,8 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                     "kerberossync".into(),
                               AttributeType::Integer.into(),
                               false.into(),
-                              true.into(),
-                              true.into(),
+                              false.into(),  // Admin-only visible
+                              false.into(),  // Not self-editable
                               true.into(),
                 ])
                 .to_owned(),
@@ -1211,9 +1210,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         )
         .await?;
 
-        // Set kerberossync="0" for existing users using raw SQL
-        info!("Setting default kerberossync='0' for existing users during migration");
-
+        info!("Setting default kerberossync='0' for existing users");
         let insert_sql = format!(
             "INSERT INTO {} ({}, {}, {})
         SELECT u.{}, 'kerberossync', '0'
@@ -1239,7 +1236,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .execute(sea_orm::Statement::from_string(backend, insert_sql))
         .await?;
     } else {
-        info!("kerberossync already exists, skipping migration");
+        info!("kerberossync already exists, skipping");
     }
 
     Ok(transaction)
