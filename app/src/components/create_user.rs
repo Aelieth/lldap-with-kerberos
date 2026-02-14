@@ -396,10 +396,9 @@ impl Component for CreateUserForm {
                 />
                 <label class="form-check-label" for="kerberossync_checkbox">
                 {"Kerberos Sync"}
-                <i class="bi-info-circle ms-1"
-                data-bs-toggle="tooltip" data-bs-placement="top"
-                title="Sync Kerberos principal and password for SSO.">
-                </i>
+                <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
+                <i aria-label="Info" class="bi bi-info-circle"></i>
+                </button>
                 </label>
                 </div>
                 // End new checkbox
