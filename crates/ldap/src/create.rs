@@ -61,11 +61,11 @@ async fn create_user(
             }
         }
     }
-    let attributes: HashMap<String, Vec<u8>> = attributes
-        .into_iter()
-        .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
-        .map(parse_attribute)
-        .collect::<LdapResult<_>>()?;
+    let mut attributes: HashMap<String, Vec<u8>> = attributes
+    .into_iter()
+    .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
+    .map(parse_attribute)
+    .collect::<LdapResult<_>>()?;
     fn decode_attribute_value(val: &[u8]) -> LdapResult<String> {
         std::str::from_utf8(val)
             .map_err(|e| LdapError {
@@ -73,6 +73,10 @@ async fn create_user(
                 message: format!("Attribute value is invalid UTF-8: {e:#?} (value {val:?})"),
             })
             .map(str::to_owned)
+    }
+    // Default kerberossync=1 (enabled) if not provided in LDAP add
+    if !attributes.contains_key("kerberossync") {
+        attributes.insert("kerberossync".to_ascii_lowercase(), "1".as_bytes().to_vec());
     }
     let get_attribute = |name| {
         attributes

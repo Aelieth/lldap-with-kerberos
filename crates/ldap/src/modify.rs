@@ -11,8 +11,7 @@ use lldap_access_control::UserReadableBackendHandler;
 use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::sync_kerberos_principal;
-use tracing::{info, warn};
+use tracing::warn;
 
 async fn handle_modify_change(
     readable_handler: &impl UserReadableBackendHandler,
@@ -53,7 +52,7 @@ async fn handle_modify_change(
                 message: format!("Error while changing the password: {e:#?}"),
             })?;
 
-            // Kerberos sync on LDAP password change (with sync check)
+            // Kerberos sync on LDAP password change
             if let Ok(plain_pass) = std::str::from_utf8(value) {
                 // Fetch user to check kerberossync attribute
                 let user = match readable_handler.get_user_details(&user_id).await {
@@ -64,24 +63,14 @@ async fn handle_modify_change(
                     }
                 };
 
-                info!("LDAP Kerberos sync check for user {}: attributes = {:?}", user_id,
-                       user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
-
                 let sync_enabled = user.attributes.iter().any(|attr| {
                     attr.name.as_str() == "kerberossync"
                     && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
                 });
 
-                info!("LDAP kerberossync enabled for user {}: {}", user_id, sync_enabled);
-
-                if sync_enabled {
-                    if let Err(e) = sync_kerberos_principal(user_id.as_str(), plain_pass) {
-                        warn!("Kerberos sync failed after LDAP password change: {}", e);
-                    } else {
-                        info!("Kerberos sync triggered on LDAP password change for {}", user_id);
-                    }
-                } else {
-                    info!("Kerberos sync disabled for user {} on LDAP password change (kerberossync != '1'), skipping", user_id);
+                // Central call
+                if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
+                    warn!("Kerberos sync failed after LDAP password change: {}", e);
                 }
             }
             Ok(())

@@ -8,6 +8,7 @@ use lldap_domain::types::{GroupName, UserId};
 use lldap_domain_handlers::handler::GroupRequestFilter;
 use lldap_domain_model::error::DomainError;
 use tracing::instrument;
+use lldap_kerberos::delete_kerberos_principal;
 
 pub(crate) fn make_del_response(code: LdapResultCode, message: String) -> LdapOp {
     LdapOp::DelResponse(LdapResultOp {
@@ -60,6 +61,11 @@ async fn delete_user(
             code: LdapResultCode::OperationsError,
             message: format!("Error while deleting user: {e:?}"),
         })?;
+        // Clean up Kerberos principal (idempotent/safe if none exists)
+        if let Err(e) = delete_kerberos_principal(user_id.as_str()) {
+            tracing::warn!("Failed to delete Kerberos principal for deleted user {}: {}", user_id, e);
+            // Non-fatal—user already deleted from LLDAP
+        }
     Ok(vec![make_del_response(
         LdapResultCode::Success,
         String::new(),

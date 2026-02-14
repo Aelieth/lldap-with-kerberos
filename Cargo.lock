@@ -2921,6 +2921,7 @@ dependencies = [
  "bindgen",
  "lazy_static",
  "lldap_domain",
+ "lldap_domain_handlers",
  "minijinja",
  "pkg-config",
  "rand 0.8.5",
