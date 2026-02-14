@@ -395,11 +395,12 @@ impl Component for CreateUserForm {
                 })}
                 />
                 <label class="form-check-label" for="kerberossync_checkbox">
-                {"Enable Kerberos SSO sync"}
+                {"Kerberos Sync"}
+                <i class="bi-info-circle ms-1"
+                data-bs-toggle="tooltip" data-bs-placement="top"
+                title="Sync Kerberos principal and password for SSO.">
+                </i>
                 </label>
-                <div class="form-text text-muted">
-                {"Sync Kerberos principal and password for SSO."}
-                </div>
                 </div>
                 // End new checkbox
                 <Field<CreateUserModel>
