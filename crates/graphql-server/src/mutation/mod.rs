@@ -78,11 +78,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             user.last_name,
             user.avatar,
         );
+        let mut consolidated_with_default = consolidated_attributes.clone();
+        if !consolidated_with_default.iter().any(|attr| attr.name.as_str().to_lowercase() == "kerberossync") {
+            consolidated_with_default.push(inputs::AttributeValue {
+                name: "kerberossync".to_string(),
+                                           value: vec!["1".to_string()],  // Enabled by default
+            });
+        }
         let UnpackedAttributes {
             email,
             display_name,
             attributes,
-        } = unpack_attributes(consolidated_attributes, &schema, true)?;
+        } = unpack_attributes(consolidated_with_default, &schema, true)?;
         handler
             .create_user(CreateUserRequest {
                 user_id: user_id.clone(),
@@ -1107,30 +1114,30 @@ mod tests {
         mock,
         ValidationResults {
             user: UserId::new("admin"),
-                                                                   permission: Permission::Admin,
+            permission: Permission::Admin,
         },
     );
     let vars = Variables::from([(
         "input".to_string(),
-                                 InputValue::object(vec![
-                                     ("service_name".to_string(), InputValue::scalar("HTTP")),
-                                                    ("hostname".to_string(), InputValue::scalar("keycloak.example.com")),
-                                 ].into_iter().collect()),
+        InputValue::object(vec![
+        ("service_name".to_string(), InputValue::scalar("HTTP")),
+        ("hostname".to_string(), InputValue::scalar("keycloak.example.com")),
+        ].into_iter().collect()),
     )]);
     let schema = mutation_schema(
         Query::<MockTestBackendHandler>::new(),
-                                 Mutation::<MockTestBackendHandler>::new(),
+        Mutation::<MockTestBackendHandler>::new(),
     );
     assert_eq!(
         execute(QUERY, None, &schema, &vars, &context).await,
-               Ok((
-                   graphql_value!({
-                       "createServicePrincipal": {
-                           "ok": true
-                       }
-                   }),
-                   vec![]
-               ))
+            Ok((
+                graphql_value!({
+                    "createServicePrincipal": {
+                        "ok": true
+                    }
+                }),
+                vec![]
+            ))
     );
     }
 }
