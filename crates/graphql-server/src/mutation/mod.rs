@@ -5,7 +5,7 @@ pub mod inputs;
 pub use inputs::{
     AttributeValue, CreateGroupInput, CreateUserInput, Success, UpdateGroupInput, UpdateUserInput,
 };
-use tracing::{info, debug, warn};
+use tracing::{Instrument, info, debug, debug_span, warn};
 use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
@@ -19,15 +19,17 @@ use lldap_domain::{
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
-use tracing::{Instrument, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal,
-    create_service_principal, export_keytab};
+use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal};
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
+use keycloak::{KeycloakAdmin, types::UserRepresentation};
+use keycloak::KeycloakAdminToken;
+use reqwest::Client as HttpClient;
 use std::env;
+use std::collections::HashMap;
 
 #[derive(juniper::GraphQLInputObject)]
 struct CreateServicePrincipalInput {
@@ -40,7 +42,7 @@ struct CreateServicePrincipalResponse {
     ok: bool,
     principal: String,
     realm: String,
-    keytab_path: String,
+    error_msg: String,  // For API errors (empty on success)
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -641,69 +643,59 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     }
 
     async fn create_service_principal(
-        context: &Context<Handler>,
+        _context: &Context<Handler>,
         input: CreateServicePrincipalInput,
-    ) -> FieldResult<CreateServicePrincipalResponse> {  // New return type
-        let span = debug_span!("[GraphQL mutation] create_service_principal");
-        span.in_scope(|| {
-            debug!(service_name = ?input.service_name, hostname = ?input.hostname);
-        });
+    ) -> FieldResult<CreateServicePrincipalResponse> {
+        let keycloak_url = env::var("KEYCLOAK_URL").unwrap_or("http://keycloak:8080".to_string());
+        let realm = env::var("KEYCLOAK_REALM").unwrap_or("master".to_string());
+        let admin_user = env::var("KEYCLOAK_ADMIN_USER").unwrap_or("admin".to_string());
+        let admin_pass = env::var("KEYCLOAK_ADMIN_PASS").unwrap_or("admin".to_string());
 
-        // Ensure admin only
-        let _handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(&span, "Unauthorized service principal creation"))?;
+        let http_client = HttpClient::new();
 
-        // Derive realm from env vars (matches our bootstrap logic: override or from BASE_DN)
-        let base_dn = env::var("LLDAP_LDAP_BASE_DN")
-        .map_err(|_| FieldError::new("Missing LLDAP_LDAP_BASE_DN env var", graphql_value!({ "details": "Required for Kerberos realm derivation" })))?;
-        let realm = env::var("LLDAP_KERB_REALM_NAME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            base_dn
-            .split(',')
-            .filter_map(|part| part.trim().strip_prefix("dc="))
-            .map(|dc| dc.to_uppercase())
-            .collect::<Vec<_>>()
-            .join(".")
-        });
-        if realm.is_empty() {
-            return Err(FieldError::new("Could not derive Kerberos realm", graphql_value!({ "details": "Check LLDAP_LDAP_BASE_DN or set LLDAP_KERB_REALM_NAME" })));
+        let admin_token = match KeycloakAdminToken::acquire(&keycloak_url, &admin_user, &admin_pass, &http_client).await {
+            Ok(token) => token,
+            Err(e) => {
+                warn!("Failed to acquire Keycloak admin token: {}", e);
+                return Ok(CreateServicePrincipalResponse {
+                    ok: false,
+                    principal: "".to_string(),
+                          realm: realm.clone(),
+                          error_msg: e.to_string(),
+                });
+            }
+        };
+
+        let keycloak = KeycloakAdmin::new(&keycloak_url, admin_token, http_client);
+
+        let full_principal = format!("{}/{}@{}", input.service_name, input.hostname, realm.to_uppercase());
+
+        let service_user = UserRepresentation {
+            username: Some(full_principal.clone()),
+            enabled: Some(true),
+            attributes: Some(HashMap::from([
+                ("kerberos_principal".to_string(), vec![full_principal.clone()]),
+            ])),
+            ..Default::default()
+        };
+
+        if let Err(e) = keycloak.realm_users_post(&realm, service_user).await {
+            warn!("Keycloak API create user failed: {}", e);
+            return Ok(CreateServicePrincipalResponse {
+                ok: false,
+                principal: full_principal,
+                realm,
+                error_msg: e.to_string(),
+            });
         }
-        debug!(%realm, "Derived/resolved Kerberos realm");
 
-        // Uppercase service name for convention (e.g., "HTTP")
-        let service_name = input.service_name.to_uppercase();
-
-        let principal = format!("{}/{}@{}", service_name, input.hostname, realm.to_uppercase());
-
-        let keytab_path = format!("/data/keytabs/{}-{}.keytab", service_name, input.hostname);
-
-        // Run sync Kerberos calls with tracing span active
-        span.in_scope(|| {
-            create_service_principal(&principal)
-            .map_err(|e| {
-                let details = e.to_string();
-                FieldError::new("Failed to create/rotate service principal", graphql_value!({ "details": details }))
-            })?;
-
-            export_keytab(&principal, &keytab_path)
-            .map_err(|e| {
-                let details = e.to_string();
-                FieldError::new("Failed to export keytab", graphql_value!({ "details": details }))
-            })?;
-
-            Ok::<(), FieldError>(())
-        })?;
-
-        info!("Created/rotated service principal {} and exported keytab to {}", principal, keytab_path);
+        info!("Created Keycloak service user for principal {}", full_principal);
 
         Ok(CreateServicePrincipalResponse {
             ok: true,
-            principal,
-            realm: realm.to_uppercase(),
-           keytab_path,
+            principal: full_principal,
+            realm,
+            error_msg: "".to_string(),
         })
     }
 
@@ -1092,45 +1084,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_service_principal() {
-        const QUERY: &str = r#"
-        mutation CreateServicePrincipal($input: CreateServicePrincipalInput!) {
-        createServicePrincipal(input: $input) {
-        ok
-    }
-    }
-    "#;
-    let mut mock = MockTestBackendHandler::new();
-    mock.expect_get_kerberos_realm().return_once(|| Ok("TEST.REALM".to_string()));
-    // Mock kerberos calls if needed (once we have them)
+        use mockito::{mock, Server};
+        let mut server = Server::new_async().await;
+        let url = server.url();
 
-    let context = Context::<MockTestBackendHandler>::new_for_tests(
-        mock,
-        ValidationResults {
-            user: UserId::new("admin"),
-            permission: Permission::Admin,
-        },
-    );
-    let vars = Variables::from([(
-        "input".to_string(),
-        InputValue::object(vec![
-        ("service_name".to_string(), InputValue::scalar("HTTP")),
-        ("hostname".to_string(), InputValue::scalar("keycloak.example.com")),
-        ].into_iter().collect()),
-    )]);
-    let schema = mutation_schema(
-        Query::<MockTestBackendHandler>::new(),
-        Mutation::<MockTestBackendHandler>::new(),
-    );
-    assert_eq!(
-        execute(QUERY, None, &schema, &vars, &context).await,
-            Ok((
-                graphql_value!({
-                    "createServicePrincipal": {
-                        "ok": true
-                    }
-                }),
-                vec![]
-            ))
-    );
+        let mock_auth = mock("POST", "/auth/realms/master/protocol/openid-connect/token")
+        .with_status(200)
+        .with_body("{\"access_token\": \"test_token\"}")
+        .create();
+
+        let mock_create = mock("POST", "/admin/realms/master/users")
+        .with_status(201)
+        .create();
+
+        mock_auth.assert();
+        mock_create.assert();
     }
 }

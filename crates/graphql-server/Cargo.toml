@@ -20,6 +20,7 @@ rand = "0.8"
 async-trait = "0.1"
 lldap_opaque_handler = { path = "../opaque-handler" }
 lldap-kerberos = { path = "../kerberos" }
+keycloak = "26.5.2"
 
 [dependencies.chrono]
 features = ["serde"]
@@ -49,6 +50,10 @@ path = "../sql-backend-handler"
 
 [dependencies.lldap_validation]
 path = "../validation"
+
+[dependencies.reqwest]
+version = "0.13.2"
+features = ["json"]
 
 [dependencies.serde]
 workspace = true
