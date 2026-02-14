@@ -382,26 +382,26 @@ impl Component for CreateUserForm {
                         .collect::<Vec<Html>>()
                     })()
                 }
-                // NEW: Kerberos sync checkbox — placed here for good UX flow
-                <div class="mb-3 form-check">
-                <input
-                type="checkbox"
-                class="form-check-input"
-                id="kerberossync_checkbox"
-                checked={self.kerberossync_enabled}
-                onchange={ctx.link().callback(|e: Event| {
-                    let checked = e.target_unchecked_into::<web_sys::HtmlInputElement>().checked();
-                    Msg::ToggleKerberosSync(checked)
-                })}
-                />
-                <label class="form-check-label" for="kerberossync_checkbox">
-                {"Kerberos Sync"}
+                // NEW: Kerberos sync toggle switch — placed here for good UX flow
+                <div class="mb-3 row">
+                <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
+                {"Kerberos Sync :"}
                 <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
                 <i aria-label="Info" class="bi bi-info-circle"></i>
                 </button>
                 </label>
+                <div class="col-8 d-flex align-items-center">
+                <div class="btn-group" role="group" style="width: 120px;">  // Width to match Clear, adjust if needed
+                <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
+                {"On"}
+                </button>
+                <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
+                {"Off"}
+                </button>
                 </div>
-                // End new checkbox
+                </div>
+                </div>
+                // End new toggle
                 <Field<CreateUserModel>
                 form={&self.form}
                 label="Password"
