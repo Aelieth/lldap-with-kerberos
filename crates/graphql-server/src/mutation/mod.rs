@@ -143,29 +143,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
 
-        // NEW: Kerberos sync if enabled
+        // Central Kerberos sync if enabled
         let user_id_typed = UserId::new(&user_id);
         let user = handler.get_user_details(&user_id_typed).await
         .context("Failed to fetch user for Kerberos sync check")?;
-
-        debug!("Admin set password Kerberos sync check for user {}: attributes = {:?}", user_id,
-               user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
 
         let sync_enabled = user.attributes.iter().any(|attr| {
             attr.name.as_str() == "kerberossync"
             && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
         });
 
-        debug!("Admin set password kerberossync enabled for user {}: {}", user_id, sync_enabled);
-
-        if sync_enabled {
-            if let Err(e) = sync_kerberos_principal(&user_id, &password) {
-                warn!("Kerberos sync failed after admin password set: {}", e);
-            } else {
-                info!("Kerberos sync succeeded after admin password set for user {}", user_id);
-            }
-        } else {
-            info!("Kerberos sync disabled for user {} (kerberossync != '1'), skipping", user_id);
+        if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, &user_id, &password) {
+            warn!("Kerberos sync failed after admin password set: {}", e);
         }
 
         Ok(Success::new())
@@ -364,28 +353,32 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| {
             debug!(?user_id);
         });
-        let user_id = UserId::new(&user_id);
+        let user_id_typed = UserId::new(&user_id);
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized user deletion"))?;
 
-        if context.validation_result.user == user_id {
+        if context.validation_result.user == user_id_typed {
             span.in_scope(|| debug!("Cannot delete current user"));
             return Err("Cannot delete current user".into());
         }
 
         // Delete from LLDAP
         handler
-        .delete_user(&user_id)
+        .delete_user(&user_id_typed)
         .instrument(span.clone())
         .await
         .map_err(|e| FieldError::new(
-            "Kerberos sync failed",
+            "User deletion failed",
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        // Delete Kerberos principal (non-fatal)
-        let _ = delete_kerberos_principal(&user_id.to_string());
+        // Delete Kerberos principal (non-fatal with warn)
+        if let Err(e) = delete_kerberos_principal(&user_id) {
+            warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
+        } else {
+            info!("Deleted Kerberos principal for user {}", user_id);
+        }
 
         Ok(Success::new())
     }
