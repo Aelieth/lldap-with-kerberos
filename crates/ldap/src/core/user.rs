@@ -15,6 +15,7 @@ use lldap_domain::{
     public_schema::PublicSchema,
     types::{
         AttributeName, AttributeType, GroupDetails, LdapObjectClass, User, UserAndGroups, UserId,
+        normalize_attribute_name,
     },
 };
 use lldap_domain_handlers::handler::{UserListerBackendHandler, UserRequestFilter};
@@ -48,7 +49,9 @@ pub fn get_user_attribute(
     ignored_user_attributes: &[AttributeName],
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
-    let attribute_values = match map_user_field(attribute, schema) {
+    let normalized = normalize_attribute_name(attribute.as_str());  // Normalize alias to primary
+    let attribute = AttributeName::from(normalized.as_str());  // Recreate with primary
+    let attribute_values = match map_user_field(&attribute, schema) {
         UserFieldType::ObjectClass => {
             let mut classes: Vec<Vec<u8>> = get_default_user_object_classes_vec_u8();
 
@@ -107,10 +110,10 @@ pub fn get_user_attribute(
                 )
             }
             _ => {
-                if ignored_user_attributes.contains(attribute) {
+                if ignored_user_attributes.contains(&attribute) {
                     return None;
                 }
-                get_custom_attribute(&user.attributes, attribute).or_else(|| {
+                get_custom_attribute(&user.attributes, &attribute).or_else(|| {
                     warn!(
                         r#"Ignoring unrecognized user attribute: {}. To disable this warning, add it to "ignored_user_attributes" in the config."#,
                         attribute
