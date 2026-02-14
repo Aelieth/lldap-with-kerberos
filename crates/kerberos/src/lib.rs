@@ -450,6 +450,21 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
     Ok(())
 }
 
+/// Central call for Kerberos sync—callers pass if sync is enabled (from attr check).
+pub fn sync_kerberos_if_enabled(
+    sync_enabled: bool,
+    user_id: &str,
+    plain_password: &str,
+) -> Result<()> {
+    if sync_enabled {
+        info!("Kerberos sync enabled for user {}; triggering principal sync", user_id);
+        sync_kerberos_principal(user_id, plain_password)
+    } else {
+        info!("Kerberos sync disabled for user {}; skipping", user_id);
+        Ok(())
+    }
+}
+
 pub fn create_service_principal(full_principal: &str) -> Result<()> {
     // Reuse exact realm derivation from sync_kerberos_principal
     let base_dn = env::var("LLDAP_LDAP_BASE_DN")
