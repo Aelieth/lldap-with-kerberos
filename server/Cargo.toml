@@ -49,6 +49,7 @@ tracing-attributes = "^0.1.21"
 tracing-log = "*"
 urlencoding = "2"
 webpki-roots = "0.22.2"
+keycloak = "~26.5"
 
 [dependencies.chrono]
 features = ["serde"]
