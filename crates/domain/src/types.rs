@@ -13,7 +13,6 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr};
-
 pub use lldap_auth::types::UserId;
 
 #[derive(
@@ -699,4 +698,17 @@ mod tests {
         assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&i64::MIN).0.len());
         assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&-1000i64).0.len());
     }
+}
+
+// Custom attribute aliases (extend for more)
+pub const CUSTOM_ATTRIBUTE_ALIASES: &[(&'static str, &'static str)] = &[
+    ("kerberos_sync", "kerberossync"),
+];
+
+pub fn normalize_attribute_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    CUSTOM_ATTRIBUTE_ALIASES.iter()
+    .find(|(alias, _)| alias == &lower.as_str())
+    .map(|(_, primary)| primary.to_string())
+    .unwrap_or(lower)
 }
