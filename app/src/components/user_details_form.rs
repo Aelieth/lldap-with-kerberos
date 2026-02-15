@@ -174,8 +174,8 @@ impl Component for UserDetailsForm {
                     {"Off"}
                     </button>
                     </div>
-                    <div class="form-text text-muted">
-                    {"  Important: Changing to On, user password must be changed to sync."}
+                    <div class="form-text text-muted ms-3">
+                    {"Important: Change to ON: Requires user password change to sync. Change to OFF: Kerberos principal immediately removed."}
                     </div>
                     </div>
                     </div>
@@ -230,14 +230,12 @@ impl UserDetailsForm {
             .unwrap_or(!a.values.is_empty())
         });
         // Handle kerberossync from toggle if changed
-        let current_kerberossync = self.user.attributes.iter().find(|attr| attr.name == "kerberossync").map(|attr| attr.value[0].clone()).unwrap_or("0".to_string());
-        let new_kerberossync = if self.kerberossync_enabled { "1" } else { "0" }.to_string();
-        if new_kerberossync != current_kerberossync {
-            all_values.push(AttributeValue {
-                name: "kerberossync".to_string(),
-                            values: vec![new_kerberossync],
-            });
-        }
+        // Always push current kerberossync toggle state (override to ensure save)
+        all_values.retain(|a| a.name != "kerberossync");  // Remove if present
+        all_values.push(AttributeValue {
+            name: "kerberossync".to_string(),
+                        values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
+        });
         let remove_attributes: Option<Vec<String>> = if all_values.is_empty() {
             None
         } else {

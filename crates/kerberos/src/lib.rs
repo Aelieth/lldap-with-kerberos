@@ -1,6 +1,4 @@
 use anyhow::{Context, Result};
-use std::io::{BufReader, Write};
-use std::process::{Command, Stdio};
 use tracing::{info, warn};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -54,46 +52,38 @@ pub fn decrypt_password(encrypted: &str) -> Result<String> {
     String::from_utf8(plain_data).context("UTF-8 decode failed")
 }
 
-fn run_kadmin_interactive<F>(mut cmd_handler: F) -> Result<()>
-where
-F: FnMut(&mut std::process::ChildStdin, &mut BufReader<std::process::ChildStdout>) -> Result<()>,
-{
-    let mut child = Command::new("/usr/sbin/kadmin.local")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .context("Failed to spawn kadmin.local")?;
-
-    let mut stdin = child.stdin.take().context("Failed to take stdin")?;
-    let stdout = child.stdout.take().context("Failed to take stdout")?;
-    let mut reader = BufReader::new(stdout);
-
-    cmd_handler(&mut stdin, &mut reader)?;
-
-    writeln!(stdin, "quit")?;
-    stdin.flush()?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("kadmin.local failed: {}", stderr));
-    }
-    Ok(())
-}
-
-
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
-    let realm = env::var("LLDAP_KERB_REALM_NAME").unwrap_or_else(|_| "TESTLAB.COM".to_string());
-    let principal = format!("{}@{}", username, realm);
 
-    run_kadmin_interactive(|stdin, _reader| {
-        writeln!(stdin, "delprinc -force {}", principal)?;
-        stdin.flush()?;
-        Ok(())
-    })?;
+    // Exact realm derivation from sync_principal
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .unwrap_or_else(|_| "dc=example,dc=com".to_string());
 
-    info!("Deleted principal: {}", principal);
-    Ok(())
+    let domain = base_dn
+    .split(',')
+    .filter_map(|part| part.strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_lowercase();
+
+    let derived_realm = domain.to_uppercase();
+
+    let realm = env::var("LLDAP_KERB_REALM_NAME")
+    .ok()
+    .filter(|s| !s.is_empty())
+    .unwrap_or(derived_realm);
+
+    let realm_upper = realm.to_uppercase();
+
+    let full_principal = format!("{}@{}", username, realm_upper);
+    info!("Attempting to delete Kerberos principal via FFI: {}", full_principal);
+
+    let admin_principal = format!("admin/admin@{}", realm_upper);
+    let keytab_path = "/data/kadm5.keytab";
+
+    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
+    .context("Failed to initialize Kerberos admin handle with keytab for delete")?;
+
+    handle.delete_principal(&full_principal)
 }
 
 pub fn get_public_key_der_base64() -> String {
@@ -322,6 +312,32 @@ impl Kadm5Handle {
         Ok(())
     }
 
+    pub fn delete_principal(&self, principal_str: &str) -> Result<()> {
+        let principal_c = CString::new(principal_str).context("Invalid principal string for CString")?;
+
+        let mut principal: krb5_principal = ptr::null_mut();
+
+        let ret = unsafe { bindings::krb5_parse_name(self.context, principal_c.as_ptr(), &mut principal) };
+        if ret != 0 {
+            return Err(anyhow::anyhow!("Failed to parse principal {}: krb5_parse_name ret {}", principal_str, ret));
+        }
+
+        let ret = unsafe { bindings::kadm5_delete_principal(self.handle as *mut c_void, principal) };
+
+        unsafe { bindings::krb5_free_principal(self.context, principal) };
+
+        if ret == 0 {
+            info!("Deleted principal via FFI: {}", principal_str);
+            Ok(())
+        } else if ret == bindings::KADM5_UNK_PRINC as i64 {
+            info!("Principal {} does not exist, skipping delete", principal_str);
+            Ok(())
+        } else {
+            warn!("FFI delete principal failed for {} (code {})", principal_str, ret);
+            Err(anyhow::anyhow!("FFI delete principal failed (code {})", ret))
+        }
+    }
+
     pub fn set_random_key_for_service(&self, principal_name: &str) -> Result<()> {
         let principal_cstr = CString::new(principal_name).context("Invalid principal name")?;
 
@@ -398,7 +414,6 @@ impl Drop for Kadm5Handle {
 }
 
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-    use tracing::{info, warn};
 
     // === Dynamic realm derivation (matches kerberos_manager) ===
     // Start with base_dn from env (LLDAP requires it)

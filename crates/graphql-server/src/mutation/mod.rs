@@ -59,6 +59,21 @@ impl<Handler: BackendHandler + OpaqueHandler> Default for Mutation<Handler> {
     }
 }
 
+fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
+    attrs.iter()
+    .find(|a| a.name.as_str() == "kerberossync")
+    .and_then(|a| match &a.value {
+        lldap_domain::types::AttributeValue::Integer(
+            lldap_domain::types::Cardinality::Singleton(i)
+        ) if *i == 1 => Some("1"),
+              lldap_domain::types::AttributeValue::Integer(
+                  lldap_domain::types::Cardinality::Singleton(i)
+              ) if *i == 0 => Some("0"),
+              _ => None,
+    })
+    .unwrap_or("0")
+}
+
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     async fn create_user(
@@ -201,24 +216,24 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         });
         let user_id = UserId::new(&user.id);
         let handler = context
-            .get_writeable_handler(&user_id)
-            .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
+        .get_writeable_handler(&user_id)
+        .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
         let is_admin = context.validation_result.is_admin();
         let schema = handler.get_schema().await?;
         // Consolidate attributes and fields into a combined attribute list
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
-            user.first_name,
-            user.last_name,
-            user.avatar,
+                                                             user.first_name,
+                                                             user.last_name,
+                                                             user.avatar,
         );
         // Extract any empty attributes into a list of attributes for deletion
         let (delete_attrs, insert_attrs): (Vec<_>, Vec<_>) = consolidated_attributes
-            .into_iter()
-            .partition(|a| a.value == vec!["".to_string()]);
+        .into_iter()
+        .partition(|a| a.value == vec!["".to_string()]);
         // Combine lists of attributes for removal
         let mut delete_attributes: Vec<String> =
-            delete_attrs.iter().map(|a| a.name.to_owned()).collect();
+        delete_attrs.iter().map(|a| a.name.to_owned()).collect();
         delete_attributes.extend(user.remove_attributes.unwrap_or_default());
         // Unpack attributes for update
         let UnpackedAttributes {
@@ -226,27 +241,67 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             display_name,
             attributes: insert_attributes,
         } = unpack_attributes(insert_attrs, &schema, is_admin)?;
+
         let display_name = display_name.or_else(|| {
             // If the display name is not inserted, but removed, reset it.
             delete_attributes
-                .iter()
-                .find(|attr| *attr == "display_name")
-                .map(|_| String::new())
+            .iter()
+            .find(|attr| *attr == "display_name")
+            .map(|_| String::new())
         });
+
+        // === KERBEROS SYNC LOGIC ===
+        // Fetch old user *before* update so we can detect the transition
+        let old_user = handler.get_user_details(&user_id).await
+        .map_err(|e| FieldError::new(
+            "Failed to fetch old user for Kerberos sync actions",
+            graphql_value!({ "details": (e.to_string()) })
+        ))?;
+
+        // Perform the actual LLDAP update
         handler
-            .update_user(UpdateUserRequest {
-                user_id,
-                email: user.email.map(Into::into).or(email),
-                display_name: user.display_name.or(display_name),
-                delete_attributes: delete_attributes
-                    .into_iter()
-                    .filter(|attr| attr != "mail" && attr != "display_name")
-                    .map(Into::into)
-                    .collect(),
-                insert_attributes,
-            })
-            .instrument(span)
-            .await?;
+        .update_user(UpdateUserRequest {
+            user_id: user_id.clone(),
+                     email: user.email.map(Into::into).or(email),
+                     display_name: user.display_name.or(display_name),
+                     delete_attributes: delete_attributes
+                     .clone()
+                     .into_iter()
+                     .filter(|attr| attr != "mail" && attr != "display_name")
+                     .map(Into::into)
+                     .collect(),
+                     insert_attributes: insert_attributes.clone(),
+        })
+        .instrument(span)
+        .await?;
+
+        // Fetch the *new* user after the update so we know the real final state
+        let new_user = handler.get_user_details(&user_id).await
+        .map_err(|e| FieldError::new(
+            "Failed to fetch updated user for Kerberos sync actions",
+            graphql_value!({ "details": (e.to_string()) })
+        ))?;
+
+        // Extract old and new kerberossync values (absent = "0")
+        let old_sync = extract_kerberos_sync(&old_user.attributes);
+        let new_sync = extract_kerberos_sync(&new_user.attributes);
+
+        // Apply side effects based on the *actual* final value
+        if new_sync == "0" {
+            // Sync is now off → delete principal (idempotent)
+            if let Err(e) = lldap_kerberos::delete_kerberos_principal(user_id.as_str()) {
+                warn!("Failed to delete Kerberos principal for user {} (sync off): {}", user_id, e);
+            } else {
+                info!("Deleted Kerberos principal for user {} (sync off)", user_id);
+            }
+        } else if new_sync == "1" && old_sync == "0" {
+            // Just turned on → user must change password to trigger full sync
+            info!("Kerberos sync turned on for user {} - please change password to complete sync", user_id);
+        } else {
+            // No change (1→1 or 0→0) or invalid value
+            debug!("Kerberos sync unchanged for user {} (old={}, new={})", user_id, old_sync, new_sync);
+        }
+
         Ok(Success::new())
     }
 
