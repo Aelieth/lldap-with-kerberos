@@ -1165,78 +1165,158 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    let count_row = transaction
-    .query_one(
-        backend.build(
-            &Query::select()
-            .from(UserAttributeSchema::Table)
-            .expr_as(
-                Func::count(Expr::col(UserAttributeSchema::UserAttributeSchemaName)),
-                     Alias::new("count"),
-            )
-            .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq("kerberossync"))
-            .to_owned(),
-        ),
-    )
-    .await?;
+    // === 1. Ensure our Kerberos/POSIX hard-coded attributes exist with correct settings ===
+    // These match exactly what we put in public_schema.rs
+    let our_attributes = vec![
+        ("uidNumber", AttributeType::Integer, false, false, true),   // visible=false, editable=true (POSIX)
+        ("gidNumber", AttributeType::Integer, false, false, true),
+        ("loginShell", AttributeType::String, false, true, false),   // visible=true, editable=false (standard)
+        ("kerberosSync", AttributeType::Integer, false, true, true), // visible=true, editable=true → your nice GUI switch
+    ];
 
-    let count: i64 = count_row.and_then(|row| row.try_get("", "count").ok()).unwrap_or(0);
-
-    if count == 0 {
-        info!("Adding kerberossync (Integer flag: 1=enabled) to user_attribute_schema");
-        transaction
-        .execute(
+    for (name, attr_type, is_list, is_visible, is_editable) in our_attributes {
+        let count_row = transaction
+        .query_one(
             backend.build(
-                &Query::insert()
-                .into_table(UserAttributeSchema::Table)
-                .columns([
-                    UserAttributeSchema::UserAttributeSchemaName,
-                    UserAttributeSchema::UserAttributeSchemaType,
-                    UserAttributeSchema::UserAttributeSchemaIsList,
-                    UserAttributeSchema::UserAttributeSchemaIsUserVisible,
-                    UserAttributeSchema::UserAttributeSchemaIsUserEditable,
-                    UserAttributeSchema::UserAttributeSchemaIsHardcoded,
-                ])
-                .values_panic([
-                    "kerberossync".into(),
-                              AttributeType::Integer.into(),
-                              false.into(),
-                              false.into(),  // Admin-only visible
-                              false.into(),  // Not self-editable
-                              true.into(),
-                ])
+                &Query::select()
+                .from(UserAttributeSchema::Table)
+                .expr_as(
+                    Func::count(Expr::col(UserAttributeSchema::UserAttributeSchemaName)),
+                         Alias::new("count"),
+                )
+                .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name))
                 .to_owned(),
             ),
         )
         .await?;
 
-        info!("Setting default kerberossync='0' for existing users");
-        let insert_sql = format!(
-            "INSERT INTO {} ({}, {}, {})
-        SELECT u.{}, 'kerberossync', '0'
-        FROM {} u
-        WHERE NOT EXISTS (
-            SELECT 1 FROM {} ua
-            WHERE ua.{} = u.{}
-            AND ua.{} = 'kerberossync'
-        )",
-        UserAttributes::Table.to_string(),
-                                 UserAttributes::UserAttributeUserId.to_string(),
-                                 UserAttributes::UserAttributeName.to_string(),
-                                 UserAttributes::UserAttributeValue.to_string(),
-                                 Users::UserId.to_string(),
-                                 Users::Table.to_string(),
-                                 UserAttributes::Table.to_string(),
-                                 UserAttributes::UserAttributeUserId.to_string(),
-                                 Users::UserId.to_string(),
-                                 UserAttributes::UserAttributeName.to_string()
-        );
+        let count: i64 = count_row
+        .and_then(|row| row.try_get("", "count").ok())
+        .unwrap_or(0);
 
-        transaction
-        .execute(sea_orm::Statement::from_string(backend, insert_sql))
+        if count == 0 {
+            info!("Adding hard-coded attribute '{}' to user_attribute_schema", name);
+            transaction
+            .execute(
+                backend.build(
+                    &Query::insert()
+                    .into_table(UserAttributeSchema::Table)
+                    .columns([
+                        UserAttributeSchema::UserAttributeSchemaName,
+                        UserAttributeSchema::UserAttributeSchemaType,
+                        UserAttributeSchema::UserAttributeSchemaIsList,
+                        UserAttributeSchema::UserAttributeSchemaIsUserVisible,
+                        UserAttributeSchema::UserAttributeSchemaIsUserEditable,
+                        UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                    ])
+                    .values_panic([
+                        name.into(),
+                                  attr_type.into(),
+                                  is_list.into(),
+                                  is_visible.into(),
+                                  is_editable.into(),
+                                  true.into(),           // always hardcoded in our fork
+                    ])
+                    .to_owned(),
+                ),
+            )
+            .await?;
+        } else {
+            // Update flags on existing rows (in case they were added the old way)
+            info!("Attribute '{}' already exists — ensuring correct flags", name);
+            transaction
+            .execute(
+                backend.build(
+                    Query::update()
+                    .table(UserAttributeSchema::Table)
+                    .values([
+                        (UserAttributeSchema::UserAttributeSchemaIsUserVisible, is_visible.into()),
+                            (UserAttributeSchema::UserAttributeSchemaIsUserEditable, is_editable.into()),
+                            (UserAttributeSchema::UserAttributeSchemaIsHardcoded, true.into()),
+                    ])
+                    .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name)),
+                ),
+            )
+            .await?;
+        }
+    }
+
+    // === 2. Set default kerberosSync = 0 for every existing user ===
+    // (GUI will show ON by default for new users)
+    info!("Setting default kerberosSync='0' for all existing users");
+    let insert_sync_sql = format!(
+        "INSERT INTO {} ({}, {}, {})
+    SELECT u.{}, 'kerberosSync', '0'
+    FROM {} u
+    WHERE NOT EXISTS (
+        SELECT 1 FROM {} ua
+        WHERE ua.{} = u.{}
+        AND ua.{} = 'kerberosSync'
+    )",
+    UserAttributes::Table.to_string(),
+                                  UserAttributes::UserAttributeUserId.to_string(),
+                                  UserAttributes::UserAttributeName.to_string(),
+                                  UserAttributes::UserAttributeValue.to_string(),
+                                  Users::UserId.to_string(),
+                                  Users::Table.to_string(),
+                                  UserAttributes::Table.to_string(),
+                                  UserAttributes::UserAttributeUserId.to_string(),
+                                  Users::UserId.to_string(),
+                                  UserAttributes::UserAttributeName.to_string()
+    );
+
+    transaction
+    .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
+    .await?;
+
+    // === 3. Extend object classes (inetOrgPerson + posixAccount) so they are always available ===
+    // This is the "extended out" part — they are now part of our permanent schema
+    info!("Ensuring inetOrgPerson and posixAccount object classes are always available");
+    let object_classes = vec![
+        ("inetorgperson", "inetOrgPerson"),
+        ("posixaccount", "posixAccount"),
+    ];
+
+    for (lower, original) in object_classes {
+        let count_row = transaction
+        .query_one(
+            backend.build(
+                &Query::select()
+                .from(UserObjectClasses::Table)
+                .expr_as(
+                    Func::count(Expr::col(UserObjectClasses::LowerObjectClass)),
+                         Alias::new("count"),
+                )
+                .and_where(Expr::col(UserObjectClasses::LowerObjectClass).eq(lower))
+                .to_owned(),
+            ),
+        )
         .await?;
-    } else {
-        info!("kerberossync already exists, skipping");
+
+        let count: i64 = count_row
+        .and_then(|row| row.try_get("", "count").ok())
+        .unwrap_or(0);
+
+        if count == 0 {
+            info!("Adding object class '{}'", original);
+            transaction
+            .execute(
+                backend.build(
+                    &Query::insert()
+                    .into_table(UserObjectClasses::Table)
+                    .columns([
+                        UserObjectClasses::LowerObjectClass,
+                        UserObjectClasses::ObjectClass,
+                    ])
+                    .values_panic([
+                        lower.into(),
+                                  original.into(),
+                    ])
+                    .to_owned(),
+                ),
+            )
+            .await?;
+        }
     }
 
     Ok(transaction)
