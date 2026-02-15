@@ -174,6 +174,9 @@ impl Component for UserDetailsForm {
                     {"Off"}
                     </button>
                     </div>
+                    <div class="form-text text-muted">
+                    {"  Important: Changing to On, user password must be changed to sync."}
+                    </div>
                     </div>
                     </div>
                 }
