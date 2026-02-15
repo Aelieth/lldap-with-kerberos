@@ -1,7 +1,4 @@
-use crate::{
-    schema::{AttributeSchema, Schema},
-    types::AttributeType,
-};
+use crate::{schema::{AttributeSchema, Schema}, types::AttributeType};
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -15,6 +12,7 @@ impl PublicSchema {
 
 impl From<Schema> for PublicSchema {
     fn from(mut schema: Schema) -> Self {
+        // === Upstream hard-coded user attributes ===
         schema.user_attributes.attributes.extend_from_slice(&[
             AttributeSchema {
                 name: "user_id".into(),
@@ -79,11 +77,55 @@ impl From<Schema> for PublicSchema {
                 is_hardcoded: true,
                 is_readonly: false,
             },
+            // === Our Kerberos/POSIX hard-coded user attributes ===
+            AttributeSchema {
+                name: "uidNumber".into(),
+                attribute_type: AttributeType::Integer,
+                is_list: false,
+                is_visible: false,
+                is_editable: true,
+                is_hardcoded: true,
+                is_readonly: false,
+            },
+            AttributeSchema {
+                name: "gidNumber".into(),
+                attribute_type: AttributeType::Integer,
+                is_list: false,
+                is_visible: false,
+                is_editable: true,
+                is_hardcoded: true,
+                is_readonly: false,
+            },
+            AttributeSchema {
+                name: "loginShell".into(),
+                attribute_type: AttributeType::String,
+                is_list: false,
+                is_visible: true,
+                is_editable: false,
+                is_hardcoded: true,
+                is_readonly: true,
+            },
+            // === Kerberos Sync flag (new hard-coded attribute) ===
+            // 0 = do not create/sync Kerberos principal
+            // 1 = create/sync Kerberos principal
+            // Always present, visible switch in the UI, editable by admin
+            AttributeSchema {
+                name: "kerberosSync".into(),
+                attribute_type: AttributeType::Integer,
+                is_list: false,
+                is_visible: true,
+                is_editable: true,
+                is_hardcoded: true,
+                is_readonly: false,
+            },
         ]);
+
         schema
             .user_attributes
             .attributes
             .sort_by(|a, b| a.name.cmp(&b.name));
+
+        // === Upstream hard-coded group attributes (unchanged) ===
         schema.group_attributes.attributes.extend_from_slice(&[
             AttributeSchema {
                 name: "group_id".into(),
@@ -131,10 +173,12 @@ impl From<Schema> for PublicSchema {
                 is_readonly: false,
             },
         ]);
+
         schema
             .group_attributes
             .attributes
             .sort_by(|a, b| a.name.cmp(&b.name));
+
         PublicSchema(schema)
     }
 }
