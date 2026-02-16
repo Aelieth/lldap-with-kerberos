@@ -143,7 +143,7 @@ impl UserSchemaTable {
     }
 
     fn view_attribute(&self, ctx: &Context<Self>, attribute: &Attribute) -> Html {
-        let desc = user::resolve_user_attribute_description_or_default(&attribute.name);
+        let desc = user::resolve_user_attribute_description_or_default(&attribute.name, &attribute.aliases);
 
         // Convert GraphQL Vec<String> → Vec<&str> to match AttributeDescription
         let aliases: Vec<&str> = attribute.aliases.iter().map(|s| s.as_str()).collect();

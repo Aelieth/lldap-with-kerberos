@@ -41,6 +41,9 @@ features = [
     "runtime-actix-rustls",
 ]
 
+[dependencies.lldap_schema]
+path = "../schema"
+
 [dependencies.secstr]
 features = ["serde"]
 version = "*"

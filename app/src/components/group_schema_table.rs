@@ -152,7 +152,7 @@ impl GroupSchemaTable {
         </svg>
                 };
         let hardcoded = ctx.props().hardcoded;
-        let desc = group::resolve_group_attribute_description_or_default(&attribute.name);
+        let desc = group::resolve_group_attribute_description_or_default(&attribute.name, &attribute.aliases);
         html! {
             <tr key={attribute.name.clone()}>
                 <td>{render_attribute_name(hardcoded, &desc)}</td>

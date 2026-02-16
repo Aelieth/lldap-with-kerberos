@@ -1167,9 +1167,10 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    // === FORCE CREATE aliases column (this runs every time v12 is hit) ===
-    info!("Ensuring 'aliases' column exists in user_attribute_schema and group_attribute_schema");
+    info!("=== v12 Migration: POSIX/Kerberos attributes + proper aliases ===");
 
+    // 1. Ensure aliases column exists
+    info!("Adding 'aliases' column if missing...");
     let _ = transaction
     .execute(
         backend.build(
@@ -1198,16 +1199,25 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     )
     .await;
 
-    // === 1. Add / update our hardcoded attributes with correct aliases ===
-    let our_attributes = vec![
-        ("uidnumber",    vec!["uid_number", "uidNumber"],     AttributeType::Integer, false, false, true),
-        ("gidnumber",    vec!["gid_number", "gidNumber"],     AttributeType::Integer, false, false, true),
-        ("loginshell",   vec!["login_shell", "loginShell"],   AttributeType::String,  false, true,  false),
-        ("kerberossync", vec!["kerberos_sync", "kerberosSync"], AttributeType::Integer, false, true,  true),
-    ];
+    // 2. Seed from PublicSchema (single source of truth)
+    use lldap_domain::schema::Schema;
+    use lldap_domain::public_schema::PublicSchema;
 
-    for (name, aliases, attr_type, is_list, is_visible, is_editable) in our_attributes {
-        let aliases_json = serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string());
+    let base_schema = Schema {
+        user_attributes: lldap_domain::schema::AttributeList { attributes: vec![] },
+        group_attributes: lldap_domain::schema::AttributeList { attributes: vec![] },
+        extra_user_object_classes: vec![],
+        extra_group_object_classes: vec![],
+    };
+    let public_schema = PublicSchema::from(base_schema);
+
+    for attr in &public_schema.get_schema().user_attributes.attributes {
+        if !attr.is_hardcoded {
+            continue;
+        }
+
+        let name = attr.name.as_str();
+        let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
         let count: i64 = transaction
         .query_one(
@@ -1227,7 +1237,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .unwrap_or(0);
 
         if count == 0 {
-            info!("Adding hardcoded attribute '{}'", name);
+            info!("Seeding hardcoded attribute: {}", name);
             transaction
             .execute(
                 backend.build(
@@ -1244,10 +1254,10 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                     ])
                     .values_panic([
                         name.into(),
-                                  attr_type.into(),
-                                  is_list.into(),
-                                  is_visible.into(),
-                                  is_editable.into(),
+                                  attr.attribute_type.into(),
+                                  attr.is_list.into(),
+                                  attr.is_visible.into(),
+                                  attr.is_editable.into(),
                                   true.into(),
                                   aliases_json.into(),
                     ]),
@@ -1255,15 +1265,15 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
             )
             .await?;
         } else {
-            info!("Updating aliases/flags for attribute '{}'", name);
+            info!("Updating aliases/flags for: {}", name);
             transaction
             .execute(
                 backend.build(
                     Query::update()
                     .table(UserAttributeSchema::Table)
                     .values([
-                        (UserAttributeSchema::UserAttributeSchemaIsUserVisible, is_visible.into()),
-                            (UserAttributeSchema::UserAttributeSchemaIsUserEditable, is_editable.into()),
+                        (UserAttributeSchema::UserAttributeSchemaIsUserVisible, attr.is_visible.into()),
+                            (UserAttributeSchema::UserAttributeSchemaIsUserEditable, attr.is_editable.into()),
                             (UserAttributeSchema::Aliases, aliases_json.into()),
                     ])
                     .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name)),
@@ -1273,8 +1283,8 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         }
     }
 
-    // === 2. Set default kerberossync = 0 for existing users ===
-    info!("Setting default kerberossync='0' for all existing users");
+    // 3. Default kerberossync = 0 for existing users
+    info!("Setting default kerberossync = 0 for existing users");
     let insert_sync_sql = format!(
         "INSERT INTO {} ({}, {}, {})
     SELECT u.{}, 'kerberossync', '0'
@@ -1300,6 +1310,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
     .await;
 
+    info!("v12 migration completed successfully");
     Ok(transaction)
 }
 

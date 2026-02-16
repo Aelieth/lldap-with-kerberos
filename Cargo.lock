@@ -3108,6 +3108,7 @@ dependencies = [
  "jwt 0.13.0",
  "lldap_auth",
  "lldap_frontend_options",
+ "lldap_schema",
  "lldap_validation",
  "rand 0.8.5",
  "rsa",
@@ -3159,6 +3160,7 @@ dependencies = [
  "itertools",
  "juniper",
  "lldap_auth",
+ "lldap_schema",
  "pretty_assertions",
  "sea-orm",
  "serde",
@@ -3229,6 +3231,7 @@ dependencies = [
  "lldap_domain_model",
  "lldap_ldap",
  "lldap_opaque_handler",
+ "lldap_schema",
  "lldap_sql_backend_handler",
  "lldap_test_utils",
  "lldap_validation",
@@ -3261,6 +3264,7 @@ dependencies = [
  "lldap_domain_handlers",
  "lldap_domain_model",
  "lldap_opaque_handler",
+ "lldap_schema",
  "lldap_sql_backend_handler",
  "lldap_test_utils",
  "mockall",
@@ -3300,6 +3304,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lldap_schema"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "lldap_set_password"
 version = "0.1.0"
 dependencies = [
@@ -3329,6 +3340,7 @@ dependencies = [
  "lldap_domain_handlers",
  "lldap_domain_model",
  "lldap_opaque_handler",
+ "lldap_schema",
  "lldap_test_utils",
  "log",
  "mockall",

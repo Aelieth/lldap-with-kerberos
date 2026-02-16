@@ -32,6 +32,9 @@ rand = "0.8.5"
 # Needed because of https://github.com/tkaitchuck/aHash/issues/95
 indexmap = "=1.6.2"
 
+[dependencies.lldap_schema]
+path = "../crates/schema"
+
 [dependencies.web-sys]
 version = "0.3"
 features = [

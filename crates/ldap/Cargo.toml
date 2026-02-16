@@ -18,6 +18,9 @@ base64 = "0.22.1"
 lldap_sql_backend_handler = { path = "../sql-backend-handler" }
 lldap-kerberos = { path = "../kerberos" }
 
+[dependencies.lldap_schema]
+path = "../schema"
+
 [dependencies.derive_more]
 features = ["from"]
 default-features = false

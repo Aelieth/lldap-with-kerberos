@@ -22,6 +22,9 @@ lldap_opaque_handler = { path = "../opaque-handler" }
 lldap-kerberos = { path = "../kerberos" }
 keycloak = "26.5.2"
 
+[dependencies.lldap_schema]
+path = "../schema"
+
 [dependencies.chrono]
 features = ["serde"]
 version = "*"

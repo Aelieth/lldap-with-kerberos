@@ -3,6 +3,7 @@ query GetGroupAttributesSchema {
     groupSchema {
       attributes {
         name
+        aliases
         attributeType
         isList
         isVisible
