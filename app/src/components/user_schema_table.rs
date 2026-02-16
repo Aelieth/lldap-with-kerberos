@@ -17,11 +17,11 @@ use yew::prelude::*;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/get_user_attributes_schema.graphql",
-    response_derives = "Debug,Clone,PartialEq,Eq",
-    custom_scalars_module = "crate::infra::graphql",
-    extern_enums("AttributeType")
+schema_path = "../schema.graphql",
+query_path = "queries/get_user_attributes_schema.graphql",
+response_derives = "Debug,Clone,PartialEq,Eq",
+custom_scalars_module = "crate::infra::graphql",
+extern_enums("AttributeType")
 )]
 pub struct GetUserAttributesSchema;
 
@@ -56,15 +56,15 @@ impl CommonComponent<UserSchemaTable> for UserSchemaTable {
             Msg::OnAttributeDeleted(attribute_name) => match self.attributes {
                 None => {
                     log!(format!(
-                        "Attribute {attribute_name} was  deleted but component has no attributes"
+                        "Attribute {attribute_name} was deleted but component has no attributes"
                     ));
                     Err(anyhow!("invalid state"))
                 }
                 Some(_) => {
                     self.attributes
-                        .as_mut()
-                        .unwrap()
-                        .retain(|a| a.name != attribute_name);
+                    .as_mut()
+                    .unwrap()
+                    .retain(|a| a.name != attribute_name);
                     Ok(true)
                 }
             },
@@ -101,8 +101,8 @@ impl Component for UserSchemaTable {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div>
-              {self.view_attributes(ctx)}
-              {self.view_errors()}
+            {self.view_attributes(ctx)}
+            {self.view_errors()}
             </div>
         }
     }
@@ -114,21 +114,21 @@ impl UserSchemaTable {
         let make_table = |attributes: &Vec<Attribute>| {
             html! {
                 <div class="table-responsive">
-                    <h3>{if hardcoded {"Hardcoded"} else {"User-defined"}}{" attributes"}</h3>
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>{"Attribute name"}</th>
-                                <th>{"Type"}</th>
-                                <th>{"Editable"}</th>
-                                <th>{"Visible"}</th>
-                                {if hardcoded {html!{}} else {html!{<th>{"Delete"}</th>}}}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {attributes.iter().map(|u| self.view_attribute(ctx, u)).collect::<Vec<_>>()}
-                        </tbody>
-                    </table>
+                <h3>{if hardcoded {"Hardcoded"} else {"User-defined"}}{" attributes"}</h3>
+                <table class="table table-hover">
+                <thead>
+                <tr>
+                <th>{"Attribute name"}</th>
+                <th>{"Type"}</th>
+                <th>{"Editable"}</th>
+                <th>{"Visible"}</th>
+                {if hardcoded {html!{}} else {html!{<th>{"Delete"}</th>}}}
+                </tr>
+                </thead>
+                <tbody>
+                {attributes.iter().map(|u| self.view_attribute(ctx, u)).collect::<Vec<_>>()}
+                </tbody>
+                </table>
                 </div>
             }
         };
@@ -143,35 +143,45 @@ impl UserSchemaTable {
     }
 
     fn view_attribute(&self, ctx: &Context<Self>, attribute: &Attribute) -> Html {
-        let link = ctx.link();
-        let attribute_type = attribute.attribute_type;
-        let checkmark = html! {
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check" viewBox="0 0 16 16">
-          <path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.473-4.425z"></path>
-        </svg>
-                };
-        let hardcoded = ctx.props().hardcoded;
         let desc = user::resolve_user_attribute_description_or_default(&attribute.name);
+
+        // Convert GraphQL Vec<String> → Vec<&str> to match AttributeDescription
+        let aliases: Vec<&str> = attribute.aliases.iter().map(|s| s.as_str()).collect();
+
+        let mut desc_with_aliases = desc;
+        desc_with_aliases.aliases = aliases;
+
         html! {
             <tr key={attribute.name.clone()}>
-                <td>{render_attribute_name(hardcoded, &desc)}</td>
-                <td>{if attribute.is_list { format!("List<{attribute_type}>")} else {attribute_type.to_string()}}</td>
-                <td>{if attribute.is_editable {checkmark.clone()} else {html!{}}}</td>
-                <td>{if attribute.is_visible {checkmark.clone()} else {html!{}}}</td>
-                {
-                    if hardcoded {
-                        html!{}
-                    } else {
-                        html!{
-                            <td>
-                                <DeleteUserAttribute
-                                    attribute_name={attribute.name.clone()}
-                                    on_attribute_deleted={link.callback(Msg::OnAttributeDeleted)}
-                                    on_error={link.callback(Msg::OnError)}/>
-                            </td>
-                        }
+            <td>
+            {render_attribute_name(
+                ctx.props().hardcoded,
+                                   &desc_with_aliases
+            )}
+            </td>
+            <td>
+            {if attribute.is_list {
+                format!("List<{}>", attribute.attribute_type)
+            } else {
+                attribute.attribute_type.to_string()
+            }}
+            </td>
+            <td>{if attribute.is_editable { render_check() } else {html!{}}}</td>
+            <td>{if attribute.is_visible { render_check() } else {html!{}}}</td>
+            {
+                if !attribute.is_hardcoded {
+                    html!{
+                        <td>
+                        <DeleteUserAttribute
+                        attribute_name={attribute.name.clone()}
+                        on_attribute_deleted={ctx.link().callback(Msg::OnAttributeDeleted)}
+                        on_error={ctx.link().callback(Msg::OnError)}/>
+                        </td>
                     }
+                } else {
+                    html!{}
                 }
+            }
             </tr>
         }
     }
@@ -188,12 +198,21 @@ impl UserSchemaTable {
 pub fn list_user_schema() -> Html {
     html! {
         <div>
-            <UserSchemaTable hardcoded={true} />
-            <UserSchemaTable hardcoded={false} />
-            <Link classes="btn btn-primary" to={AppRoute::CreateUserAttribute}>
-                <i class="bi-plus-circle me-2"></i>
-                {"Create an attribute"}
-            </Link>
+        <UserSchemaTable hardcoded={true} />
+        <UserSchemaTable hardcoded={false} />
+        <Link classes="btn btn-primary" to={AppRoute::CreateUserAttribute}>
+        <i class="bi-plus-circle me-2"></i>
+        {"Create an attribute"}
+        </Link>
         </div>
+    }
+}
+
+// Small helper so we don't duplicate the checkmark
+fn render_check() -> Html {
+    html! {
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check" viewBox="0 0 16 16">
+        <path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.473-4.425z"></path>
+        </svg>
     }
 }

@@ -45,6 +45,7 @@ impl From<Model> for AttributeSchema {
     fn from(value: Model) -> Self {
         Self {
             name: value.attribute_name,
+            aliases: vec![],
             attribute_type: value.attribute_type,
             is_list: value.is_list,
             is_visible: value.is_group_visible,

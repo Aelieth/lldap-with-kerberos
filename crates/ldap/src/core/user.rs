@@ -13,10 +13,8 @@ use ldap3_proto::{
 use lldap_domain::{
     deserialize::deserialize_attribute_value,
     public_schema::PublicSchema,
-    types::{
-        AttributeName, AttributeType, GroupDetails, LdapObjectClass, User, UserAndGroups, UserId,
-        normalize_attribute_name,
-    },
+    types::{AttributeName, AttributeType, GroupDetails,LdapObjectClass, User,
+        UserAndGroups, UserId},
 };
 use lldap_domain_handlers::handler::{UserListerBackendHandler, UserRequestFilter};
 use lldap_domain_model::model::UserColumn;
@@ -49,8 +47,7 @@ pub fn get_user_attribute(
     ignored_user_attributes: &[AttributeName],
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
-    let normalized = normalize_attribute_name(attribute.as_str());  // Normalize alias to primary
-    let attribute = AttributeName::from(normalized.as_str());  // Recreate with primary
+    let attribute = AttributeName::from(attribute.as_str());
     let attribute_values = match map_user_field(&attribute, schema) {
         UserFieldType::ObjectClass => {
             let mut classes: Vec<Vec<u8>> = get_default_user_object_classes_vec_u8();

@@ -59,6 +59,7 @@ pub(crate) enum UserAttributeSchema {
     UserAttributeSchemaIsUserVisible,
     UserAttributeSchemaIsUserEditable,
     UserAttributeSchemaIsHardcoded,
+    Aliases,
 }
 
 #[derive(DeriveIden, PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy)]
@@ -79,6 +80,7 @@ pub(crate) enum GroupAttributeSchema {
     GroupAttributeSchemaIsGroupVisible,
     GroupAttributeSchemaIsGroupEditable,
     GroupAttributeSchemaIsHardcoded,
+    Aliases,
 }
 
 #[derive(DeriveIden, PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy)]
@@ -1165,17 +1167,49 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    // === 1. Ensure our Kerberos/POSIX hard-coded attributes exist with correct settings ===
-    // These match exactly what we put in public_schema.rs
+    // === FORCE CREATE aliases column (this runs every time v12 is hit) ===
+    info!("Ensuring 'aliases' column exists in user_attribute_schema and group_attribute_schema");
+
+    let _ = transaction
+    .execute(
+        backend.build(
+            Table::alter()
+            .table(UserAttributeSchema::Table)
+            .add_column_if_not_exists(
+                ColumnDef::new(UserAttributeSchema::Aliases)
+                .string_len(1024)
+                .default("[]"),
+            ),
+        ),
+    )
+    .await;
+
+    let _ = transaction
+    .execute(
+        backend.build(
+            Table::alter()
+            .table(GroupAttributeSchema::Table)
+            .add_column_if_not_exists(
+                ColumnDef::new(GroupAttributeSchema::Aliases)
+                .string_len(1024)
+                .default("[]"),
+            ),
+        ),
+    )
+    .await;
+
+    // === 1. Add / update our hardcoded attributes with correct aliases ===
     let our_attributes = vec![
-        ("uidNumber", AttributeType::Integer, false, false, true),   // visible=false, editable=true (POSIX)
-        ("gidNumber", AttributeType::Integer, false, false, true),
-        ("loginShell", AttributeType::String, false, true, false),   // visible=true, editable=false (standard)
-        ("kerberosSync", AttributeType::Integer, false, true, true), // visible=true, editable=true → your nice GUI switch
+        ("uidnumber",    vec!["uid_number", "uidNumber"],     AttributeType::Integer, false, false, true),
+        ("gidnumber",    vec!["gid_number", "gidNumber"],     AttributeType::Integer, false, false, true),
+        ("loginshell",   vec!["login_shell", "loginShell"],   AttributeType::String,  false, true,  false),
+        ("kerberossync", vec!["kerberos_sync", "kerberosSync"], AttributeType::Integer, false, true,  true),
     ];
 
-    for (name, attr_type, is_list, is_visible, is_editable) in our_attributes {
-        let count_row = transaction
+    for (name, aliases, attr_type, is_list, is_visible, is_editable) in our_attributes {
+        let aliases_json = serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string());
+
+        let count: i64 = transaction
         .query_one(
             backend.build(
                 &Query::select()
@@ -1188,18 +1222,16 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                 .to_owned(),
             ),
         )
-        .await?;
-
-        let count: i64 = count_row
+        .await?
         .and_then(|row| row.try_get("", "count").ok())
         .unwrap_or(0);
 
         if count == 0 {
-            info!("Adding hard-coded attribute '{}' to user_attribute_schema", name);
+            info!("Adding hardcoded attribute '{}'", name);
             transaction
             .execute(
                 backend.build(
-                    &Query::insert()
+                    Query::insert()
                     .into_table(UserAttributeSchema::Table)
                     .columns([
                         UserAttributeSchema::UserAttributeSchemaName,
@@ -1208,6 +1240,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                         UserAttributeSchema::UserAttributeSchemaIsUserVisible,
                         UserAttributeSchema::UserAttributeSchemaIsUserEditable,
                         UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                        UserAttributeSchema::Aliases,
                     ])
                     .values_panic([
                         name.into(),
@@ -1215,15 +1248,14 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                                   is_list.into(),
                                   is_visible.into(),
                                   is_editable.into(),
-                                  true.into(),           // always hardcoded in our fork
-                    ])
-                    .to_owned(),
+                                  true.into(),
+                                  aliases_json.into(),
+                    ]),
                 ),
             )
             .await?;
         } else {
-            // Update flags on existing rows (in case they were added the old way)
-            info!("Attribute '{}' already exists — ensuring correct flags", name);
+            info!("Updating aliases/flags for attribute '{}'", name);
             transaction
             .execute(
                 backend.build(
@@ -1232,7 +1264,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                     .values([
                         (UserAttributeSchema::UserAttributeSchemaIsUserVisible, is_visible.into()),
                             (UserAttributeSchema::UserAttributeSchemaIsUserEditable, is_editable.into()),
-                            (UserAttributeSchema::UserAttributeSchemaIsHardcoded, true.into()),
+                            (UserAttributeSchema::Aliases, aliases_json.into()),
                     ])
                     .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name)),
                 ),
@@ -1241,17 +1273,16 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         }
     }
 
-    // === 2. Set default kerberosSync = 0 for every existing user ===
-    // (GUI will show ON by default for new users)
-    info!("Setting default kerberosSync='0' for all existing users");
+    // === 2. Set default kerberossync = 0 for existing users ===
+    info!("Setting default kerberossync='0' for all existing users");
     let insert_sync_sql = format!(
         "INSERT INTO {} ({}, {}, {})
-    SELECT u.{}, 'kerberosSync', '0'
+    SELECT u.{}, 'kerberossync', '0'
     FROM {} u
     WHERE NOT EXISTS (
         SELECT 1 FROM {} ua
         WHERE ua.{} = u.{}
-        AND ua.{} = 'kerberosSync'
+        AND ua.{} = 'kerberossync'
     )",
     UserAttributes::Table.to_string(),
                                   UserAttributes::UserAttributeUserId.to_string(),
@@ -1265,59 +1296,9 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                                   UserAttributes::UserAttributeName.to_string()
     );
 
-    transaction
+    let _ = transaction
     .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
-    .await?;
-
-    // === 3. Extend object classes (inetOrgPerson + posixAccount) so they are always available ===
-    // This is the "extended out" part — they are now part of our permanent schema
-    info!("Ensuring inetOrgPerson and posixAccount object classes are always available");
-    let object_classes = vec![
-        ("inetorgperson", "inetOrgPerson"),
-        ("posixaccount", "posixAccount"),
-    ];
-
-    for (lower, original) in object_classes {
-        let count_row = transaction
-        .query_one(
-            backend.build(
-                &Query::select()
-                .from(UserObjectClasses::Table)
-                .expr_as(
-                    Func::count(Expr::col(UserObjectClasses::LowerObjectClass)),
-                         Alias::new("count"),
-                )
-                .and_where(Expr::col(UserObjectClasses::LowerObjectClass).eq(lower))
-                .to_owned(),
-            ),
-        )
-        .await?;
-
-        let count: i64 = count_row
-        .and_then(|row| row.try_get("", "count").ok())
-        .unwrap_or(0);
-
-        if count == 0 {
-            info!("Adding object class '{}'", original);
-            transaction
-            .execute(
-                backend.build(
-                    &Query::insert()
-                    .into_table(UserObjectClasses::Table)
-                    .columns([
-                        UserObjectClasses::LowerObjectClass,
-                        UserObjectClasses::ObjectClass,
-                    ])
-                    .values_panic([
-                        lower.into(),
-                                  original.into(),
-                    ])
-                    .to_owned(),
-                ),
-            )
-            .await?;
-        }
-    }
+    .await;
 
     Ok(transaction)
 }

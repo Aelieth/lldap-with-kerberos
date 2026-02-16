@@ -3,9 +3,6 @@ set -e
 
 mkdir -p /data
 chown lldap:lldap /data
-mkdir -p /data/keytabs
-chown lldap:lldap /data/keytabs
-chmod 755 /data/keytabs
 
 # === Required environment variable checks ===
 if [ -z "$LLDAP_JWT_SECRET" ]; then

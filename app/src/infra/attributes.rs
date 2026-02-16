@@ -1,3 +1,4 @@
+#[derive(Clone, Debug, PartialEq)]
 pub struct AttributeDescription<'a> {
     pub attribute_identifier: &'a str,
     pub attribute_name: &'a str,
@@ -5,7 +6,6 @@ pub struct AttributeDescription<'a> {
 }
 
 pub mod group {
-
     use super::AttributeDescription;
 
     pub fn resolve_group_attribute_description(name: &'_ str) -> Option<AttributeDescription<'_>> {
@@ -39,9 +39,7 @@ pub mod group {
         }
     }
 
-    pub fn resolve_group_attribute_description_or_default(
-        name: &'_ str,
-    ) -> AttributeDescription<'_> {
+    pub fn resolve_group_attribute_description_or_default(name: &'_ str) -> AttributeDescription<'_> {
         match resolve_group_attribute_description(name) {
             Some(d) => d,
             None => AttributeDescription {
@@ -54,11 +52,33 @@ pub mod group {
 }
 
 pub mod user {
-
     use super::AttributeDescription;
 
     pub fn resolve_user_attribute_description(name: &'_ str) -> Option<AttributeDescription<'_>> {
         match name {
+            // === Our Kerberos / POSIX attributes ===
+            "uidnumber" => Some(AttributeDescription {
+                attribute_identifier: name,
+                attribute_name: "uidnumber",
+                aliases: vec!["uid_number", "uidNumber"],
+            }),
+            "gidnumber" => Some(AttributeDescription {
+                attribute_identifier: name,
+                attribute_name: "gidnumber",
+                aliases: vec!["gid_number", "gidNumber"],
+            }),
+            "loginshell" => Some(AttributeDescription {
+                attribute_identifier: name,
+                attribute_name: "loginshell",
+                aliases: vec!["login_shell", "loginShell"],
+            }),
+            "kerberossync" => Some(AttributeDescription {
+                attribute_identifier: name,
+                attribute_name: "kerberossync",
+                aliases: vec!["kerberos_sync", "kerberosSync"],
+            }),
+
+            // === Original upstream attributes ===
             "avatar" => Some(AttributeDescription {
                 attribute_identifier: name,
                 attribute_name: name,
@@ -101,7 +121,7 @@ pub mod user {
             }),
             "user_id" => Some(AttributeDescription {
                 attribute_identifier: name,
-                attribute_name: "uid",
+                attribute_name: "userid",
                 aliases: vec![name, "id"],
             }),
             "uuid" => Some(AttributeDescription {
@@ -113,9 +133,7 @@ pub mod user {
         }
     }
 
-    pub fn resolve_user_attribute_description_or_default(
-        name: &'_ str,
-    ) -> AttributeDescription<'_> {
+    pub fn resolve_user_attribute_description_or_default(name: &'_ str) -> AttributeDescription<'_> {
         match resolve_user_attribute_description(name) {
             Some(d) => d,
             None => AttributeDescription {

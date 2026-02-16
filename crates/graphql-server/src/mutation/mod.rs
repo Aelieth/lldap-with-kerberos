@@ -76,37 +76,33 @@ fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
-    async fn create_user(
+        async fn create_user(
         context: &Context<Handler>,
         user: CreateUserInput,
     ) -> FieldResult<super::query::User<Handler>> {
         let span = debug_span!("[GraphQL mutation] create_user");
-        span.in_scope(|| {
-            debug!("{:?}", &user.id);
-        });
+        span.in_scope(|| debug!("{:?}", &user.id));
+
         let handler = context
             .get_admin_handler()
             .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
+
         let user_id = UserId::new(&user.id);
         let schema = handler.get_schema().await?;
+
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
             user.first_name,
             user.last_name,
             user.avatar,
         );
-        let mut consolidated_with_default = consolidated_attributes.clone();
-        if !consolidated_with_default.iter().any(|attr| attr.name.as_str().to_lowercase() == "kerberossync") {
-            consolidated_with_default.push(inputs::AttributeValue {
-                name: "kerberossync".to_string(),
-                                           value: vec!["1".to_string()],  // Enabled by default
-            });
-        }
+
         let UnpackedAttributes {
             email,
             display_name,
             attributes,
-        } = unpack_attributes(consolidated_with_default, &schema, true)?;
+        } = unpack_attributes(consolidated_attributes, &schema, true)?;
+
         handler
             .create_user(CreateUserRequest {
                 user_id: user_id.clone(),
@@ -120,6 +116,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             })
             .instrument(span.clone())
             .await?;
+
         let user_details = handler.get_user_details(&user_id).instrument(span).await?;
         super::query::User::<Handler>::from_user(user_details, Arc::new(schema))
     }
@@ -211,15 +208,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         user: UpdateUserInput,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] update_user");
-        span.in_scope(|| {
-            debug!(?user.id);
-        });
+        span.in_scope(|| debug!(?user.id));
+
         let user_id = UserId::new(&user.id);
         let handler = context
         .get_writeable_handler(&user_id)
         .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
+
         let is_admin = context.validation_result.is_admin();
         let schema = handler.get_schema().await?;
+
         // Consolidate attributes and fields into a combined attribute list
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
@@ -227,14 +225,19 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                                                              user.last_name,
                                                              user.avatar,
         );
+
         // Extract any empty attributes into a list of attributes for deletion
         let (delete_attrs, insert_attrs): (Vec<_>, Vec<_>) = consolidated_attributes
         .into_iter()
         .partition(|a| a.value == vec!["".to_string()]);
+
         // Combine lists of attributes for removal
-        let mut delete_attributes: Vec<String> =
-        delete_attrs.iter().map(|a| a.name.to_owned()).collect();
+        let mut delete_attributes: Vec<String> = delete_attrs
+        .iter()
+        .map(|a| a.name.to_owned())
+        .collect();
         delete_attributes.extend(user.remove_attributes.unwrap_or_default());
+
         // Unpack attributes for update
         let UnpackedAttributes {
             email,
@@ -243,22 +246,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         } = unpack_attributes(insert_attrs, &schema, is_admin)?;
 
         let display_name = display_name.or_else(|| {
-            // If the display name is not inserted, but removed, reset it.
             delete_attributes
             .iter()
             .find(|attr| *attr == "display_name")
             .map(|_| String::new())
         });
 
-        // === KERBEROS SYNC LOGIC ===
-        // Fetch old user *before* update so we can detect the transition
-        let old_user = handler.get_user_details(&user_id).await
-        .map_err(|e| FieldError::new(
-            "Failed to fetch old user for Kerberos sync actions",
-            graphql_value!({ "details": (e.to_string()) })
-        ))?;
-
-        // Perform the actual LLDAP update
+        // === Perform the actual LLDAP update ===
         handler
         .update_user(UpdateUserRequest {
             user_id: user_id.clone(),
@@ -275,31 +269,24 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .instrument(span)
         .await?;
 
-        // Fetch the *new* user after the update so we know the real final state
+        // === Kerberos side effects (clean final state only) ===
         let new_user = handler.get_user_details(&user_id).await
         .map_err(|e| FieldError::new(
-            "Failed to fetch updated user for Kerberos sync actions",
+            "Failed to fetch updated user for Kerberos actions",
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        // Extract old and new kerberossync values (absent = "0")
-        let old_sync = extract_kerberos_sync(&old_user.attributes);
-        let new_sync = extract_kerberos_sync(&new_user.attributes);
+        let sync_enabled = extract_kerberos_sync(&new_user.attributes) == "1";
 
-        // Apply side effects based on the *actual* final value
-        if new_sync == "0" {
-            // Sync is now off → delete principal (idempotent)
+        if !sync_enabled {
+            // Sync turned off → delete principal (safe and idempotent)
             if let Err(e) = lldap_kerberos::delete_kerberos_principal(user_id.as_str()) {
-                warn!("Failed to delete Kerberos principal for user {} (sync off): {}", user_id, e);
+                warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
             } else {
-                info!("Deleted Kerberos principal for user {} (sync off)", user_id);
+                info!("Deleted Kerberos principal for user {} (sync disabled)", user_id);
             }
-        } else if new_sync == "1" && old_sync == "0" {
-            // Just turned on → user must change password to trigger full sync
-            info!("Kerberos sync turned on for user {} - please change password to complete sync", user_id);
         } else {
-            // No change (1→1 or 0→0) or invalid value
-            debug!("Kerberos sync unchanged for user {} (old={}, new={})", user_id, old_sync, new_sync);
+            debug!("Kerberos sync enabled for user {} — waiting for password change to trigger sync", user_id);
         }
 
         Ok(Success::new())

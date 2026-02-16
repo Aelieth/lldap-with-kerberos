@@ -68,7 +68,6 @@ async fn handle_modify_change(
                     && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
                 });
 
-                // Central call
                 if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
                     warn!("Kerberos sync failed after LDAP password change: {}", e);
                 }

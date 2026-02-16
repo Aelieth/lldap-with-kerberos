@@ -15,7 +15,8 @@ impl From<Schema> for PublicSchema {
         // === Upstream hard-coded user attributes ===
         schema.user_attributes.attributes.extend_from_slice(&[
             AttributeSchema {
-                name: "user_id".into(),
+                name: "userid".into(),
+                aliases: vec!["user_id".into(), "id".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -24,7 +25,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "creation_date".into(),
+                name: "creationdate".into(),
+                aliases: vec!["creation_date".into(), "createtimestamp".into()],
                 attribute_type: AttributeType::DateTime,
                 is_list: false,
                 is_visible: true,
@@ -33,7 +35,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "modified_date".into(),
+                name: "modifieddate".into(),
+                aliases: vec!["modified_date".into(), "modifytimestamp".into()],
                 attribute_type: AttributeType::DateTime,
                 is_list: false,
                 is_visible: true,
@@ -42,7 +45,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "password_modified_date".into(),
+                name: "passwordmodifieddate".into(),
+                aliases: vec!["password_modified_date".into(), "pwdchangedtime".into()],
                 attribute_type: AttributeType::DateTime,
                 is_list: false,
                 is_visible: true,
@@ -52,6 +56,7 @@ impl From<Schema> for PublicSchema {
             },
             AttributeSchema {
                 name: "mail".into(),
+                aliases: vec!["email".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -61,6 +66,7 @@ impl From<Schema> for PublicSchema {
             },
             AttributeSchema {
                 name: "uuid".into(),
+                aliases: vec!["entryuuid".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -69,7 +75,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "display_name".into(),
+                name: "displayname".into(),
+                aliases: vec!["display_name".into(), "cn".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -77,27 +84,31 @@ impl From<Schema> for PublicSchema {
                 is_hardcoded: true,
                 is_readonly: false,
             },
-            // === Our Kerberos/POSIX hard-coded user attributes ===
+
+            // === Our Kerberos/POSIX attributes with proper aliases ===
             AttributeSchema {
-                name: "uidNumber".into(),
+                name: "uidnumber".into(),
+                aliases: vec!["uid_number".into(), "uidNumber".into()],
                 attribute_type: AttributeType::Integer,
                 is_list: false,
-                is_visible: false,
-                is_editable: true,
+                is_visible: true,
+                is_editable: false,
                 is_hardcoded: true,
                 is_readonly: false,
             },
             AttributeSchema {
-                name: "gidNumber".into(),
+                name: "gidnumber".into(),
+                aliases: vec!["gid_number".into(), "gidNumber".into()],
                 attribute_type: AttributeType::Integer,
                 is_list: false,
-                is_visible: false,
-                is_editable: true,
+                is_visible: true,
+                is_editable: false,
                 is_hardcoded: true,
                 is_readonly: false,
             },
             AttributeSchema {
-                name: "loginShell".into(),
+                name: "loginshell".into(),
+                aliases: vec!["login_shell".into(), "loginShell".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -105,30 +116,25 @@ impl From<Schema> for PublicSchema {
                 is_hardcoded: true,
                 is_readonly: true,
             },
-            // === Kerberos Sync flag (new hard-coded attribute) ===
-            // 0 = do not create/sync Kerberos principal
-            // 1 = create/sync Kerberos principal
-            // Always present, visible switch in the UI, editable by admin
             AttributeSchema {
-                name: "kerberosSync".into(),
+                name: "kerberossync".into(),
+                aliases: vec!["kerberos_sync".into(), "kerberosSync".into()],
                 attribute_type: AttributeType::Integer,
                 is_list: false,
-                is_visible: true,
-                is_editable: true,
+                is_visible: false,
+                is_editable: false,
                 is_hardcoded: true,
                 is_readonly: false,
             },
         ]);
 
-        schema
-            .user_attributes
-            .attributes
-            .sort_by(|a, b| a.name.cmp(&b.name));
+        schema.user_attributes.attributes.sort_by(|a, b| a.name.cmp(&b.name));
 
-        // === Upstream hard-coded group attributes (unchanged) ===
+        // Group attributes (unchanged, but with aliases for consistency)
         schema.group_attributes.attributes.extend_from_slice(&[
             AttributeSchema {
-                name: "group_id".into(),
+                name: "groupid".into(),
+                aliases: vec!["group_id".into()],
                 attribute_type: AttributeType::Integer,
                 is_list: false,
                 is_visible: true,
@@ -137,7 +143,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "creation_date".into(),
+                name: "creationdate".into(),
+                aliases: vec!["creation_date".into(), "createtimestamp".into()],
                 attribute_type: AttributeType::DateTime,
                 is_list: false,
                 is_visible: true,
@@ -146,7 +153,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "modified_date".into(),
+                name: "modifieddate".into(),
+                aliases: vec!["modified_date".into(), "modifytimestamp".into()],
                 attribute_type: AttributeType::DateTime,
                 is_list: false,
                 is_visible: true,
@@ -156,6 +164,7 @@ impl From<Schema> for PublicSchema {
             },
             AttributeSchema {
                 name: "uuid".into(),
+                aliases: vec!["entryuuid".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -164,7 +173,8 @@ impl From<Schema> for PublicSchema {
                 is_readonly: true,
             },
             AttributeSchema {
-                name: "display_name".into(),
+                name: "displayname".into(),
+                aliases: vec!["display_name".into(), "cn".into()],
                 attribute_type: AttributeType::String,
                 is_list: false,
                 is_visible: true,
@@ -174,10 +184,7 @@ impl From<Schema> for PublicSchema {
             },
         ]);
 
-        schema
-            .group_attributes
-            .attributes
-            .sort_by(|a, b| a.name.cmp(&b.name));
+        schema.group_attributes.attributes.sort_by(|a, b| a.name.cmp(&b.name));
 
         PublicSchema(schema)
     }

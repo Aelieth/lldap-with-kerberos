@@ -21,21 +21,31 @@ impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
     fn name(&self) -> String {
         self.schema.name.to_string()
     }
+
+    fn aliases(&self) -> Vec<String> {          // ← ADD THIS
+        self.schema.aliases.clone()
+    }
+
     fn attribute_type(&self) -> lldap_domain::types::AttributeType {
         self.schema.attribute_type
     }
+
     fn is_list(&self) -> bool {
         self.schema.is_list
     }
+
     fn is_visible(&self) -> bool {
         self.schema.is_visible
     }
+
     fn is_editable(&self) -> bool {
         self.schema.is_editable
     }
+
     fn is_hardcoded(&self) -> bool {
         self.schema.is_hardcoded
     }
+
     fn is_readonly(&self) -> bool {
         self.schema.is_readonly
     }
@@ -131,8 +141,8 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
 impl<Handler: BackendHandler> AttributeValue<Handler> {
     fn from_schema(a: DomainAttribute, schema: &DomainAttributeList) -> Option<Self> {
         schema
-            .get_attribute_schema(&a.name)
-            .map(|s| AttributeValue::<Handler>::from_value(a, s.clone()))
+        .get_attribute_schema(&a.name)
+        .map(|s| AttributeValue::<Handler>::from_value(a, s.clone()))
     }
 
     pub fn user_attributes_from_schema(
@@ -140,42 +150,64 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let user_attributes = std::mem::take(&mut user.attributes);
+
         let mut all_attributes = schema
-            .get_schema()
-            .user_attributes
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded && a.name.as_str() != "kerberossync")
-            .flat_map(|attribute_schema| {
-                let value: Option<DomainAttributeValue> = match attribute_schema.name.as_str() {
-                    "user_id" => Some(user.user_id.clone().into_string().into()),
-                    "creation_date" => Some(user.creation_date.into()),
-                    "modified_date" => Some(user.modified_date.into()),
-                    "password_modified_date" => Some(user.password_modified_date.into()),
-                    "mail" => Some(user.email.clone().into_string().into()),
-                    "uuid" => Some(user.uuid.clone().into_string().into()),
-                    "display_name" => user.display_name.as_ref().map(|d| d.clone().into()),
-                    "avatar" | "first_name" | "last_name" => None,
-                    _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
-                };
-                value.map(|v| (attribute_schema, v))
-            })
-            .map(|(attribute_schema, value)| {
-                AttributeValue::<Handler>::from_value(
-                    DomainAttribute {
-                        name: attribute_schema.name.clone(),
-                        value,
-                    },
-                    attribute_schema.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
+        .get_schema()
+        .user_attributes
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .flat_map(|attribute_schema| {
+            let name = attribute_schema.name.as_str();
+
+            let value: Option<DomainAttributeValue> = match name {
+                // Upstream hardcoded attributes (both old and new naming)
+                "userid" | "user_id" => Some(user.user_id.clone().into_string().into()),
+                  "creationdate" | "creation_date" => Some(user.creation_date.into()),
+                  "modifieddate" | "modified_date" => Some(user.modified_date.into()),
+                  "passwordmodifieddate" | "password_modified_date" => Some(user.password_modified_date.into()),
+                  "mail" => Some(user.email.clone().into_string().into()),
+                  "uuid" => Some(user.uuid.clone().into_string().into()),
+                  "displayname" | "display_name" => user.display_name.as_ref().map(|d| d.clone().into()),
+
+                  // Our Kerberos/POSIX attributes
+                  "uidnumber" | "uid_number" => None,
+                  "gidnumber" | "gid_number" => None,
+                  "loginshell" | "login_shell" => None,
+                  "kerberossync" | "kerberos_sync" => None,
+
+                  // Legacy names that might still appear during transition
+                  "firstname" | "first_name" => None,
+                  "lastname" | "last_name" => None,
+                  "avatar" => None,
+
+                  _ => {
+                      // This is the panic line - let's make it more informative first
+                      panic!("Unexpected hardcoded attribute: {} (this should not happen)", name);
+                  }
+            };
+
+            value.map(|v| (attribute_schema, v))
+        })
+        .map(|(attribute_schema, value)| {
+            AttributeValue::<Handler>::from_value(
+                DomainAttribute {
+                    name: attribute_schema.name.clone(),
+                                                  value,
+                },
+                attribute_schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+        // Add any custom (non-hardcoded) attributes
         user_attributes
-            .into_iter()
-            .flat_map(|a| {
-                AttributeValue::<Handler>::from_schema(a, &schema.get_schema().user_attributes)
-            })
-            .for_each(|value| all_attributes.push(value));
+        .into_iter()
+        .flat_map(|a| {
+            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().user_attributes)
+        })
+        .for_each(|value| all_attributes.push(value));
+
         all_attributes
     }
 
@@ -185,40 +217,40 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
         let mut all_attributes = schema
-            .get_schema()
-            .group_attributes
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded)
-            .map(|attribute_schema| {
-                (
-                    attribute_schema,
-                    match attribute_schema.name.as_str() {
-                        "group_id" => (group.id.0 as i64).into(),
-                        "creation_date" => group.creation_date.into(),
-                        "modified_date" => group.modified_date.into(),
-                        "uuid" => group.uuid.clone().into_string().into(),
-                        "display_name" => group.display_name.clone().into_string().into(),
-                        _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
-                    },
-                )
-            })
-            .map(|(attribute_schema, value)| {
-                AttributeValue::<Handler>::from_value(
-                    DomainAttribute {
-                        name: attribute_schema.name.clone(),
-                        value,
-                    },
-                    attribute_schema.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
+        .get_schema()
+        .group_attributes
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .map(|attribute_schema| {
+            (
+                attribute_schema,
+             match attribute_schema.name.as_str() {
+                 "groupid" => (group.id.0 as i64).into(),
+             "creationdate" => group.creation_date.into(),
+             "modifieddate" => group.modified_date.into(),
+             "uuid" => group.uuid.clone().into_string().into(),
+             "displayname" => group.display_name.clone().into_string().into(),
+             _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
+             },
+            )
+        })
+        .map(|(attribute_schema, value)| {
+            AttributeValue::<Handler>::from_value(
+                DomainAttribute {
+                    name: attribute_schema.name.clone(),
+                                                  value,
+                },
+                attribute_schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
         group_attributes
-            .into_iter()
-            .flat_map(|a| {
-                AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
-            })
-            .for_each(|value| all_attributes.push(value));
+        .into_iter()
+        .flat_map(|a| {
+            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
+        })
+        .for_each(|value| all_attributes.push(value));
         all_attributes
     }
 
@@ -228,40 +260,40 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
         let mut all_attributes = schema
-            .get_schema()
-            .group_attributes
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded)
-            .map(|attribute_schema| {
-                (
-                    attribute_schema,
-                    match attribute_schema.name.as_str() {
-                        "group_id" => (group.group_id.0 as i64).into(),
-                        "creation_date" => group.creation_date.into(),
-                        "modified_date" => group.modified_date.into(),
-                        "uuid" => group.uuid.clone().into_string().into(),
-                        "display_name" => group.display_name.clone().into_string().into(),
-                        _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
-                    },
-                )
-            })
-            .map(|(attribute_schema, value)| {
-                AttributeValue::<Handler>::from_value(
-                    DomainAttribute {
-                        name: attribute_schema.name.clone(),
-                        value,
-                    },
-                    attribute_schema.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
+        .get_schema()
+        .group_attributes
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .map(|attribute_schema| {
+            (
+                attribute_schema,
+             match attribute_schema.name.as_str() {
+                 "groupid" => (group.group_id.0 as i64).into(),
+             "creationdate" => group.creation_date.into(),
+             "modifieddate" => group.modified_date.into(),
+             "uuid" => group.uuid.clone().into_string().into(),
+             "displayname" => group.display_name.clone().into_string().into(),
+             _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
+             },
+            )
+        })
+        .map(|(attribute_schema, value)| {
+            AttributeValue::<Handler>::from_value(
+                DomainAttribute {
+                    name: attribute_schema.name.clone(),
+                                                  value,
+                },
+                attribute_schema.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
         group_attributes
-            .into_iter()
-            .flat_map(|a| {
-                AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
-            })
-            .for_each(|value| all_attributes.push(value));
+        .into_iter()
+        .flat_map(|a| {
+            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
+        })
+        .for_each(|value| all_attributes.push(value));
         all_attributes
     }
 }

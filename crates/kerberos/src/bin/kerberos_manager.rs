@@ -5,8 +5,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use reqwest::blocking::Client;
-use serde_json::json;
 use std::thread;
 use std::time::Duration;
 use std::net::TcpStream;
@@ -214,85 +212,6 @@ fn main() -> Result<()> {
         println!("Existing KDC database detected—skipping bootstrap.");
     }
     // --- End Part 1 ---
-
-    // One-time schema extension for POSIX/Kerberos compatibility
-    let schema_flag = "/var/kerberos/krb5kdc/schema_extended.flag";
-    if !Path::new(schema_flag).exists() {
-        println!("Extending LLDAP schema for POSIX/Kerberos...");
-
-        let initial_admin_pass = env::var("LLDAP_LDAP_USER_PASS")
-        .context("LLDAP_LDAP_USER_PASS env var required for first-run schema extension")?;
-
-        let client = Client::new();
-        let login_url = "http://localhost:17170/auth/simple/login";
-
-        let login_body = json!({
-            "username": "admin",
-            "password": initial_admin_pass
-        });
-
-        let login_resp = client.post(login_url)
-        .json(&login_body)
-        .send()
-        .context("Failed to login to LLDAP for token")?;
-
-        if !login_resp.status().is_success() {
-            let err_text = login_resp.text().unwrap_or_default();
-            println!("Warning: LLDAP login failed for schema extension (non-fatal): {}", err_text);
-        } else {
-            let token: String = login_resp.json::<serde_json::Value>()
-            .context("Failed to parse login response")?
-            .get("token")
-            .and_then(|v| v.as_str())
-            .context("No token in login response")?
-            .to_string();
-
-            let graphql_url = "http://localhost:17170/api/graphql";
-
-            let mutations = vec![
-                json!({
-                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                      "variables": { "name": "uidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
-                }),
-                json!({
-                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                      "variables": { "name": "gidNumber", "type": "INTEGER", "isList": false, "isVisible": false, "isEditable": true }
-                }),
-                json!({
-                    "query": "mutation AddUserAttribute($name: String!, $type: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) { addUserAttribute(name: $name, attributeType: $type, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) { __typename }}",
-                      "variables": { "name": "loginShell", "type": "STRING", "isList": false, "isVisible": true, "isEditable": false }
-                }),
-                json!({
-                    "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
-                      "variables": { "name": "inetOrgPerson" }
-                }),
-                json!({
-                    "query": "mutation AddUserObjectClass($name: String!) { addUserObjectClass(name: $name) { __typename } }",
-                      "variables": { "name": "posixAccount" }
-                }),
-            ];
-
-            for mutation in mutations {
-                let resp = client.post(graphql_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .json(&mutation)
-                .send()
-                .context("Failed to send GraphQL mutation")?;
-
-                if !resp.status().is_success() {
-                    let err_text = resp.text().unwrap_or_default();
-                    println!("Warning: Schema mutation failed (non-fatal): {}", err_text);
-                } else {
-                    println!("Schema extension mutation succeeded.");
-                }
-            }
-
-            fs::write(schema_flag, "extended").context("Failed to write schema flag")?;
-            println!("LLDAP schema extended successfully.");
-        }
-    } else {
-        println!("Schema already extended—skipping.");
-    }
 
     // Start Kerberos daemons
     println!("Starting krb5kdc...");

@@ -74,9 +74,9 @@ async fn create_user(
             })
             .map(str::to_owned)
     }
-    // Default kerberossync=1 (enabled) if not provided in LDAP add
+    // Default kerberossync=0 (enabled) if not provided in LDAP add
     if !attributes.contains_key("kerberossync") {
-        attributes.insert("kerberossync".to_ascii_lowercase(), "1".as_bytes().to_vec());
+        attributes.insert("kerberossync".to_ascii_lowercase(), "0".as_bytes().to_vec());
     }
     let get_attribute = |name| {
         attributes

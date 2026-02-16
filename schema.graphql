@@ -101,6 +101,7 @@ type ObjectClassInfo {
 
 type AttributeSchema {
   name: String!
+  aliases: [String!]!
   attributeType: AttributeType!
   isList: Boolean!
   isVisible: Boolean!

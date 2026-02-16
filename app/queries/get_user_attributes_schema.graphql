@@ -3,6 +3,7 @@ query GetUserAttributesSchema {
     userSchema {
       attributes {
         name
+        aliases
         attributeType
         isList
         isVisible

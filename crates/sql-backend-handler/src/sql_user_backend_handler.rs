@@ -334,11 +334,11 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Default kerberossync to "1" (true) if not provided
+        // Default kerberossync to "0" (false) if not provided
         if !request.attributes.iter().any(|attr| attr.name.as_str() == "kerberossync") {
             request.attributes.push(Attribute {
                 name: "kerberossync".into(),
-                                    value: "1".to_string().into(),
+                                    value: "0".to_string().into(),
             });
         }
 
