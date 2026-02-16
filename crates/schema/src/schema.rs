@@ -35,7 +35,10 @@ pub struct AttributeList {
 }
 
 impl AttributeList {
-    pub fn get_attribute_schema(&self, name: &str) -> Option<&AttributeSchema> {
-        self.attributes.iter().find(|a| a.name == name)
+    /// Find attribute by exact name OR any alias (case-sensitive, as stored)
+    pub fn get_by_name_or_alias(&self, name: &str) -> Option<&AttributeSchema> {
+        self.attributes.iter().find(|a| {
+            a.name == name || a.aliases.iter().any(|alias| alias == name)
+        })
     }
 }
