@@ -8,3 +8,16 @@ repository.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
+
+# SeaORM
+sea-orm = { workspace = true, features = ["macros", "runtime-tokio-rustls"] }
+
+# GraphQL + enum helpers
+juniper = "0.15"
+strum = { version = "0.26", features = ["derive"] }
+
+# Display + Debug for SeaORM DeriveValueType
+derive_more = { version = "1.0", features = ["display"] }
+
+# SeaORM column types
+sea-query = { version = "0.32", default-features = false, features = ["thread-safe"] }

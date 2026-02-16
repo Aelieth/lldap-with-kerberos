@@ -1,7 +1,20 @@
 use serde::{Deserialize, Serialize};
+use sea_orm::DeriveValueType;
+use strum::{EnumString, IntoStaticStr};
+use juniper::GraphQLEnum;
+use derive_more::Display;
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy)]
+// ==================== ATTRIBUTE TYPE (SINGLE SOURCE OF TRUTH) ====================
+#[derive(
+PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy,
+DeriveValueType,
+EnumString, IntoStaticStr, GraphQLEnum,
+Display,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+#[display("{_0}")]
+#[sea_orm(value_type = "String")]
 pub enum AttributeType {
     String,
     Integer,
@@ -9,6 +22,7 @@ pub enum AttributeType {
     DateTime,
 }
 
+// ==================== SCHEMA STRUCTS ====================
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct Schema {
     pub user_attributes: AttributeList,
@@ -35,10 +49,28 @@ pub struct AttributeList {
 }
 
 impl AttributeList {
-    /// Find attribute by exact name OR any alias (case-sensitive, as stored)
+    /// Find by exact name OR any alias (used by LDAP, GraphQL, frontend, etc.)
     pub fn get_by_name_or_alias(&self, name: &str) -> Option<&AttributeSchema> {
         self.attributes.iter().find(|a| {
             a.name == name || a.aliases.iter().any(|alias| alias == name)
         })
+    }
+
+    /// Compatibility for old domain code
+    pub fn get_attribute_schema(&self, name: &str) -> Option<&AttributeSchema> {
+        self.get_by_name_or_alias(name)
+    }
+
+    pub fn get_attribute_type(&self, name: &str) -> Option<(AttributeType, bool)> {
+        self.get_by_name_or_alias(name)
+        .map(|a| (a.attribute_type, a.is_list))
+    }
+
+    pub fn format_for_ldap_schema_description(&self) -> String {
+        self.attributes
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" $ ")
     }
 }

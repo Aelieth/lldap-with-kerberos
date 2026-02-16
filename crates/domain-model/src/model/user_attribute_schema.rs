@@ -41,10 +41,10 @@ impl Related<super::UserAttributes> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-impl From<Model> for AttributeSchema {
+impl From<Model> for lldap_schema::AttributeSchema {
     fn from(value: Model) -> Self {
         Self {
-            name: value.attribute_name,
+            name: value.attribute_name.into_string(),
             aliases: vec![],
             attribute_type: value.attribute_type,
             is_list: value.is_list,

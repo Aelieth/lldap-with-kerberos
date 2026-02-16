@@ -4,16 +4,17 @@ use base64::Engine;
 use chrono::{NaiveDateTime, TimeZone};
 use lldap_auth::types::CaseInsensitiveString;
 use sea_orm::{
-    DbErr, DeriveValueType, QueryResult, TryFromU64, TryGetError, TryGetable, Value,
+    DbErr, DeriveValueType, TryFromU64, Value,
     entity::IntoActiveValue,
     sea_query::{
-        ArrayType, ColumnType, SeaRc, StringLen, ValueTypeErr, extension::mysql::MySqlType,
-        value::ValueType,
+        SeaRc, StringLen,
+        extension::mysql::MySqlType,
     },
 };
 use serde::{Deserialize, Serialize};
-use strum::{EnumString, IntoStaticStr};
 pub use lldap_auth::types::UserId;
+// Use the single source of truth from schema crate
+pub use lldap_schema::AttributeType;
 
 #[derive(
     PartialEq,
@@ -561,17 +562,15 @@ impl Default for User {
 }
 
 #[derive(
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    DeriveValueType,
-    derive_more::Debug,
+Copy,
+Clone,
+PartialEq,
+Eq,
+Hash,
+Serialize,
+Deserialize,
+DeriveValueType,
+derive_more::Debug,   // ← keeps the custom #[debug("{_0}")] formatting
 )]
 #[debug("{_0}")]
 pub struct GroupId(pub i32);
@@ -585,117 +584,5 @@ impl TryFromU64 for GroupId {
 impl From<&GroupId> for Value {
     fn from(id: &GroupId) -> Self {
         (*id).into()
-    }
-}
-
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    EnumString,
-    IntoStaticStr,
-    juniper::GraphQLEnum,
-)]
-pub enum AttributeType {
-    String,
-    Integer,
-    JpegPhoto,
-    DateTime,
-}
-
-impl From<AttributeType> for Value {
-    fn from(attribute_type: AttributeType) -> Self {
-        Into::<&'static str>::into(attribute_type).into()
-    }
-}
-
-impl TryGetable for AttributeType {
-    fn try_get_by<I: sea_orm::ColIdx>(res: &QueryResult, index: I) -> Result<Self, TryGetError> {
-        use std::str::FromStr;
-        Ok(AttributeType::from_str(&String::try_get_by(res, index)?).expect("Invalid enum value"))
-    }
-}
-
-impl ValueType for AttributeType {
-    fn try_from(v: Value) -> Result<Self, ValueTypeErr> {
-        use std::str::FromStr;
-        Ok(
-            AttributeType::from_str(&<String as ValueType>::try_from(v)?)
-                .expect("Invalid enum value"),
-        )
-    }
-
-    fn type_name() -> String {
-        "AttributeType".to_owned()
-    }
-
-    fn array_type() -> ArrayType {
-        ArrayType::String
-    }
-
-    fn column_type() -> ColumnType {
-        ColumnType::String(StringLen::N(64))
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct Group {
-    pub id: GroupId,
-    pub display_name: GroupName,
-    pub creation_date: NaiveDateTime,
-    pub uuid: Uuid,
-    pub users: Vec<UserId>,
-    pub attributes: Vec<Attribute>,
-    pub modified_date: NaiveDateTime,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct GroupDetails {
-    pub group_id: GroupId,
-    pub display_name: GroupName,
-    pub creation_date: NaiveDateTime,
-    pub uuid: Uuid,
-    pub attributes: Vec<Attribute>,
-    pub modified_date: NaiveDateTime,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserAndGroups {
-    pub user: User,
-    pub groups: Option<Vec<GroupDetails>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn test_serialized_debug_string() {
-        assert_eq!(
-            &format!("{:?}", Serialized::from("abcd")),
-            "Serialized(\"abcd\")"
-        );
-        assert_eq!(
-            &format!("{:?}", Serialized::from(&1234i64)),
-            "Serialized(\"1234\")"
-        );
-        assert_eq!(
-            &format!("{:?}", Serialized::from(&JpegPhoto::for_tests())),
-            "Serialized(\"hash: 0xB947C77A16F3C3BD\")"
-        );
-    }
-
-    #[test]
-    fn test_serialized_i64_len() {
-        assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&0i64).0.len());
-        assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&i64::MAX).0.len());
-        assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&i64::MIN).0.len());
-        assert_eq!(SERIALIZED_I64_LEN, Serialized::from(&-1000i64).0.len());
     }
 }
