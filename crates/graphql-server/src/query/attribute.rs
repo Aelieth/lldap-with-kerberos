@@ -1,3 +1,4 @@
+#![allow(unused_braces)]
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_domain::public_schema::PublicSchema;
@@ -11,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
 
-// ──────────────────────────────────────────────────────────────
-//  GraphQL wrappers
-// ──────────────────────────────────────────────────────────────
+
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeSchema<Handler: BackendHandler> {
     schema: DomainAttributeSchema,
@@ -29,7 +28,6 @@ impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Ha
     }
 }
 
-#[allow(unused_braces)]
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
     fn name(&self) -> String { self.schema.name.clone() }
@@ -49,7 +47,6 @@ pub struct AttributeValue<Handler: BackendHandler> {
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
-#[allow(unused_braces)]
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
     fn name(&self) -> &str { self.attribute.name.as_str() }

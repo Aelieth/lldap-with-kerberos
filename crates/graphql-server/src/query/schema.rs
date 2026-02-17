@@ -1,3 +1,4 @@
+#![allow(unused_braces)]
 use juniper::graphql_object;
 use lldap_domain::public_schema::PublicSchema;
 use lldap_domain::schema::AttributeList as DomainAttributeList;
