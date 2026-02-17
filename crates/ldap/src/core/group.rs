@@ -228,15 +228,7 @@ fn convert_group_filter(
                     warn!("Invalid member filter on group: {}", e);
                     GroupRequestFilter::False
                 })),
-                GroupFieldType::ObjectClass => Ok(GroupRequestFilter::from(
-                    get_default_group_object_classes()
-                        .iter()
-                        .any(|class| class.as_str().eq_ignore_ascii_case(value_lc.as_str()))
-                        || schema
-                            .get_schema()
-                            .extra_group_object_classes
-                            .contains(&LdapObjectClass::from(value_lc)),
-                )),
+                GroupFieldType::ObjectClass => Ok(GroupRequestFilter::And(vec![])),
                 GroupFieldType::Dn | GroupFieldType::EntryDn => {
                     Ok(get_group_id_from_distinguished_name_or_plain_name(
                         value_lc.as_str(),

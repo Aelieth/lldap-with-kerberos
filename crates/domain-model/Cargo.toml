@@ -37,6 +37,9 @@ features = ["opaque_server", "opaque_client", "sea_orm"]
 [dependencies.lldap_domain]
 path = "../domain"
 
+[dependencies.lldap_schema]
+path = "../schema"
+
 [dependencies.sea-orm]
 workspace = true
 features = ["macros"]

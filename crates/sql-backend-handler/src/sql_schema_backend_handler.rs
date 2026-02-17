@@ -118,8 +118,16 @@ impl SqlBackendHandler {
             group_attributes: AttributeList {
                 attributes: Self::get_group_attributes(transaction).await?,
             },
-            extra_user_object_classes: Self::get_user_object_classes(transaction).await?,
-            extra_group_object_classes: Self::get_group_object_classes(transaction).await?,
+            extra_user_object_classes: Self::get_user_object_classes(transaction)
+            .await?
+            .into_iter()
+            .map(|oc| oc.into_string())
+            .collect(),
+           extra_group_object_classes: Self::get_group_object_classes(transaction)
+           .await?
+           .into_iter()
+           .map(|oc| oc.into_string())
+           .collect(),
         })
     }
 

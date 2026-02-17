@@ -1199,17 +1199,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     )
     .await;
 
-    // 2. Seed from PublicSchema (single source of truth)
-    use lldap_domain::schema::Schema;
-    use lldap_domain::public_schema::PublicSchema;
-
-    let base_schema = Schema {
-        user_attributes: lldap_domain::schema::AttributeList { attributes: vec![] },
-        group_attributes: lldap_domain::schema::AttributeList { attributes: vec![] },
-        extra_user_object_classes: vec![],
-        extra_group_object_classes: vec![],
-    };
-    let public_schema = PublicSchema::from(base_schema);
+    let public_schema = lldap_domain::PublicSchema::get();
 
     for attr in &public_schema.get_schema().user_attributes.attributes {
         if !attr.is_hardcoded {

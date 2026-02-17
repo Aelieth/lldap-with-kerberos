@@ -1,75 +1,48 @@
+// crates/graphql-server/src/query/attribute.rs
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_domain::public_schema::PublicSchema;
-use lldap_domain::schema::AttributeList as DomainAttributeList;
 use lldap_domain::schema::AttributeSchema as DomainAttributeSchema;
-use lldap_domain::types::{Attribute as DomainAttribute, AttributeValue as DomainAttributeValue};
-use lldap_domain::types::{Cardinality, Group as DomainGroup, GroupDetails, User as DomainUser};
+use lldap_domain::types::{
+    Attribute as DomainAttribute, AttributeValue as DomainAttributeValue,
+    Cardinality, Group as DomainGroup, GroupDetails, User as DomainUser,
+};
 use lldap_domain_handlers::handler::BackendHandler;
 use serde::{Deserialize, Serialize};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+// ──────────────────────────────────────────────────────────────
+//  GraphQL wrappers
+// ──────────────────────────────────────────────────────────────
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeSchema<Handler: BackendHandler> {
     schema: DomainAttributeSchema,
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
+impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Handler> {
+    fn from(schema: DomainAttributeSchema) -> Self {
+        Self {
+            schema,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
-    fn name(&self) -> String {
-        self.schema.name.to_string()
-    }
-
-    fn aliases(&self) -> Vec<String> {          // ← ADD THIS
-        self.schema.aliases.clone()
-    }
-
-    fn attribute_type(&self) -> lldap_domain::types::AttributeType {
-        self.schema.attribute_type
-    }
-
-    fn is_list(&self) -> bool {
-        self.schema.is_list
-    }
-
-    fn is_visible(&self) -> bool {
-        self.schema.is_visible
-    }
-
-    fn is_editable(&self) -> bool {
-        self.schema.is_editable
-    }
-
-    fn is_hardcoded(&self) -> bool {
-        self.schema.is_hardcoded
-    }
-
-    fn is_readonly(&self) -> bool {
-        self.schema.is_readonly
-    }
+    fn name(&self) -> String { self.schema.name.clone() }
+    fn aliases(&self) -> Vec<String> { self.schema.aliases.clone() }
+    fn attribute_type(&self) -> lldap_domain::types::AttributeType { self.schema.attribute_type }
+    fn is_list(&self) -> bool { self.schema.is_list }
+    fn is_visible(&self) -> bool { self.schema.is_visible }
+    fn is_editable(&self) -> bool { self.schema.is_editable }
+    fn is_hardcoded(&self) -> bool { self.schema.is_hardcoded }
+    fn is_readonly(&self) -> bool { self.schema.is_readonly }
 }
 
-impl<Handler: BackendHandler> Clone for AttributeSchema<Handler> {
-    fn clone(&self) -> Self {
-        Self {
-            schema: self.schema.clone(),
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Handler> {
-    fn from(value: DomainAttributeSchema) -> Self {
-        Self {
-            schema: value,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeValue<Handler: BackendHandler> {
     pub(super) attribute: DomainAttribute,
     pub(super) schema: AttributeSchema<Handler>,
@@ -78,43 +51,26 @@ pub struct AttributeValue<Handler: BackendHandler> {
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
-    fn name(&self) -> &str {
-        self.attribute.name.as_str()
-    }
-
+    fn name(&self) -> &str { self.attribute.name.as_str() }
     fn value(&self) -> FieldResult<Vec<String>> {
         Ok(serialize_attribute_to_graphql(&self.attribute.value))
     }
-
-    fn schema(&self) -> &AttributeSchema<Handler> {
-        &self.schema
-    }
+    fn schema(&self) -> &AttributeSchema<Handler> { &self.schema }
 }
 
 impl<Handler: BackendHandler> AttributeValue<Handler> {
     fn from_value(attr: DomainAttribute, schema: DomainAttributeSchema) -> Self {
         Self {
             attribute: attr,
-            schema: AttributeSchema::<Handler> {
-                schema,
-                _phantom: std::marker::PhantomData,
-            },
+            schema: schema.into(),
             _phantom: std::marker::PhantomData,
         }
     }
 
-    pub(super) fn name(&self) -> &str {
-        self.attribute.name.as_str()
-    }
-}
-
-impl<Handler: BackendHandler> Clone for AttributeValue<Handler> {
-    fn clone(&self) -> Self {
-        Self {
-            attribute: self.attribute.clone(),
-            schema: self.schema.clone(),
-            _phantom: std::marker::PhantomData,
-        }
+    fn from_schema(a: DomainAttribute, schema_list: &lldap_schema::AttributeList) -> Option<Self> {
+        schema_list
+            .get_by_name_or_alias(a.name.as_str())
+            .map(|s| Self::from_value(a, s.clone()))
     }
 }
 
@@ -124,91 +80,77 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
         DomainAttributeValue::String(Cardinality::Singleton(s)) => vec![s.clone()],
         DomainAttributeValue::String(Cardinality::Unbounded(l)) => l.clone(),
         DomainAttributeValue::Integer(Cardinality::Singleton(i)) => vec![i.to_string()],
-        DomainAttributeValue::Integer(Cardinality::Unbounded(l)) => {
-            l.iter().map(|i| i.to_string()).collect()
-        }
+        DomainAttributeValue::Integer(Cardinality::Unbounded(l)) => l.iter().map(|i| i.to_string()).collect(),
         DomainAttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![convert_date(dt)],
-        DomainAttributeValue::DateTime(Cardinality::Unbounded(l)) => {
-            l.iter().map(convert_date).collect()
-        }
+        DomainAttributeValue::DateTime(Cardinality::Unbounded(l)) => l.iter().map(convert_date).collect(),
         DomainAttributeValue::JpegPhoto(Cardinality::Singleton(p)) => vec![String::from(p)],
-        DomainAttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => {
-            l.iter().map(String::from).collect()
-        }
+        DomainAttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => l.iter().map(String::from).collect(),
+    }
+}
+
+// Hardcoded helpers
+fn get_hardcoded_user_value(user: &DomainUser, name: &str) -> Option<DomainAttributeValue> {
+    match name {
+        "userid" | "user_id" | "uid" => Some(user.user_id.clone().into_string().into()),
+        "creationdate" | "creation_date" => Some(user.creation_date.into()),
+        "modifieddate" | "modified_date" => Some(user.modified_date.into()),
+        "passwordmodifieddate" | "password_modified_date" => Some(user.password_modified_date.into()),
+        "mail" => Some(user.email.clone().into_string().into()),
+        "uuid" => Some(user.uuid.clone().into_string().into()),
+        "displayname" | "display_name" | "cn" => user.display_name.as_ref().map(|d| d.clone().into()),
+        _ => None,
+    }
+}
+
+fn get_hardcoded_group_value(group: &DomainGroup, name: &str) -> Option<DomainAttributeValue> {
+    match name {
+        "groupid" => Some((group.id.0 as i64).into()),
+        "creationdate" | "creation_date" => Some(group.creation_date.into()),
+        "modifieddate" | "modified_date" => Some(group.modified_date.into()),
+        "uuid" => Some(group.uuid.clone().into_string().into()),
+        "displayname" | "display_name" | "cn" => Some(group.display_name.clone().into_string().into()),
+        _ => None,
+    }
+}
+
+fn get_hardcoded_group_details_value(group: &GroupDetails, name: &str) -> Option<DomainAttributeValue> {
+    match name {
+        "groupid" => Some((group.group_id.0 as i64).into()),
+        "creationdate" | "creation_date" => Some(group.creation_date.into()),
+        "modifieddate" | "modified_date" => Some(group.modified_date.into()),
+        "uuid" => Some(group.uuid.clone().into_string().into()),
+        "displayname" | "display_name" | "cn" => Some(group.display_name.clone().into_string().into()),
+        _ => None,
     }
 }
 
 impl<Handler: BackendHandler> AttributeValue<Handler> {
-    fn from_schema(a: DomainAttribute, schema: &DomainAttributeList) -> Option<Self> {
-        schema
-        .get_attribute_schema(&a.name)
-        .map(|s| AttributeValue::<Handler>::from_value(a, s.clone()))
-    }
-
     pub fn user_attributes_from_schema(
         user: &mut DomainUser,
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let user_attributes = std::mem::take(&mut user.attributes);
+        let schema_list = &schema.get_schema().user_attributes;
 
-        let mut all_attributes = schema
-        .get_schema()
-        .user_attributes
-        .attributes
-        .iter()
-        .filter(|a| a.is_hardcoded)
-        .flat_map(|attribute_schema| {
-            let name = attribute_schema.name.as_str();
+        let mut all = schema_list
+            .attributes
+            .iter()
+            .filter(|a| a.is_hardcoded)
+            .filter_map(|s| {
+                get_hardcoded_user_value(user, &s.name)
+                    .map(|v| AttributeValue::from_value(
+                        DomainAttribute { name: s.name.clone().into(), value: v },
+                        s.clone(),
+                    ))
+            })
+            .collect::<Vec<_>>();
 
-            let value: Option<DomainAttributeValue> = match name {
-                // Upstream hardcoded attributes (both old and new naming)
-                "userid" | "user_id" => Some(user.user_id.clone().into_string().into()),
-                  "creationdate" | "creation_date" => Some(user.creation_date.into()),
-                  "modifieddate" | "modified_date" => Some(user.modified_date.into()),
-                  "passwordmodifieddate" | "password_modified_date" => Some(user.password_modified_date.into()),
-                  "mail" => Some(user.email.clone().into_string().into()),
-                  "uuid" => Some(user.uuid.clone().into_string().into()),
-                  "displayname" | "display_name" => user.display_name.as_ref().map(|d| d.clone().into()),
-
-                  // Our Kerberos/POSIX attributes
-                  "uidnumber" | "uid_number" => None,
-                  "gidnumber" | "gid_number" => None,
-                  "loginshell" | "login_shell" => None,
-                  "kerberossync" | "kerberos_sync" => None,
-
-                  // Legacy names that might still appear during transition
-                  "firstname" | "first_name" => None,
-                  "lastname" | "last_name" => None,
-                  "avatar" => None,
-
-                  _ => {
-                      // This is the panic line - let's make it more informative first
-                      panic!("Unexpected hardcoded attribute: {} (this should not happen)", name);
-                  }
-            };
-
-            value.map(|v| (attribute_schema, v))
-        })
-        .map(|(attribute_schema, value)| {
-            AttributeValue::<Handler>::from_value(
-                DomainAttribute {
-                    name: attribute_schema.name.clone(),
-                                                  value,
-                },
-                attribute_schema.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-        // Add any custom (non-hardcoded) attributes
         user_attributes
-        .into_iter()
-        .flat_map(|a| {
-            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().user_attributes)
-        })
-        .for_each(|value| all_attributes.push(value));
+            .into_iter()
+            .flat_map(|a| Self::from_schema(a, schema_list))
+            .for_each(|v| all.push(v));
 
-        all_attributes
+        all
     }
 
     pub fn group_attributes_from_schema(
@@ -216,42 +158,27 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
-        let mut all_attributes = schema
-        .get_schema()
-        .group_attributes
-        .attributes
-        .iter()
-        .filter(|a| a.is_hardcoded)
-        .map(|attribute_schema| {
-            (
-                attribute_schema,
-             match attribute_schema.name.as_str() {
-                 "groupid" => (group.id.0 as i64).into(),
-             "creationdate" => group.creation_date.into(),
-             "modifieddate" => group.modified_date.into(),
-             "uuid" => group.uuid.clone().into_string().into(),
-             "displayname" => group.display_name.clone().into_string().into(),
-             _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
-             },
-            )
-        })
-        .map(|(attribute_schema, value)| {
-            AttributeValue::<Handler>::from_value(
-                DomainAttribute {
-                    name: attribute_schema.name.clone(),
-                                                  value,
-                },
-                attribute_schema.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
+        let schema_list = &schema.get_schema().group_attributes;
+
+        let mut all = schema_list
+            .attributes
+            .iter()
+            .filter(|a| a.is_hardcoded)
+            .filter_map(|s| {
+                get_hardcoded_group_value(group, &s.name)
+                    .map(|v| AttributeValue::from_value(
+                        DomainAttribute { name: s.name.clone().into(), value: v },
+                        s.clone(),
+                    ))
+            })
+            .collect::<Vec<_>>();
+
         group_attributes
-        .into_iter()
-        .flat_map(|a| {
-            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
-        })
-        .for_each(|value| all_attributes.push(value));
-        all_attributes
+            .into_iter()
+            .flat_map(|a| Self::from_schema(a, schema_list))
+            .for_each(|v| all.push(v));
+
+        all
     }
 
     pub fn group_details_attributes_from_schema(
@@ -259,41 +186,26 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
-        let mut all_attributes = schema
-        .get_schema()
-        .group_attributes
-        .attributes
-        .iter()
-        .filter(|a| a.is_hardcoded)
-        .map(|attribute_schema| {
-            (
-                attribute_schema,
-             match attribute_schema.name.as_str() {
-                 "groupid" => (group.group_id.0 as i64).into(),
-             "creationdate" => group.creation_date.into(),
-             "modifieddate" => group.modified_date.into(),
-             "uuid" => group.uuid.clone().into_string().into(),
-             "displayname" => group.display_name.clone().into_string().into(),
-             _ => panic!("Unexpected hardcoded attribute: {}", attribute_schema.name),
-             },
-            )
-        })
-        .map(|(attribute_schema, value)| {
-            AttributeValue::<Handler>::from_value(
-                DomainAttribute {
-                    name: attribute_schema.name.clone(),
-                                                  value,
-                },
-                attribute_schema.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
+        let schema_list = &schema.get_schema().group_attributes;
+
+        let mut all = schema_list
+            .attributes
+            .iter()
+            .filter(|a| a.is_hardcoded)
+            .filter_map(|s| {
+                get_hardcoded_group_details_value(group, &s.name)
+                    .map(|v| AttributeValue::from_value(
+                        DomainAttribute { name: s.name.clone().into(), value: v },
+                        s.clone(),
+                    ))
+            })
+            .collect::<Vec<_>>();
+
         group_attributes
-        .into_iter()
-        .flat_map(|a| {
-            AttributeValue::<Handler>::from_schema(a, &schema.get_schema().group_attributes)
-        })
-        .for_each(|value| all_attributes.push(value));
-        all_attributes
+            .into_iter()
+            .flat_map(|a| Self::from_schema(a, schema_list))
+            .for_each(|v| all.push(v));
+
+        all
     }
 }

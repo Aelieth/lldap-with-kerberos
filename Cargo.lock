@@ -3197,6 +3197,7 @@ dependencies = [
  "derive_more 1.0.0",
  "lldap_auth",
  "lldap_domain",
+ "lldap_schema",
  "orion",
  "pretty_assertions",
  "sea-orm",

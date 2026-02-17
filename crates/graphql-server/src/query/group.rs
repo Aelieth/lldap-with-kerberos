@@ -12,7 +12,7 @@ use super::attribute::AttributeValue;
 use super::user::User;
 use crate::api::{Context, field_error_callback};
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 /// Represents a single group.
 pub struct Group<Handler: BackendHandler> {
     pub group_id: i32,
@@ -59,20 +59,6 @@ impl<Handler: BackendHandler> Group<Handler> {
             schema,
             _phantom: std::marker::PhantomData,
         })
-    }
-}
-
-impl<Handler: BackendHandler> Clone for Group<Handler> {
-    fn clone(&self) -> Self {
-        Self {
-            group_id: self.group_id,
-            display_name: self.display_name.clone(),
-            creation_date: self.creation_date,
-            uuid: self.uuid.clone(),
-            attributes: self.attributes.clone(),
-            schema: self.schema.clone(),
-            _phantom: std::marker::PhantomData,
-        }
     }
 }
 

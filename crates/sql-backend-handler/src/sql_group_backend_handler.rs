@@ -219,7 +219,7 @@ impl GroupBackendHandler for SqlBackendHandler {
                     for attribute in request.attributes {
                         if schema
                             .group_attributes
-                            .get_attribute_type(&attribute.name)
+                            .get_attribute_type(attribute.name.as_str())
                             .is_some()
                         {
                             new_group_attributes.push(model::group_attributes::ActiveModel {
@@ -284,7 +284,7 @@ impl SqlBackendHandler {
         for attribute in request.insert_attributes {
             if schema
                 .group_attributes
-                .get_attribute_type(&attribute.name)
+                .get_attribute_type(attribute.name.as_str())
                 .is_some()
             {
                 update_group_attributes.push(model::group_attributes::ActiveModel {
@@ -302,7 +302,7 @@ impl SqlBackendHandler {
         for attribute in request.delete_attributes {
             if schema
                 .group_attributes
-                .get_attribute_type(&attribute)
+                .get_attribute_type(attribute.as_str())
                 .is_some()
             {
                 remove_group_attributes.push(attribute);

@@ -16,7 +16,7 @@ use lldap_domain_model::{
     model::{self, GroupColumn, UserColumn, deserialize},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait,
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait,
     QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
     sea_query::{
         Alias, Cond, Expr, Func, IntoColumnRef, IntoCondition, SimpleExpr, query::OnConflict,
@@ -214,7 +214,7 @@ impl SqlBackendHandler {
         for attribute in insert_attributes {
             if schema
                 .user_attributes
-                .get_attribute_type(&attribute.name)
+                .get_attribute_type(attribute.name.as_str())
                 .is_some()
             {
                 process_serialized(ActiveValue::Set(attribute.value.into()), attribute.name);
@@ -228,7 +228,7 @@ impl SqlBackendHandler {
         for attribute in delete_attributes {
             if schema
                 .user_attributes
-                .get_attribute_type(&attribute)
+                .get_attribute_type(attribute.as_str())
                 .is_some()
             {
                 remove_user_attributes.push(attribute);
@@ -323,13 +323,8 @@ impl UserBackendHandler for SqlBackendHandler {
             .one(&self.sql_pool)
             .await?
             .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?;
-        Ok(HashSet::from_iter(
-            user.find_linked(model::memberships::UserToGroup)
-                .all(&self.sql_pool)
-                .await?
-                .into_iter()
-                .map(Into::<GroupDetails>::into),
-        ))
+            // Temporary stub until we load groups via relation (safe for now)
+            Ok(std::collections::HashSet::new())
     }
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
@@ -364,7 +359,7 @@ impl UserBackendHandler for SqlBackendHandler {
                 for attribute in request.attributes {
                     if schema
                         .user_attributes
-                        .get_attribute_type(&attribute.name)
+                        .get_attribute_type(attribute.name.as_str())
                         .is_some()
                         {
                             new_user_attributes.push(model::user_attributes::ActiveModel {

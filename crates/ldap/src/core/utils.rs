@@ -262,7 +262,7 @@ pub fn map_user_field(field: &AttributeName, schema: &PublicSchema) -> UserField
         _ => schema
             .get_schema()
             .user_attributes
-            .get_attribute_type(field)
+            .get_attribute_type(field.as_str())
             .map(|(t, is_list)| UserFieldType::Attribute(field.clone(), t, is_list))
             .unwrap_or(UserFieldType::NoMatch),
     }
@@ -297,7 +297,7 @@ pub fn map_group_field(field: &AttributeName, schema: &PublicSchema) -> GroupFie
         _ => schema
             .get_schema()
             .group_attributes
-            .get_attribute_type(field)
+            .get_attribute_type(field.as_str())
             .map(|(t, is_list)| GroupFieldType::Attribute(field.clone(), t, is_list))
             .unwrap_or(GroupFieldType::NoMatch),
     }
@@ -385,9 +385,13 @@ pub struct LdapSchemaDescription {
 impl LdapSchemaDescription {
     pub fn from(schema: PublicSchema) -> Self {
         let mut user_object_classes = get_default_user_object_classes();
-        user_object_classes.extend(schema.get_schema().extra_user_object_classes.clone());
+        user_object_classes.extend(
+            schema.get_schema().extra_user_object_classes.iter().map(|s| LdapObjectClass::from(s.as_str()))
+        );
         let mut group_object_classes = get_default_group_object_classes();
-        group_object_classes.extend(schema.get_schema().extra_group_object_classes.clone());
+        group_object_classes.extend(
+            schema.get_schema().extra_group_object_classes.iter().map(|s| LdapObjectClass::from(s.as_str()))
+        );
 
         Self {
             base: schema,

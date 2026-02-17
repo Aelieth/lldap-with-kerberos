@@ -401,7 +401,7 @@ pub async fn do_search(
     ldap_info: &LdapInfo,
     request: &LdapSearchRequest,
 ) -> LdapResult<Vec<LdapOp>> {
-    let schema = PublicSchema::from(backend_handler.get_schema().await.map_err(|e| LdapError {
+    let schema = lldap_domain::PublicSchema(backend_handler.get_schema().await.map_err(|e| LdapError {
         code: LdapResultCode::OperationsError,
         message: format!("Unable to get schema: {e:#}"),
     })?);

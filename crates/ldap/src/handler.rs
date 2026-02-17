@@ -18,7 +18,6 @@ use ldap3_proto::proto::{
 };
 use lldap_access_control::AccessControlledBackendHandler;
 use lldap_auth::access_control::ValidationResults;
-use lldap_domain::public_schema::PublicSchema;
 use lldap_domain_handlers::handler::{BackendHandler, LoginHandler, ReadSchemaBackendHandler};
 use lldap_opaque_handler::OpaqueHandler;
 use tracing::{debug, instrument};
@@ -146,7 +145,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                 message: format!("Unable to get schema: {e:#}"),
             })?;
             return Ok(vec![
-                make_ldap_subschema_entry(PublicSchema::from(schema)),
+                make_ldap_subschema_entry(lldap_domain::PublicSchema(schema)),
                 make_search_success(),
             ]);
         }

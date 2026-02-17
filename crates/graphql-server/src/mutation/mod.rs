@@ -262,7 +262,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                      .clone()
                      .into_iter()
                      .filter(|attr| attr != "mail" && attr != "display_name")
-                     .map(Into::into)
+                     .map(|s| AttributeName::from(s))
                      .collect(),
                      insert_attributes: insert_attributes.clone(),
         })
@@ -322,18 +322,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .filter(|attr| attr.name != "display_name")
             .map(|attr| deserialize_attribute(&schema.get_schema().group_attributes, attr, true))
             .collect::<Result<Vec<_>, _>>()?;
-        handler
+            handler
             .update_group(UpdateGroupRequest {
                 group_id: GroupId(group.id),
-                display_name: new_display_name.map(|s| s.as_str().into()),
-                delete_attributes: group
-                    .remove_attributes
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|attr| attr != "display_name")
-                    .map(Into::into)
-                    .collect(),
-                insert_attributes,
+                          display_name: new_display_name.map(|s| s.as_str().into()),
+                          delete_attributes: group
+                          .remove_attributes
+                          .unwrap_or_default()
+                          .into_iter()
+                          .filter(|attr| attr != "display_name")
+                          .map(|s| AttributeName::from(s))
+                          .collect(),
+                          insert_attributes,
             })
             .instrument(span)
             .await?;
@@ -557,7 +557,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let attribute_schema = schema
             .get_schema()
             .user_attributes
-            .get_attribute_schema(&name)
+            .get_attribute_schema(name.as_str())
             .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());

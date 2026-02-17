@@ -32,28 +32,28 @@ impl Related<super::memberships::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 impl From<Model> for lldap_domain::types::Group {
-    fn from(group: Model) -> Self {
-        Self {
-            id: group.group_id,
-            display_name: group.display_name,
-            creation_date: group.creation_date,
-            uuid: group.uuid,
-            users: vec![],
-            attributes: Vec::new(),
-            modified_date: group.modified_date,
+    fn from(value: Model) -> Self {
+        lldap_domain::types::Group {
+            id: value.group_id,
+            display_name: value.display_name,
+            creation_date: value.creation_date,
+            uuid: value.uuid,
+            users: vec![],           // populated later by relations
+            attributes: vec![],      // populated later by relations
+            modified_date: value.modified_date,
         }
     }
 }
 
 impl From<Model> for lldap_domain::types::GroupDetails {
-    fn from(group: Model) -> Self {
-        Self {
-            group_id: group.group_id,
-            display_name: group.display_name,
-            creation_date: group.creation_date,
-            uuid: group.uuid,
-            attributes: Vec::new(),
-            modified_date: group.modified_date,
+    fn from(value: Model) -> Self {
+        lldap_domain::types::GroupDetails {
+            group_id: value.group_id,
+            display_name: value.display_name,
+            creation_date: value.creation_date,
+            uuid: value.uuid,
+            attributes: vec![],      // populated later
+            modified_date: value.modified_date,
         }
     }
 }

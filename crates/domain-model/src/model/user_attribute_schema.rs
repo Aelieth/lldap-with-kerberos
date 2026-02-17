@@ -2,7 +2,6 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use lldap_domain::{
-    schema::AttributeSchema,
     types::{AttributeName, AttributeType},
 };
 

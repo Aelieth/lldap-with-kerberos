@@ -12,7 +12,7 @@ use super::attribute::AttributeValue;
 use super::group::Group;
 use crate::api::Context;
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 /// Represents a single user.
 pub struct User<Handler: BackendHandler> {
     user: DomainUser,

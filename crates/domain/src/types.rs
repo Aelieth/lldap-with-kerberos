@@ -544,6 +544,33 @@ pub struct User {
     pub password_modified_date: NaiveDateTime,
 }
 
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    pub id: GroupId,
+    pub display_name: GroupName,
+    pub creation_date: NaiveDateTime,
+    pub uuid: Uuid,
+    pub users: Vec<UserId>,
+    pub attributes: Vec<Attribute>,
+    pub modified_date: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupDetails {
+    pub group_id: GroupId,
+    pub display_name: GroupName,
+    pub creation_date: NaiveDateTime,
+    pub uuid: Uuid,
+    pub attributes: Vec<Attribute>,
+    pub modified_date: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAndGroups {
+    pub user: User,
+    pub groups: Option<Vec<GroupDetails>>,
+}
+
 #[cfg(feature = "test")]
 impl Default for User {
     fn default() -> Self {

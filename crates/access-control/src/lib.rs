@@ -80,9 +80,7 @@ impl<Handler: BackendHandler> UserReadableBackendHandler for Handler {
         <Handler as UserBackendHandler>::get_user_groups(self, user_id).await
     }
     async fn get_schema(&self) -> Result<PublicSchema> {
-        Ok(PublicSchema::from(
-            <Handler as ReadSchemaBackendHandler>::get_schema(self).await?,
-        ))
+        Ok(lldap_domain::schema())
     }
 }
 

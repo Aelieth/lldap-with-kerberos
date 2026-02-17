@@ -163,7 +163,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             .get_schema()
             .instrument(span)
             .await
-            .map(Into::<PublicSchema>::into)?)
+            .map(|s| lldap_domain::PublicSchema(s))?)
     }
 }
 

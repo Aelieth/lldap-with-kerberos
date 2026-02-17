@@ -44,7 +44,7 @@ pub fn deserialize_attribute(
     value: &Serialized,
     schema: &AttributeList,
 ) -> Result<Attribute, DomainError> {
-    match schema.get_attribute_type(&name) {
+    match schema.get_attribute_type(name.as_str()) {
         Some((typ, is_list)) => Ok(Attribute {
             name,
             value: deserialize_attribute_value(value, typ, is_list),

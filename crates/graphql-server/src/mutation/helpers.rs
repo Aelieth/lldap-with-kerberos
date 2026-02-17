@@ -108,7 +108,7 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
     let schema = handler.get_schema().await?;
-    let public_schema: PublicSchema = schema.into();
+    let public_schema = lldap_domain::schema();
     let attributes = request
         .attributes
         .unwrap_or_default()
@@ -131,7 +131,7 @@ pub fn deserialize_attribute(
 ) -> FieldResult<DomainAttribute> {
     let attribute_name = AttributeName::from(attribute.name.as_str());
     let attribute_schema = attribute_schema
-        .get_attribute_schema(&attribute_name)
+        .get_attribute_schema(attribute_name.as_str())
         .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
     if attribute_schema.is_readonly {
         return Err(anyhow!(
