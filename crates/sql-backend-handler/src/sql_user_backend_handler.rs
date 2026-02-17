@@ -319,7 +319,7 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip_all, level = "debug", ret, err, fields(user_id = ?user_id.as_str()))]
     async fn get_user_groups(&self, user_id: &UserId) -> Result<HashSet<GroupDetails>> {
-        let user = model::User::find_by_id(user_id.to_owned())
+        let _user = model::User::find_by_id(user_id.to_owned())
             .one(&self.sql_pool)
             .await?
             .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?;
