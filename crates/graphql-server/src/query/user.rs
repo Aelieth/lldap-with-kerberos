@@ -69,32 +69,26 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     fn first_name(&self) -> &str {
         self.attributes
-            .iter()
-            .find(|a| a.name() == "first_name")
-            .map(|a| a.attribute.value.as_str().unwrap_or_default())
-            .unwrap_or_default()
+        .iter()
+        .find(|a| a.name() == "first_name")
+        .and_then(|a| a.attribute.value.as_str())
+        .unwrap_or_default()
     }
 
     fn last_name(&self) -> &str {
         self.attributes
-            .iter()
-            .find(|a| a.name() == "last_name")
-            .map(|a| a.attribute.value.as_str().unwrap_or_default())
-            .unwrap_or_default()
+        .iter()
+        .find(|a| a.name() == "last_name")
+        .and_then(|a| a.attribute.value.as_str())
+        .unwrap_or_default()
     }
 
     fn avatar(&self) -> Option<String> {
         self.attributes
-            .iter()
-            .find(|a| a.name() == "avatar")
-            .map(|a| {
-                String::from(
-                    a.attribute
-                        .value
-                        .as_jpeg_photo()
-                        .expect("Invalid JPEG returned by the DB"),
-                )
-            })
+        .iter()
+        .find(|a| a.name() == "avatar")
+        .and_then(|a| a.attribute.value.as_jpeg_photo())
+        .map(String::from)
     }
 
     fn creation_date(&self) -> chrono::DateTime<chrono::Utc> {
@@ -111,7 +105,7 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
     }
 
     /// The groups to which this user belongs.
-    async fn groups<Handler: BackendHandler + OpaqueHandler>(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
+    async fn groups(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
         if let Some(groups) = &self.groups {
             return Ok(groups.clone());
         }
@@ -120,16 +114,16 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
             debug!(user_id = ?self.user.user_id);
         });
         let handler = context
-            .get_readable_handler(&self.user.user_id)
-            .expect("We shouldn't be able to get there without readable permission");
+        .get_readable_handler(&self.user.user_id)
+        .expect("We shouldn't be able to get there without readable permission");
         let domain_groups = handler
-            .get_user_groups(&self.user.user_id)
-            .instrument(span)
-            .await?;
+        .get_user_groups(&self.user.user_id)
+        .instrument(span)
+        .await?;
         let mut groups = domain_groups
-            .into_iter()
-            .map(|g| Group::<Handler>::from_group_details(g, self.schema.clone()))
-            .collect::<FieldResult<Vec<Group<Handler>>>>()?;
+        .into_iter()
+        .map(|g| Group::<Handler>::from_group_details(g, self.schema.clone()))
+        .collect::<FieldResult<Vec<Group<Handler>>>>()?;
         groups.sort_by(|g1, g2| g1.display_name.cmp(&g2.display_name));
         Ok(groups)
     }

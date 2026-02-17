@@ -588,7 +588,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let attribute_schema = schema
             .get_schema()
             .group_attributes
-            .get_attribute_schema(&name)
+            .get_attribute_schema(name.as_str())
             .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
