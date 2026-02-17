@@ -1,8 +1,8 @@
 pub mod attribute;
 pub mod filters;
-pub mod group;
 pub mod schema;
 pub mod user;
+pub mod group;   // moved AFTER user so the cycle breaks
 
 // Re-export public types
 pub use attribute::{AttributeSchema, AttributeValue, serialize_attribute_to_graphql};

@@ -1,4 +1,3 @@
-// crates/graphql-server/src/query/attribute.rs
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_domain::public_schema::PublicSchema;
@@ -30,6 +29,7 @@ impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Ha
     }
 }
 
+#[allow(unused_braces)]
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
     fn name(&self) -> String { self.schema.name.clone() }
@@ -49,6 +49,7 @@ pub struct AttributeValue<Handler: BackendHandler> {
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
+#[allow(unused_braces)]
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
     fn name(&self) -> &str { self.attribute.name.as_str() }
@@ -59,6 +60,11 @@ impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
 }
 
 impl<Handler: BackendHandler> AttributeValue<Handler> {
+    // Regular Rust method (visible to user.rs and everywhere else)
+    pub fn name(&self) -> &str {
+        self.attribute.name.as_str()
+    }
+
     fn from_value(attr: DomainAttribute, schema: DomainAttributeSchema) -> Self {
         Self {
             attribute: attr,
@@ -69,8 +75,8 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
 
     fn from_schema(a: DomainAttribute, schema_list: &lldap_schema::AttributeList) -> Option<Self> {
         schema_list
-            .get_by_name_or_alias(a.name.as_str())
-            .map(|s| Self::from_value(a, s.clone()))
+        .get_by_name_or_alias(a.name.as_str())
+        .map(|s| Self::from_value(a, s.clone()))
     }
 }
 
@@ -133,22 +139,22 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         let schema_list = &schema.get_schema().user_attributes;
 
         let mut all = schema_list
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded)
-            .filter_map(|s| {
-                get_hardcoded_user_value(user, &s.name)
-                    .map(|v| AttributeValue::from_value(
-                        DomainAttribute { name: s.name.clone().into(), value: v },
-                        s.clone(),
-                    ))
-            })
-            .collect::<Vec<_>>();
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .filter_map(|s| {
+            get_hardcoded_user_value(user, &s.name)
+            .map(|v| AttributeValue::from_value(
+                DomainAttribute { name: s.name.clone().into(), value: v },
+                                                s.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
         user_attributes
-            .into_iter()
-            .flat_map(|a| Self::from_schema(a, schema_list))
-            .for_each(|v| all.push(v));
+        .into_iter()
+        .flat_map(|a| Self::from_schema(a, schema_list))
+        .for_each(|v| all.push(v));
 
         all
     }
@@ -161,22 +167,22 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         let schema_list = &schema.get_schema().group_attributes;
 
         let mut all = schema_list
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded)
-            .filter_map(|s| {
-                get_hardcoded_group_value(group, &s.name)
-                    .map(|v| AttributeValue::from_value(
-                        DomainAttribute { name: s.name.clone().into(), value: v },
-                        s.clone(),
-                    ))
-            })
-            .collect::<Vec<_>>();
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .filter_map(|s| {
+            get_hardcoded_group_value(group, &s.name)
+            .map(|v| AttributeValue::from_value(
+                DomainAttribute { name: s.name.clone().into(), value: v },
+                                                s.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
         group_attributes
-            .into_iter()
-            .flat_map(|a| Self::from_schema(a, schema_list))
-            .for_each(|v| all.push(v));
+        .into_iter()
+        .flat_map(|a| Self::from_schema(a, schema_list))
+        .for_each(|v| all.push(v));
 
         all
     }
@@ -189,22 +195,22 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         let schema_list = &schema.get_schema().group_attributes;
 
         let mut all = schema_list
-            .attributes
-            .iter()
-            .filter(|a| a.is_hardcoded)
-            .filter_map(|s| {
-                get_hardcoded_group_details_value(group, &s.name)
-                    .map(|v| AttributeValue::from_value(
-                        DomainAttribute { name: s.name.clone().into(), value: v },
-                        s.clone(),
-                    ))
-            })
-            .collect::<Vec<_>>();
+        .attributes
+        .iter()
+        .filter(|a| a.is_hardcoded)
+        .filter_map(|s| {
+            get_hardcoded_group_details_value(group, &s.name)
+            .map(|v| AttributeValue::from_value(
+                DomainAttribute { name: s.name.clone().into(), value: v },
+                                                s.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
         group_attributes
-            .into_iter()
-            .flat_map(|a| Self::from_schema(a, schema_list))
-            .for_each(|v| all.push(v));
+        .into_iter()
+        .flat_map(|a| Self::from_schema(a, schema_list))
+        .for_each(|v| all.push(v));
 
         all
     }

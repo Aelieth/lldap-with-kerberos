@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{Instrument, debug, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
 use super::attribute::AttributeValue;
-use super::user::User;
+use crate::query::user::User;   // ← absolute crate-root path (breaks cycle 100%)
 use crate::api::{Context, field_error_callback};
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -30,15 +30,15 @@ impl<Handler: BackendHandler> Group<Handler> {
         schema: Arc<PublicSchema>,
     ) -> FieldResult<Group<Handler>> {
         let attributes =
-            AttributeValue::<Handler>::group_attributes_from_schema(&mut group, &schema);
+        AttributeValue::<Handler>::group_attributes_from_schema(&mut group, &schema);
         Ok(Self {
             group_id: group.id.0,
             display_name: group.display_name.to_string(),
-            creation_date: group.creation_date,
-            uuid: group.uuid.into_string(),
-            attributes,
-            schema,
-            _phantom: std::marker::PhantomData,
+           creation_date: group.creation_date,
+           uuid: group.uuid.into_string(),
+           attributes,
+           schema,
+           _phantom: std::marker::PhantomData,
         })
     }
 
@@ -53,11 +53,11 @@ impl<Handler: BackendHandler> Group<Handler> {
         Ok(Self {
             group_id: group_details.group_id.0,
             display_name: group_details.display_name.to_string(),
-            creation_date: group_details.creation_date,
-            uuid: group_details.uuid.into_string(),
-            attributes,
-            schema,
-            _phantom: std::marker::PhantomData,
+           creation_date: group_details.creation_date,
+           uuid: group_details.uuid.into_string(),
+           attributes,
+           schema,
+           _phantom: std::marker::PhantomData,
         })
     }
 }
@@ -82,28 +82,28 @@ impl<Handler: BackendHandler + OpaqueHandler> Group<Handler> {
         &self.attributes
     }
 
-    /// The groups to which this user belongs.
-    async fn users<Handler: BackendHandler + OpaqueHandler>(&self, context: &Context<Handler>) -> FieldResult<Vec<User<Handler>>> {
+    /// The users that belong to this group.
+    async fn users(&self, context: &Context<Handler>) -> FieldResult<Vec<User<Handler>>> {
         let span = debug_span!("[GraphQL query] group::users");
         span.in_scope(|| {
             debug!(name = %self.display_name);
         });
         let handler = context
-            .get_readonly_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized access to group data",
-            ))?;
+        .get_readonly_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized access to group data",
+        ))?;
         let domain_users = handler
-            .list_users(
-                Some(DomainRequestFilter::MemberOfId(GroupId(self.group_id))),
-                false,
-            )
-            .instrument(span)
-            .await?;
+        .list_users(
+            Some(DomainRequestFilter::MemberOfId(GroupId(self.group_id))),
+                    false,
+        )
+        .instrument(span)
+        .await?;
         domain_users
-            .into_iter()
-            .map(|u| User::<Handler>::from_user_and_groups(u, self.schema.clone()))
-            .collect()
+        .into_iter()
+        .map(|u| User::<Handler>::from_user_and_groups(u, self.schema.clone()))
+        .collect::<FieldResult<Vec<_>>>()
     }
 }

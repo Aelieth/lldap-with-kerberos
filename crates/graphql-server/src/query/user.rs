@@ -44,9 +44,9 @@ impl<Handler: BackendHandler> User<Handler> {
         if let Some(groups) = groups {
             user.groups = Some(
                 groups
-                    .into_iter()
-                    .map(|g| Group::<Handler>::from_group_details(g, schema.clone()))
-                    .collect::<FieldResult<Vec<_>>>()?,
+                .into_iter()
+                .map(|g| Group::<Handler>::from_group_details(g, schema.clone()))
+                .collect::<FieldResult<Vec<_>>>()?,
             );
         }
         Ok(user)
@@ -106,9 +106,6 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     /// The groups to which this user belongs.
     async fn groups(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
-        if let Some(groups) = &self.groups {
-            return Ok(groups.clone());
-        }
         let span = debug_span!("[GraphQL query] user::groups");
         span.in_scope(|| {
             debug!(user_id = ?self.user.user_id);
