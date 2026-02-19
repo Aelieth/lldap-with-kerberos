@@ -1,6 +1,6 @@
 use crate::sql_tables::{DbConnection, LAST_SCHEMA_VERSION, SchemaVersion};
 use itertools::Itertools;
-use lldap_domain::types::{AttributeType, GroupId, JpegPhoto, Serialized, UserId, Uuid};
+use lldap_domain::types::{AttributeType, GroupId, JpegPhoto, UserId, Uuid};
 use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
@@ -166,7 +166,7 @@ pub(crate) async fn upgrade_to_v1(pool: &DbConnection) -> std::result::Result<()
                 )
                 .col(ColumnDef::new(Users::FirstName).string_len(255))
                 .col(ColumnDef::new(Users::LastName).string_len(255))
-                .col(ColumnDef::new(Users::Avatar).binary())
+                .col(ColumnDef::new(Users::Avatar).blob())
                 .col(ColumnDef::new(Users::CreationDate).date_time().not_null())
                 .col(ColumnDef::new(Users::PasswordHash).blob())
                 .col(ColumnDef::new(Users::TotpSecret).string_len(64))
@@ -502,7 +502,7 @@ async fn migrate_to_v3(transaction: DatabaseTransaction) -> Result<DatabaseTrans
         )],
     )
     .await?;
-    // Change Avatar from binary to blob(long), because for MySQL this is 64kb.
+        // Change Avatar to blob (LONGBLOB on MySQL) for 2 MB support (fixes #1399)
     let transaction = replace_column(
         transaction,
         Users::Table,
@@ -829,6 +829,9 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
         )
         .await?;
 
+        // Migrate old hardcoded columns into EAV user_attributes table
+    // Strings stored as raw UTF-8 bytes, avatar as raw JPEG bytes
+    // No Serialized / bincode → zero ser/de headaches forever
     {
         let mut user_statement = Query::insert()
             .into_table(UserAttributes::Table)
@@ -838,6 +841,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                 UserAttributes::UserAttributeValue,
             ])
             .to_owned();
+
         #[derive(FromQueryResult)]
         struct FullUserDetails {
             user_id: UserId,
@@ -845,6 +849,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
             last_name: Option<String>,
             avatar: Option<JpegPhoto>,
         }
+
         let mut any_user = false;
         for user in FullUserDetails::find_by_statement(builder.build(
             Query::select().from(Users::Table).columns([
@@ -862,7 +867,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                 user_statement.values_panic([
                     user.user_id.clone().into(),
                     "first_name".into(),
-                    Serialized::from(name).into(),
+                    sea_orm::Value::from(name.as_bytes().to_vec()).into(),
                 ]);
             }
             if let Some(name) = &user.last_name {
@@ -870,16 +875,18 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                 user_statement.values_panic([
                     user.user_id.clone().into(),
                     "last_name".into(),
-                    Serialized::from(name).into(),
+                    sea_orm::Value::from(name.as_bytes().to_vec()).into(),
                 ]);
             }
             if let Some(avatar) = &user.avatar {
-                any_user = true;
-                user_statement.values_panic([
-                    user.user_id.clone().into(),
-                    "avatar".into(),
-                    Serialized::from(avatar).into(),
-                ]);
+                if !avatar.is_empty() {
+                    any_user = true;
+                    user_statement.values_panic([
+                        user.user_id.clone().into(),
+                        "avatar".into(),
+                        sea_orm::Value::from(avatar.clone().into_bytes()).into(),
+                    ]);
+                }
             }
         }
 
@@ -1167,9 +1174,9 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    info!("=== v12 Migration: POSIX/Kerberos attributes + proper aliases ===");
+    info!("=== v12 Migration: POSIX + Kerberos attributes + proper aliases ===");
 
-    // 1. Ensure aliases column exists
+    // 1. Ensure aliases column exists (safe for future schema upgrades)
     info!("Adding 'aliases' column if missing...");
     let _ = transaction
     .execute(
@@ -1200,8 +1207,10 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     .await;
 
     let public_schema = lldap_domain::PublicSchema::get();
+    let schema = public_schema.get_schema();
 
-    for attr in &public_schema.get_schema().user_attributes.attributes {
+    // 2. Seed or update all hardcoded USER attributes from single source of truth
+    for attr in &schema.user_attributes.attributes {
         if !attr.is_hardcoded {
             continue;
         }
@@ -1212,7 +1221,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         let count: i64 = transaction
         .query_one(
             backend.build(
-                &Query::select()
+                &Query::select()   // ← the missing & was here
                 .from(UserAttributeSchema::Table)
                 .expr_as(
                     Func::count(Expr::col(UserAttributeSchema::UserAttributeSchemaName)),
@@ -1227,7 +1236,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .unwrap_or(0);
 
         if count == 0 {
-            info!("Seeding hardcoded attribute: {}", name);
+            info!("Seeding hardcoded user attribute: {}", name);
             transaction
             .execute(
                 backend.build(
@@ -1255,7 +1264,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
             )
             .await?;
         } else {
-            info!("Updating aliases/flags for: {}", name);
+            info!("Updating aliases/flags for user attribute: {}", name);
             transaction
             .execute(
                 backend.build(
@@ -1273,7 +1282,80 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         }
     }
 
-    // 3. Default kerberossync = 0 for existing users
+    // 3. Seed or update all hardcoded GROUP attributes (future-proof for Kerberos groups)
+    for attr in &schema.group_attributes.attributes {
+        if !attr.is_hardcoded {
+            continue;
+        }
+
+        let name = attr.name.as_str();
+        let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
+
+        let count: i64 = transaction
+        .query_one(
+            backend.build(
+                &Query::select()   // ← the missing & was here too
+                .from(GroupAttributeSchema::Table)
+                .expr_as(
+                    Func::count(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName)),
+                         Alias::new("count"),
+                )
+                .and_where(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName).eq(name))
+                .to_owned(),
+            ),
+        )
+        .await?
+        .and_then(|row| row.try_get("", "count").ok())
+        .unwrap_or(0);
+
+        if count == 0 {
+            info!("Seeding hardcoded group attribute: {}", name);
+            transaction
+            .execute(
+                backend.build(
+                    Query::insert()
+                    .into_table(GroupAttributeSchema::Table)
+                    .columns([
+                        GroupAttributeSchema::GroupAttributeSchemaName,
+                        GroupAttributeSchema::GroupAttributeSchemaType,
+                        GroupAttributeSchema::GroupAttributeSchemaIsList,
+                        GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
+                        GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
+                        GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
+                        GroupAttributeSchema::Aliases,
+                    ])
+                    .values_panic([
+                        name.into(),
+                                  attr.attribute_type.into(),
+                                  attr.is_list.into(),
+                                  attr.is_visible.into(),
+                                  attr.is_editable.into(),
+                                  true.into(),
+                                  aliases_json.into(),
+                    ]),
+                ),
+            )
+            .await?;
+        } else {
+            info!("Updating aliases/flags for group attribute: {}", name);
+            transaction
+            .execute(
+                backend.build(
+                    Query::update()
+                    .table(GroupAttributeSchema::Table)
+                    .values([
+                        (GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible, attr.is_visible.into()),
+                            (GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable, attr.is_editable.into()),
+                            (GroupAttributeSchema::Aliases, aliases_json.into()),
+                    ])
+                    .and_where(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName).eq(name)),
+                ),
+            )
+            .await?;
+        }
+    }
+
+    // 4. Default kerberossync = 0 for existing users (fast, idempotent)
     info!("Setting default kerberossync = 0 for existing users");
     let insert_sync_sql = format!(
         "INSERT INTO {} ({}, {}, {})

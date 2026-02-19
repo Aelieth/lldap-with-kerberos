@@ -78,8 +78,8 @@ macro_rules! uuid {
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType)]
 #[sea_orm(
-    column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
-    array_type = "Bytes"
+column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
+          array_type = "Bytes"
 )]
 pub struct Serialized(Vec<u8>);
 
@@ -88,31 +88,31 @@ const SERIALIZED_I64_LEN: usize = 8;
 impl std::fmt::Debug for Serialized {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Serialized")
-            .field(
-                &self
-                    .convert_to()
-                    .and_then(|s| {
-                        String::from_utf8(s)
-                            .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
-                    })
-                    .or_else(|e| {
-                        if self.0.len() == SERIALIZED_I64_LEN {
-                            self.convert_to::<i64>()
-                                .map(|i| i.to_string())
-                                .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
-                        } else {
-                            Err(e)
-                        }
-                    })
-                    .unwrap_or_else(|_| {
-                        format!("hash: {:#016X}", {
-                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                            std::hash::Hash::hash(&self.0, &mut hasher);
-                            std::hash::Hasher::finish(&hasher)
-                        })
-                    }),
-            )
-            .finish()
+        .field(
+            &self
+            .convert_to()
+            .and_then(|s| {
+                String::from_utf8(s)
+                .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
+            })
+            .or_else(|e| {
+                if self.0.len() == SERIALIZED_I64_LEN {
+                    self.convert_to::<i64>()
+                    .map(|i| i.to_string())
+                    .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
+                } else {
+                    Err(e)
+                }
+            })
+            .unwrap_or_else(|_| {
+                format!("hash: {:#016X}", {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&self.0, &mut hasher);
+                    std::hash::Hasher::finish(&hasher)
+                })
+            }),
+        )
+        .finish()
     }
 }
 
@@ -315,10 +315,12 @@ impl AsRef<GroupName> for GroupName {
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, DeriveValueType, Hash)]
 #[sea_orm(
-    column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
-    array_type = "Bytes"
+column_type = "Custom(SeaRc::new(MySqlType::MediumBlob))",  // 16 MB - fixes #1399, easily covers 2 MB
+          array_type = "Bytes"
 )]
 pub struct JpegPhoto(#[serde(with = "serde_bytes")] Vec<u8>);
+
+const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024; // 2 MB - your requested limit
 
 impl From<&JpegPhoto> for Value {
     fn from(photo: &JpegPhoto) -> Self {
@@ -329,12 +331,18 @@ impl From<&JpegPhoto> for Value {
 impl TryFrom<&[u8]> for JpegPhoto {
     type Error = anyhow::Error;
     fn try_from(bytes: &[u8]) -> anyhow::Result<Self> {
+        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
+            return Err(anyhow::anyhow!(
+                "Avatar too large: {} bytes (max 2 MB)",
+                                       bytes.len()
+            ));
+        }
         if bytes.is_empty() {
             return Ok(JpegPhoto::null());
         }
-        // Confirm that it's a valid Jpeg, then store only the bytes.
+        // Confirm valid JPEG
         image::io::Reader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
-            .decode()?;
+        .decode()?;
         Ok(JpegPhoto(bytes.to_vec()))
     }
 }
@@ -342,13 +350,19 @@ impl TryFrom<&[u8]> for JpegPhoto {
 impl TryFrom<Vec<u8>> for JpegPhoto {
     type Error = anyhow::Error;
     fn try_from(bytes: Vec<u8>) -> anyhow::Result<Self> {
+        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
+            return Err(anyhow::anyhow!(
+                "Avatar too large: {} bytes (max 2 MB)",
+                                       bytes.len()
+            ));
+        }
         if bytes.is_empty() {
             return Ok(JpegPhoto::null());
         }
-        // Confirm that it's a valid Jpeg, then store only the bytes.
+        // Confirm valid JPEG
         image::io::Reader::with_format(
             std::io::Cursor::new(bytes.as_slice()),
-            image::ImageFormat::Jpeg,
+                                       image::ImageFormat::Jpeg,
         )
         .decode()?;
         Ok(JpegPhoto(bytes))
@@ -358,8 +372,8 @@ impl TryFrom<Vec<u8>> for JpegPhoto {
 impl TryFrom<&str> for JpegPhoto {
     type Error = anyhow::Error;
     fn try_from(string: &str) -> anyhow::Result<Self> {
-        // The String format is in base64.
-        <Self as TryFrom<_>>::try_from(base64::engine::general_purpose::STANDARD.decode(string)?)
+        let bytes = base64::engine::general_purpose::STANDARD.decode(string)?;
+        Self::try_from(bytes)
     }
 }
 
@@ -377,8 +391,8 @@ impl std::fmt::Debug for JpegPhoto {
             encoded.push_str(" ...");
         };
         f.debug_tuple("JpegPhoto")
-            .field(&format!("b64[{encoded}]"))
-            .finish()
+        .field(&format!("b64[{encoded}]"))
+        .finish()
     }
 }
 
@@ -408,19 +422,19 @@ impl JpegPhoto {
         let mut bytes: Vec<u8> = Vec::new();
         img.write_to(
             &mut std::io::Cursor::new(&mut bytes),
-            ImageOutputFormat::Jpeg(0),
+                     ImageOutputFormat::Jpeg(0),
         )
         .unwrap();
         Self(bytes)
     }
 }
 
-impl IntoActiveValue<Serialized> for JpegPhoto {
-    fn into_active_value(self) -> sea_orm::ActiveValue<Serialized> {
+impl IntoActiveValue<JpegPhoto> for JpegPhoto {
+    fn into_active_value(self) -> sea_orm::ActiveValue<JpegPhoto> {
         if self.is_empty() {
             sea_orm::ActiveValue::NotSet
         } else {
-            sea_orm::ActiveValue::Set(Serialized::from(&self))
+            sea_orm::ActiveValue::Set(self)
         }
     }
 }
