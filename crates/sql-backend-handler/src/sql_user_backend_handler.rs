@@ -334,11 +334,11 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Default kerberossync to "0" (false) if not provided
+        // Default kerberossync to Integer 0 if not provided (matches AttributeType::Integer in crates/schema)
         if !request.attributes.iter().any(|attr| attr.name.as_str() == "kerberossync") {
             request.attributes.push(Attribute {
                 name: "kerberossync".into(),
-                                    value: "0".to_string().into(),
+                                    value: AttributeValue::Integer(Cardinality::Singleton(0)),
             });
         }
 
@@ -367,10 +367,11 @@ impl UserBackendHandler for SqlBackendHandler {
                         .get_attribute_type(attribute.name.as_str())
                         .is_some()
                         {
+                            let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
                                                      attribute_name: Set(attribute.name),
-                                                     value: Set(attribute.value.into()),
+                                                     value: Set(Serialized(db_value)),
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(

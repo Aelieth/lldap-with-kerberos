@@ -1,17 +1,16 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lldap_domain::{
-    types::{AttributeName, AttributeType},
-};
+use lldap_domain::types::AttributeName;
+use lldap_schema::{AttributeSchema, AttributeType};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
 #[sea_orm(table_name = "group_attribute_schema")]
 pub struct Model {
     #[sea_orm(
-        primary_key,
-        auto_increment = false,
-        column_name = "group_attribute_schema_name"
+    primary_key,
+    auto_increment = false,
+    column_name = "group_attribute_schema_name"
     )]
     pub attribute_name: AttributeName,
     #[sea_orm(column_name = "group_attribute_schema_type")]
@@ -40,7 +39,7 @@ impl Related<super::GroupAttributes> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-impl From<Model> for lldap_schema::AttributeSchema {
+impl From<Model> for AttributeSchema {
     fn from(value: Model) -> Self {
         Self {
             name: value.attribute_name.into_string(),

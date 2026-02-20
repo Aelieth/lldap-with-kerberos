@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use lldap_access_control::UserReadableBackendHandler;
 use lldap_domain::{
     requests::{CreateGroupRequest, UpdateGroupRequest},
-    types::{AttributeName, Group, GroupDetails, GroupId, Serialized, Uuid},
+    types::{AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
 };
 use lldap_domain_handlers::handler::{
     GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter,
@@ -19,7 +19,19 @@ use sea_orm::{
 };
 use tracing::instrument;
 
-fn attribute_condition(name: AttributeName, value: Option<Serialized>) -> Cond {
+// Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
+// Same fast path we added to sql_user_backend_handler.rs — perfect for POSIX Integer fields on ZimaBlade
+fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
+    match value {
+        AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
+        AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
+        AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
+        AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
+        _ => vec![], // lists are rare in equality filters
+    }
+}
+
+fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> Cond {
     Expr::in_subquery(
         Expr::col(GroupColumn::GroupId.as_column_ref()),
         model::GroupAttributes::find()
@@ -28,8 +40,8 @@ fn attribute_condition(name: AttributeName, value: Option<Serialized>) -> Cond {
             .filter(model::GroupAttributesColumn::AttributeName.eq(name))
             .filter(
                 value
-                    .map(|value| model::GroupAttributesColumn::Value.eq(value))
-                    .unwrap_or_else(|| SimpleExpr::Value(true.into())),
+                    .map(|v| model::GroupAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
+                    .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
             )
             .into_query(),
     )
@@ -51,8 +63,8 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-                .map(get_group_filter_expr)
-                .fold(condition, Cond::add)
+            .map(get_group_filter_expr)
+            .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -62,27 +74,27 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
         Or(fs) => get_repeated_filter(fs, Cond::any(), false),
         Not(f) => get_group_filter_expr(*f).not(),
         DisplayName(name) => GroupColumn::LowercaseDisplayName
-            .eq(name.as_str().to_lowercase())
-            .into_condition(),
+        .eq(name.as_str().to_lowercase())
+        .into_condition(),
         GroupId(id) => GroupColumn::GroupId.eq(id.0).into_condition(),
         Uuid(uuid) => GroupColumn::Uuid.eq(uuid.to_string()).into_condition(),
         // WHERE (group_id in (SELECT group_id FROM memberships WHERE user_id = user))
         Member(user) => GroupColumn::GroupId
-            .in_subquery(
-                model::Membership::find()
-                    .select_only()
-                    .column(MembershipColumn::GroupId)
-                    .filter(MembershipColumn::UserId.eq(user))
-                    .into_query(),
-            )
-            .into_condition(),
+        .in_subquery(
+            model::Membership::find()
+            .select_only()
+            .column(MembershipColumn::GroupId)
+            .filter(MembershipColumn::UserId.eq(user))
+            .into_query(),
+        )
+        .into_condition(),
         DisplayNameSubString(filter) => SimpleExpr::FunctionCall(Func::lower(Expr::col((
             group_table,
             GroupColumn::LowercaseDisplayName,
         ))))
         .like(filter.to_sql_filter())
         .into_condition(),
-        AttributeEquality(name, value) => attribute_condition(name, Some(value.into())),
+        AttributeEquality(name, value) => attribute_condition(name, Some(&value)),
         CustomAttributePresent(name) => attribute_condition(name, None),
     }
 }
@@ -210,40 +222,41 @@ impl GroupBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
         Ok(self
-            .sql_pool
-            .transaction::<_, GroupId, DomainError>(|transaction| {
-                Box::pin(async move {
-                    let schema = Self::get_schema_with_transaction(transaction).await?;
-                    let group_id = new_group.insert(transaction).await?.group_id;
-                    let mut new_group_attributes = Vec::new();
-                    for attribute in request.attributes {
-                        if schema
-                            .group_attributes
-                            .get_attribute_type(attribute.name.as_str())
-                            .is_some()
+        .sql_pool
+        .transaction::<_, GroupId, DomainError>(|transaction| {
+            Box::pin(async move {
+                let schema = Self::get_schema_with_transaction(transaction).await?;
+                let group_id = new_group.insert(transaction).await?.group_id;
+                let mut new_group_attributes = Vec::new();
+                for attribute in request.attributes {
+                    if schema
+                        .group_attributes
+                        .get_attribute_type(attribute.name.as_str())
+                        .is_some()
                         {
+                            let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_group_attributes.push(model::group_attributes::ActiveModel {
                                 group_id: Set(group_id),
-                                attribute_name: Set(attribute.name),
-                                value: Set(attribute.value.into()),
+                                                      attribute_name: Set(attribute.name),
+                                                      value: Set(Serialized(db_value)),
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
                                 "Attribute name {} doesn't exist in the group schema,
-                                    yet was attempted to be inserted in the database",
+                                yet was attempted to be inserted in the database",
                                 &attribute.name
                             )));
                         }
-                    }
-                    if !new_group_attributes.is_empty() {
-                        model::GroupAttributes::insert_many(new_group_attributes)
-                            .exec(transaction)
-                            .await?;
-                    }
-                    Ok(group_id)
-                })
+                }
+                if !new_group_attributes.is_empty() {
+                    model::GroupAttributes::insert_many(new_group_attributes)
+                    .exec(transaction)
+                    .await?;
+                }
+                Ok(group_id)
             })
-            .await?)
+        })
+        .await?)
     }
 
     #[instrument(skip(self), level = "debug", err)]
@@ -266,9 +279,9 @@ impl SqlBackendHandler {
         transaction: &DatabaseTransaction,
     ) -> Result<()> {
         let lower_display_name = request
-            .display_name
-            .as_ref()
-            .map(|s| s.as_str().to_lowercase());
+        .display_name
+        .as_ref()
+        .map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
         let update_group = model::groups::ActiveModel {
             group_id: Set(request.group_id),
@@ -286,51 +299,52 @@ impl SqlBackendHandler {
                 .group_attributes
                 .get_attribute_type(attribute.name.as_str())
                 .is_some()
-            {
-                update_group_attributes.push(model::group_attributes::ActiveModel {
-                    group_id: Set(request.group_id),
-                    attribute_name: Set(attribute.name.to_owned()),
-                    value: Set(attribute.value.into()),
-                });
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
-                    &attribute.name
-                )));
-            }
+                {
+                    let db_value = attribute_value_to_db_bytes(&attribute.value);
+                    update_group_attributes.push(model::group_attributes::ActiveModel {
+                        group_id: Set(request.group_id),
+                                                 attribute_name: Set(attribute.name.to_owned()),
+                                                 value: Set(Serialized(db_value)),
+                    });
+                } else {
+                    return Err(DomainError::InternalError(format!(
+                        "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                        &attribute.name
+                    )));
+                }
         }
         for attribute in request.delete_attributes {
             if schema
                 .group_attributes
                 .get_attribute_type(attribute.as_str())
                 .is_some()
-            {
-                remove_group_attributes.push(attribute);
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
-                )));
-            }
+                {
+                    remove_group_attributes.push(attribute);
+                } else {
+                    return Err(DomainError::InternalError(format!(
+                        "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                    )));
+                }
         }
         if !remove_group_attributes.is_empty() {
             model::GroupAttributes::delete_many()
-                .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
-                .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
-                .exec(transaction)
-                .await?;
+            .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
+            .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
+            .exec(transaction)
+            .await?;
         }
         if !update_group_attributes.is_empty() {
             model::GroupAttributes::insert_many(update_group_attributes)
-                .on_conflict(
-                    OnConflict::columns([
-                        model::GroupAttributesColumn::GroupId,
-                        model::GroupAttributesColumn::AttributeName,
-                    ])
-                    .update_column(model::GroupAttributesColumn::Value)
-                    .to_owned(),
-                )
-                .exec(transaction)
-                .await?;
+            .on_conflict(
+                OnConflict::columns([
+                    model::GroupAttributesColumn::GroupId,
+                    model::GroupAttributesColumn::AttributeName,
+                ])
+                .update_column(model::GroupAttributesColumn::Value)
+                .to_owned(),
+            )
+            .exec(transaction)
+            .await?;
         }
         Ok(())
     }

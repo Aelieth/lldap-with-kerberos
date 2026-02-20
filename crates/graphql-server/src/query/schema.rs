@@ -1,8 +1,4 @@
-#![allow(unused_braces)]
 use juniper::graphql_object;
-use lldap_domain::public_schema::PublicSchema;
-use lldap_domain::schema::AttributeList as DomainAttributeList;
-use lldap_domain::types::LdapObjectClass;
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_ldap::{get_default_group_object_classes, get_default_user_object_classes};
 use serde::{Deserialize, Serialize};
@@ -10,12 +6,16 @@ use lldap_opaque_handler::OpaqueHandler;
 use super::attribute::AttributeSchema;
 use crate::api::Context;
 
+// Single source of truth for GraphQL schema wrapper (user + group + POSIX + Kerberos)
+// All fields from crates/schema/public_schema.rs flow directly to the frontend.
+use lldap_schema::{AttributeList as SchemaAttributeList, PublicSchema};
+
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct AttributeList<Handler: BackendHandler> {
-    attributes: DomainAttributeList,
-    default_classes: Vec<LdapObjectClass>,
-    extra_classes: Vec<LdapObjectClass>,
-    _phantom: std::marker::PhantomData<Box<Handler>>,
+    attributes: SchemaAttributeList,
+    default_classes: Vec<lldap_domain::types::LdapObjectClass>,
+        extra_classes: Vec<lldap_domain::types::LdapObjectClass>,
+        _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
 #[derive(Clone)]
@@ -26,19 +26,24 @@ pub struct ObjectClassInfo {
 
 #[graphql_object]
 impl ObjectClassInfo {
-    fn object_class(&self) -> &str { &self.object_class }
-    fn is_hardcoded(&self) -> bool { self.is_hardcoded }
+    fn object_class(&self) -> &str {
+        &self.object_class
+    }
+
+    fn is_hardcoded(&self) -> bool {
+        self.is_hardcoded
+    }
 }
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeList<Handler> {
     fn attributes(&self) -> Vec<AttributeSchema<Handler>> {
         self.attributes
-            .attributes
-            .clone()
-            .into_iter()
-            .map(Into::into)
-            .collect()
+        .attributes
+        .clone()
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 
     fn extra_ldap_object_classes(&self) -> Vec<String> {
@@ -47,17 +52,17 @@ impl<Handler: BackendHandler + OpaqueHandler> AttributeList<Handler> {
 
     fn ldap_object_classes(&self) -> Vec<ObjectClassInfo> {
         let mut all = self
-            .default_classes
-            .iter()
-            .map(|c| ObjectClassInfo {
-                object_class: c.to_string(),
-                is_hardcoded: true,
-            })
-            .collect::<Vec<_>>();
+        .default_classes
+        .iter()
+        .map(|c| ObjectClassInfo {
+            object_class: c.to_string(),
+             is_hardcoded: true,
+        })
+        .collect::<Vec<_>>();
 
         all.extend(self.extra_classes.iter().map(|c| ObjectClassInfo {
             object_class: c.to_string(),
-            is_hardcoded: false,
+                                                 is_hardcoded: false,
         }));
 
         all
@@ -66,9 +71,9 @@ impl<Handler: BackendHandler + OpaqueHandler> AttributeList<Handler> {
 
 impl<Handler: BackendHandler> AttributeList<Handler> {
     pub fn new(
-        attributes: DomainAttributeList,
-        default_classes: Vec<LdapObjectClass>,
-        extra_classes: Vec<LdapObjectClass>,
+        attributes: SchemaAttributeList,
+        default_classes: Vec<lldap_domain::types::LdapObjectClass>,
+            extra_classes: Vec<lldap_domain::types::LdapObjectClass>,
     ) -> Self {
         Self {
             attributes,
@@ -90,22 +95,22 @@ impl<Handler: BackendHandler + OpaqueHandler> Schema<Handler> {
     fn user_schema(&self) -> AttributeList<Handler> {
         AttributeList::<Handler>::new(
             self.schema.get_schema().user_attributes.clone(),
-            get_default_user_object_classes(),
-            self.schema.get_schema().extra_user_object_classes
-                .iter()
-                .map(|s| LdapObjectClass::from(s.as_str()))
-                .collect(),
+                                      get_default_user_object_classes(),
+                                      self.schema.get_schema().extra_user_object_classes
+                                      .iter()
+                                      .map(|s| lldap_domain::types::LdapObjectClass::from(s.as_str()))
+                                      .collect(),
         )
     }
 
     fn group_schema(&self) -> AttributeList<Handler> {
         AttributeList::<Handler>::new(
             self.schema.get_schema().group_attributes.clone(),
-            get_default_group_object_classes(),
-            self.schema.get_schema().extra_group_object_classes
-                .iter()
-                .map(|s| LdapObjectClass::from(s.as_str()))
-                .collect(),
+                                      get_default_group_object_classes(),
+                                      self.schema.get_schema().extra_group_object_classes
+                                      .iter()
+                                      .map(|s| lldap_domain::types::LdapObjectClass::from(s.as_str()))
+                                      .collect(),
         )
     }
 }

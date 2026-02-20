@@ -5,7 +5,7 @@ use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
     sea_query::{
-        Alias, BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query,
+        BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query,
         SimpleExpr, Table, Value, all,
     },
 };
@@ -1174,188 +1174,120 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    info!("=== v12 Migration: POSIX + Kerberos attributes + proper aliases ===");
+    info!("=== v12 Migration: Full re-seed of POSIX + Kerberos attributes from single source of truth ===");
 
-    // 1. Ensure aliases column exists (safe for future schema upgrades)
-    info!("Adding 'aliases' column if missing...");
+    // 1. Clear both schema tables completely (guarantees fresh enum strings on every fresh DB)
+    info!("Clearing old schema tables for clean re-seed...");
+    transaction
+    .execute(backend.build(
+        Query::delete().from_table(UserAttributeSchema::Table),
+    ))
+    .await?;
+    transaction
+    .execute(backend.build(
+        Query::delete().from_table(GroupAttributeSchema::Table),
+    ))
+    .await?;
+
+    // 2. Ensure aliases column exists (safe idempotent add)
     let _ = transaction
-    .execute(
-        backend.build(
-            Table::alter()
-            .table(UserAttributeSchema::Table)
-            .add_column_if_not_exists(
-                ColumnDef::new(UserAttributeSchema::Aliases)
-                .string_len(1024)
-                .default("[]"),
-            ),
+    .execute(backend.build(
+        Table::alter()
+        .table(UserAttributeSchema::Table)
+        .add_column_if_not_exists(
+            ColumnDef::new(UserAttributeSchema::Aliases)
+            .string_len(1024)
+            .default("[]"),
         ),
-    )
+    ))
     .await;
 
     let _ = transaction
-    .execute(
-        backend.build(
-            Table::alter()
-            .table(GroupAttributeSchema::Table)
-            .add_column_if_not_exists(
-                ColumnDef::new(GroupAttributeSchema::Aliases)
-                .string_len(1024)
-                .default("[]"),
-            ),
+    .execute(backend.build(
+        Table::alter()
+        .table(GroupAttributeSchema::Table)
+        .add_column_if_not_exists(
+            ColumnDef::new(GroupAttributeSchema::Aliases)
+            .string_len(1024)
+            .default("[]"),
         ),
-    )
+    ))
     .await;
 
     let public_schema = lldap_domain::PublicSchema::get();
     let schema = public_schema.get_schema();
 
-    // 2. Seed or update all hardcoded USER attributes from single source of truth
+    // 3. Re-seed ALL hardcoded USER attributes from crates/schema (POSIX + Kerberos included)
     for attr in &schema.user_attributes.attributes {
         if !attr.is_hardcoded {
             continue;
         }
-
         let name = attr.name.as_str();
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
-        let count: i64 = transaction
-        .query_one(
-            backend.build(
-                &Query::select()   // ← the missing & was here
-                .from(UserAttributeSchema::Table)
-                .expr_as(
-                    Func::count(Expr::col(UserAttributeSchema::UserAttributeSchemaName)),
-                         Alias::new("count"),
-                )
-                .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name))
-                .to_owned(),
-            ),
-        )
-        .await?
-        .and_then(|row| row.try_get("", "count").ok())
-        .unwrap_or(0);
-
-        if count == 0 {
-            info!("Seeding hardcoded user attribute: {}", name);
-            transaction
-            .execute(
-                backend.build(
-                    Query::insert()
-                    .into_table(UserAttributeSchema::Table)
-                    .columns([
-                        UserAttributeSchema::UserAttributeSchemaName,
-                        UserAttributeSchema::UserAttributeSchemaType,
-                        UserAttributeSchema::UserAttributeSchemaIsList,
-                        UserAttributeSchema::UserAttributeSchemaIsUserVisible,
-                        UserAttributeSchema::UserAttributeSchemaIsUserEditable,
-                        UserAttributeSchema::UserAttributeSchemaIsHardcoded,
-                        UserAttributeSchema::Aliases,
-                    ])
-                    .values_panic([
-                        name.into(),
-                                  attr.attribute_type.into(),
-                                  attr.is_list.into(),
-                                  attr.is_visible.into(),
-                                  attr.is_editable.into(),
-                                  true.into(),
-                                  aliases_json.into(),
-                    ]),
-                ),
-            )
-            .await?;
-        } else {
-            info!("Updating aliases/flags for user attribute: {}", name);
-            transaction
-            .execute(
-                backend.build(
-                    Query::update()
-                    .table(UserAttributeSchema::Table)
-                    .values([
-                        (UserAttributeSchema::UserAttributeSchemaIsUserVisible, attr.is_visible.into()),
-                            (UserAttributeSchema::UserAttributeSchemaIsUserEditable, attr.is_editable.into()),
-                            (UserAttributeSchema::Aliases, aliases_json.into()),
-                    ])
-                    .and_where(Expr::col(UserAttributeSchema::UserAttributeSchemaName).eq(name)),
-                ),
-            )
-            .await?;
-        }
+        info!("Seeding user attribute: {}", name);
+        transaction
+        .execute(backend.build(
+            Query::insert()
+            .into_table(UserAttributeSchema::Table)
+            .columns([
+                UserAttributeSchema::UserAttributeSchemaName,
+                UserAttributeSchema::UserAttributeSchemaType,
+                UserAttributeSchema::UserAttributeSchemaIsList,
+                UserAttributeSchema::UserAttributeSchemaIsUserVisible,
+                UserAttributeSchema::UserAttributeSchemaIsUserEditable,
+                UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                UserAttributeSchema::Aliases,
+            ])
+            .values_panic([
+                name.into(),
+                          attr.attribute_type.into(),
+                          attr.is_list.into(),
+                          attr.is_visible.into(),
+                          attr.is_editable.into(),
+                          true.into(),
+                          aliases_json.into(),
+            ]),
+        ))
+        .await?;
     }
 
-    // 3. Seed or update all hardcoded GROUP attributes (future-proof for Kerberos groups)
+    // 4. Re-seed ALL hardcoded GROUP attributes (future-proof)
     for attr in &schema.group_attributes.attributes {
         if !attr.is_hardcoded {
             continue;
         }
-
         let name = attr.name.as_str();
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
-        let count: i64 = transaction
-        .query_one(
-            backend.build(
-                &Query::select()   // ← the missing & was here too
-                .from(GroupAttributeSchema::Table)
-                .expr_as(
-                    Func::count(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName)),
-                         Alias::new("count"),
-                )
-                .and_where(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName).eq(name))
-                .to_owned(),
-            ),
-        )
-        .await?
-        .and_then(|row| row.try_get("", "count").ok())
-        .unwrap_or(0);
-
-        if count == 0 {
-            info!("Seeding hardcoded group attribute: {}", name);
-            transaction
-            .execute(
-                backend.build(
-                    Query::insert()
-                    .into_table(GroupAttributeSchema::Table)
-                    .columns([
-                        GroupAttributeSchema::GroupAttributeSchemaName,
-                        GroupAttributeSchema::GroupAttributeSchemaType,
-                        GroupAttributeSchema::GroupAttributeSchemaIsList,
-                        GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
-                        GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
-                        GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
-                        GroupAttributeSchema::Aliases,
-                    ])
-                    .values_panic([
-                        name.into(),
-                                  attr.attribute_type.into(),
-                                  attr.is_list.into(),
-                                  attr.is_visible.into(),
-                                  attr.is_editable.into(),
-                                  true.into(),
-                                  aliases_json.into(),
-                    ]),
-                ),
-            )
-            .await?;
-        } else {
-            info!("Updating aliases/flags for group attribute: {}", name);
-            transaction
-            .execute(
-                backend.build(
-                    Query::update()
-                    .table(GroupAttributeSchema::Table)
-                    .values([
-                        (GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible, attr.is_visible.into()),
-                            (GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable, attr.is_editable.into()),
-                            (GroupAttributeSchema::Aliases, aliases_json.into()),
-                    ])
-                    .and_where(Expr::col(GroupAttributeSchema::GroupAttributeSchemaName).eq(name)),
-                ),
-            )
-            .await?;
-        }
+        info!("Seeding group attribute: {}", name);
+        transaction
+        .execute(backend.build(
+            Query::insert()
+            .into_table(GroupAttributeSchema::Table)
+            .columns([
+                GroupAttributeSchema::GroupAttributeSchemaName,
+                GroupAttributeSchema::GroupAttributeSchemaType,
+                GroupAttributeSchema::GroupAttributeSchemaIsList,
+                GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
+                GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
+                GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
+                GroupAttributeSchema::Aliases,
+            ])
+            .values_panic([
+                name.into(),
+                          attr.attribute_type.into(),
+                          attr.is_list.into(),
+                          attr.is_visible.into(),
+                          attr.is_editable.into(),
+                          true.into(),
+                          aliases_json.into(),
+            ]),
+        ))
+        .await?;
     }
 
-    // 4. Default kerberossync = 0 for existing users (fast, idempotent)
+    // 5. Default kerberossync = 0 for any existing users (idempotent)
     info!("Setting default kerberossync = 0 for existing users");
     let insert_sync_sql = format!(
         "INSERT INTO {} ({}, {}, {})
@@ -1382,7 +1314,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
     .await;
 
-    info!("v12 migration completed successfully");
+    info!("v12 migration completed successfully — schema tables now match single source of truth");
     Ok(transaction)
 }
 

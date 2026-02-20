@@ -1,6 +1,5 @@
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
-use lldap_domain::schema::AttributeSchema as DomainAttributeSchema;
 use lldap_domain::types::{
     Attribute as DomainAttribute, AttributeValue as DomainAttributeValue,
     Cardinality, Group as DomainGroup, GroupDetails, User as DomainUser,
@@ -11,20 +10,19 @@ use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
 
 // Single source of truth for the entire schema (user + group + POSIX + Kerberos)
-// Exactly the crate you control in crates/schema/public_schema.rs
-// → uidnumber, gidnumber, homedirectory, loginshell, kerberossync, krbprincipalname
+// uidnumber, gidnumber, homedirectory, loginshell, kerberossync, krbprincipalname
 // all appear automatically in the web UI with correct types/visibility/editable flags.
-// No more duplication, perfect for KDE/Gnome SSO + Keycloak federation.
-use lldap_schema::PublicSchema;
+// No more duplication, perfect for KDE/GNOME SSO + Keycloak federation on ZimaBlade.
+use lldap_schema::{AttributeSchema as SchemaAttributeSchema, PublicSchema};
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeSchema<Handler: BackendHandler> {
-    schema: DomainAttributeSchema,
+    schema: SchemaAttributeSchema,
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
-impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Handler> {
-    fn from(schema: DomainAttributeSchema) -> Self {
+impl<Handler: BackendHandler> From<SchemaAttributeSchema> for AttributeSchema<Handler> {
+    fn from(schema: SchemaAttributeSchema) -> Self {
         Self {
             schema,
             _phantom: std::marker::PhantomData,
@@ -93,7 +91,7 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         self.attribute.name.as_str()
     }
 
-    fn from_value(attr: DomainAttribute, schema: DomainAttributeSchema) -> Self {
+    fn from_value(attr: DomainAttribute, schema: SchemaAttributeSchema) -> Self {
         Self {
             attribute: attr,
             schema: schema.into(),
