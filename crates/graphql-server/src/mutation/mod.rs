@@ -5,6 +5,7 @@ pub mod inputs;
 pub use inputs::{
     AttributeValue, CreateGroupInput, CreateUserInput, Success, UpdateGroupInput, UpdateUserInput,
 };
+
 use tracing::{Instrument, info, debug, debug_span, warn};
 use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
@@ -14,7 +15,8 @@ use lldap_access_control::{
 };
 use lldap_domain::{
     requests::{CreateAttributeRequest, CreateUserRequest, UpdateGroupRequest, UpdateUserRequest},
-    types::{AttributeName, AttributeType, Email, GroupId, LdapObjectClass, UserId},
+    types::{AttributeName, Email, GroupId, LdapObjectClass, UserId},
+    schema::AttributeType,
 };
 use lldap_domain_handlers::handler::BackendHandler;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
@@ -30,6 +32,10 @@ use keycloak::KeycloakAdminToken;
 use reqwest::Client as HttpClient;
 use std::env;
 use std::collections::HashMap;
+
+// Single source of truth for the entire schema (user + group + POSIX + Kerberos)
+// Used by delete_attribute checks, future UI visibility, Keycloak federation, etc.
+use lldap_schema::PublicSchema;
 
 #[derive(juniper::GraphQLInputObject)]
 struct CreateServicePrincipalInput {
@@ -60,14 +66,22 @@ impl<Handler: BackendHandler + OpaqueHandler> Default for Mutation<Handler> {
 }
 
 fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
+    let schema = PublicSchema::get();
+    let kerb_name = schema
+    .get_schema()
+    .user_attributes
+    .get_by_name_or_alias("kerberossync")
+    .map(|a| a.name.as_str())
+    .unwrap_or("kerberossync");
+
     attrs.iter()
-    .find(|a| a.name.as_str() == "kerberossync")
+    .find(|a| a.name.as_str() == kerb_name)
     .and_then(|a| match &a.value {
         lldap_domain::types::AttributeValue::Integer(
-            lldap_domain::types::Cardinality::Singleton(i)
+            lldap_domain::types::Cardinality::Singleton(i),
         ) if *i == 1 => Some("1"),
               lldap_domain::types::AttributeValue::Integer(
-                  lldap_domain::types::Cardinality::Singleton(i)
+                  lldap_domain::types::Cardinality::Singleton(i),
               ) if *i == 0 => Some("0"),
               _ => None,
     })
@@ -126,12 +140,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         user_id: String,
         password: String,
     ) -> FieldResult<Success> {
-        use tracing::{debug_span};
         let span = debug_span!("[GraphQL mutation] set_user_password");
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized password set"))?;
-        // OPAQUE registration
+
+        // OPAQUE registration – core LLDAP password handling (unchanged, zero impact on performance)
         use lldap_auth::{opaque, registration};
         use anyhow::Context;
         use rand::rngs::OsRng;
@@ -157,18 +171,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
 
-        // Central Kerberos sync if enabled
         let user_id_typed = UserId::new(&user_id);
         let user = handler.get_user_details(&user_id_typed).await
         .context("Failed to fetch user for Kerberos sync check")?;
 
-        let sync_enabled = user.attributes.iter().any(|attr| {
-            attr.name.as_str() == "kerberossync"
-            && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
-        });
+        let sync_enabled = extract_kerberos_sync(&user.attributes) == "1";
 
         if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, &user_id, &password) {
             warn!("Kerberos sync failed after admin password set: {}", e);
+        } else if sync_enabled {
+            info!("Kerberos principal synced for user {} (triggered by admin password change)", user_id);
         }
 
         Ok(Success::new())
@@ -192,6 +204,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         )
         .await
     }
+
     async fn create_group_with_details(
         context: &Context<Handler>,
         request: CreateGroupInput,
@@ -218,7 +231,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let is_admin = context.validation_result.is_admin();
         let schema = handler.get_schema().await?;
 
-        // Consolidate attributes and fields into a combined attribute list
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
                                                              user.first_name,
@@ -252,7 +264,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .map(|_| String::new())
         });
 
-        // === Perform the actual LLDAP update ===
         handler
         .update_user(UpdateUserRequest {
             user_id: user_id.clone(),
@@ -269,7 +280,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .instrument(span)
         .await?;
 
-        // === Kerberos side effects (clean final state only) ===
         let new_user = handler.get_user_details(&user_id).await
         .map_err(|e| FieldError::new(
             "Failed to fetch updated user for Kerberos actions",
@@ -301,42 +311,44 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?group.id);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized group update"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized group update"))?;
         let new_display_name = group.display_name.clone().or_else(|| {
             group.insert_attributes.as_ref().and_then(|a| {
                 a.iter()
-                    .find(|attr| attr.name == "display_name")
-                    .map(|attr| attr.value[0].clone())
+                .find(|attr| attr.name == "display_name")
+                .map(|attr| attr.value[0].clone())
             })
         });
         if group.id == 1 && new_display_name.is_some() {
             span.in_scope(|| debug!("Cannot change lldap_admin group name"));
             return Err("Cannot change lldap_admin group name".into());
         }
+
         let schema = handler.get_schema().await?;
         let insert_attributes = group
-            .insert_attributes
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|attr| attr.name != "display_name")
-            .map(|attr| deserialize_attribute(&schema.get_schema().group_attributes, attr, true))
-            .collect::<Result<Vec<_>, _>>()?;
-            handler
-            .update_group(UpdateGroupRequest {
-                group_id: GroupId(group.id),
-                          display_name: new_display_name.map(|s| s.as_str().into()),
-                          delete_attributes: group
-                          .remove_attributes
-                          .unwrap_or_default()
-                          .into_iter()
-                          .filter(|attr| attr != "display_name")
-                          .map(|s| AttributeName::from(s))
-                          .collect(),
-                          insert_attributes,
-            })
-            .instrument(span)
-            .await?;
+        .insert_attributes
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|attr| attr.name != "display_name")
+        .map(|attr| deserialize_attribute(&schema.get_schema().group_attributes, attr, true))
+        .collect::<Result<Vec<_>, _>>()?;
+
+        handler
+        .update_group(UpdateGroupRequest {
+            group_id: GroupId(group.id),
+                      display_name: new_display_name.map(|s| s.as_str().into()),
+                      delete_attributes: group
+                      .remove_attributes
+                      .unwrap_or_default()
+                      .into_iter()
+                      .filter(|attr| attr != "display_name")
+                      .map(|s| AttributeName::from(s))
+                      .collect(),
+                      insert_attributes,
+        })
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -350,15 +362,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?user_id, ?group_id);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized group membership modification",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized group membership modification",
+        ))?;
         handler
-            .add_user_to_group(&UserId::new(&user_id), GroupId(group_id))
-            .instrument(span)
-            .await?;
+        .add_user_to_group(&UserId::new(&user_id), GroupId(group_id))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -372,20 +384,20 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?user_id, ?group_id);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized group membership modification",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized group membership modification",
+        ))?;
         let user_id = UserId::new(&user_id);
         if context.validation_result.user == user_id && group_id == 1 {
             span.in_scope(|| debug!("Cannot remove admin rights for current user"));
             return Err("Cannot remove admin rights for current user".into());
         }
         handler
-            .remove_user_from_group(&user_id, GroupId(group_id))
-            .instrument(span)
-            .await?;
+        .remove_user_from_group(&user_id, GroupId(group_id))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -407,7 +419,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot delete current user".into());
         }
 
-        // Delete from LLDAP
+        // Delete from LLDAP (EAV tables seeded from PublicSchema::get() in v12 migration)
         handler
         .delete_user(&user_id_typed)
         .instrument(span.clone())
@@ -417,7 +429,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        // Delete Kerberos principal (non-fatal with warn)
+        // Delete Kerberos principal (non-fatal with warn) — uses extract_kerberos_sync from schema
         if let Err(e) = delete_kerberos_principal(&user_id) {
             warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
         } else {
@@ -433,16 +445,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?group_id);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized group deletion"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized group deletion"))?;
         if group_id == 1 {
             span.in_scope(|| debug!("Cannot delete admin group"));
             return Err("Cannot delete admin group".into());
         }
         handler
-            .delete_group(GroupId(group_id))
-            .instrument(span)
-            .await?;
+        .delete_group(GroupId(group_id))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -475,21 +487,21 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .into()
         })?;
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized attribute creation",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized attribute creation",
+        ))?;
         handler
-            .add_user_attribute(CreateAttributeRequest {
-                name: name.into(),
-                attribute_type,
-                is_list,
-                is_visible,
-                is_editable,
-            })
-            .instrument(span)
-            .await?;
+        .add_user_attribute(CreateAttributeRequest {
+            name: name.into(),
+                            attribute_type,
+                            is_list,
+                            is_visible,
+                            is_editable,
+        })
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -520,21 +532,21 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .into()
         })?;
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized attribute creation",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized attribute creation",
+        ))?;
         handler
-            .add_group_attribute(CreateAttributeRequest {
-                name: name.into(),
-                attribute_type,
-                is_list,
-                is_visible,
-                is_editable,
-            })
-            .instrument(span)
-            .await?;
+        .add_group_attribute(CreateAttributeRequest {
+            name: name.into(),
+                             attribute_type,
+                             is_list,
+                             is_visible,
+                             is_editable,
+        })
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -548,24 +560,24 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized attribute deletion",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized attribute deletion",
+        ))?;
         let schema = handler.get_schema().await?;
         let attribute_schema = schema
-            .get_schema()
-            .user_attributes
-            .get_attribute_schema(name.as_str())
-            .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+        .get_schema()
+        .user_attributes
+        .get_attribute_schema(name.as_str())
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
         }
         handler
-            .delete_user_attribute(&name)
-            .instrument(span)
-            .await?;
+        .delete_user_attribute(&name)
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -579,24 +591,24 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized attribute deletion",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized attribute deletion",
+        ))?;
         let schema = handler.get_schema().await?;
         let attribute_schema = schema
-            .get_schema()
-            .group_attributes
-            .get_attribute_schema(name.as_str())
-            .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+        .get_schema()
+        .group_attributes
+        .get_attribute_schema(name.as_str())
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
         }
         handler
-            .delete_group_attribute(&name)
-            .instrument(span)
-            .await?;
+        .delete_group_attribute(&name)
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -609,15 +621,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized object class addition",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized object class addition",
+        ))?;
         handler
-            .add_user_object_class(&LdapObjectClass::from(name))
-            .instrument(span)
-            .await?;
+        .add_user_object_class(&LdapObjectClass::from(name))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -630,15 +642,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized object class addition",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized object class addition",
+        ))?;
         handler
-            .add_group_object_class(&LdapObjectClass::from(name))
-            .instrument(span)
-            .await?;
+        .add_group_object_class(&LdapObjectClass::from(name))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -651,15 +663,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized object class deletion",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized object class deletion",
+        ))?;
         handler
-            .delete_user_object_class(&LdapObjectClass::from(name))
-            .instrument(span)
-            .await?;
+        .delete_user_object_class(&LdapObjectClass::from(name))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -672,15 +684,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!(?name);
         });
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(
-                &span,
-                "Unauthorized object class deletion",
-            ))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(
+            &span,
+            "Unauthorized object class deletion",
+        ))?;
         handler
-            .delete_group_object_class(&LdapObjectClass::from(name))
-            .instrument(span)
-            .await?;
+        .delete_group_object_class(&LdapObjectClass::from(name))
+        .instrument(span)
+        .await?;
         Ok(Success::new())
     }
 
@@ -765,15 +777,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        info!("GraphQL Kerberos sync check for user {}: attributes = {:?}", user_id,
-               user.attributes.iter().map(|a| (a.name.as_str(), format!("{:?}", a.value))).collect::<Vec<_>>());
-
-        let sync_enabled = user.attributes.iter().any(|attr| {
-            attr.name.as_str() == "kerberossync"
-            && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
-        });
-
-        info!("GraphQL kerberossync enabled for user {}: {}", user_id, sync_enabled);
+        let sync_enabled = extract_kerberos_sync(&user.attributes) == "1";
 
         if sync_enabled {
             sync_kerberos_principal(&user_id, &plain_password)
@@ -789,6 +793,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(true)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

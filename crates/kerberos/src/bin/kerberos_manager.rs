@@ -11,6 +11,9 @@ use std::net::TcpStream;
 use std::io::{Write};
 use std::os::unix::fs::PermissionsExt;
 
+// Import the shared helper from our own lib crate (no more duplication!)
+use lldap_kerberos::derive_realm_from_base_dn;
+
 #[derive(Deserialize, Debug)]
 struct KerberosConfig {
     realm_name: String,
@@ -63,31 +66,24 @@ fn main() -> Result<()> {
     let kerberos_value = full_config.get("kerberos").context("Missing [kerberos] table in config")?.clone();
     let mut config: KerberosConfig = kerberos_value.try_into().context("Failed to deserialize [kerberos] section")?;
 
-    // === Precedence: Explicit env > Auto-derive from LLDAP base_dn > TOML fallback ===
+    // === Realm derivation now uses the shared helper from lib.rs (Chunk 1 of lib.rs) ===
+    // Precedence: explicit LLDAP_KERB_REALM_NAME > auto-derived from LLDAP_LDAP_BASE_DN
+    // No more duplication with GraphQL, delete/sync, or future code.
+    let realm_name = derive_realm_from_base_dn();
+    config.realm_name = realm_name.clone();
 
-    // Always start with current base_dn from env (LLDAP requires it anyway)
+    // Keep base_dn for templates (unchanged)
     let base_dn = env::var("LLDAP_LDAP_BASE_DN")
     .unwrap_or_else(|_| config.base_dn.clone());
+    config.base_dn = base_dn.clone();
 
-    // Derive domain (lowercase, e.g., testlab.local)
+    // Derive domain for templates only (lowercase)
     let domain = base_dn
     .split(',')
     .filter_map(|part| part.strip_prefix("dc="))
     .collect::<Vec<_>>()
     .join(".")
     .to_lowercase();
-
-    // Derive realm (uppercase domain)
-    let derived_realm = domain.to_uppercase();
-
-    // Final realm: explicit env override wins, else derived (ignore TOML entirely for realm)
-    let realm_name = env::var("LLDAP_KERB_REALM_NAME")
-    .unwrap_or(derived_realm)
-    .to_uppercase();
-
-    // Update config
-    config.base_dn = base_dn;
-    config.realm_name = realm_name;
 
     println!("Calculated DOMAIN: {}", domain);
     println!("Effective REALM_NAME: {}", config.realm_name);

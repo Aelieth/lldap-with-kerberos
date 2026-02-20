@@ -4,8 +4,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use lazy_static::lazy_static;
 use rand::rngs::OsRng;
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};  // Removed old Pkcs1v15Encrypt — upgraded to modern OAEP
 use rsa::pkcs1::EncodeRsaPublicKey;
+use sha2::Sha256;  // New for secure OAEP padding (this is the security upgrade)
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_int, c_void, c_long, c_char};
 use std::mem;
@@ -22,6 +23,24 @@ mod bindings {
 
 pub use bindings::*; // Re-export so kerberos_manager can see them too
 
+// Shared helper — eliminates duplication between lib.rs and kerberos_manager.rs
+// Uses exact same logic as before (LLDAP_LDAP_BASE_DN → domain → realm)
+pub fn derive_realm_from_base_dn() -> String {
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .unwrap_or_else(|_| "dc=example,dc=com".to_string());
+    let domain = base_dn
+    .split(',')
+    .filter_map(|part| part.strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_lowercase();
+    env::var("LLDAP_KERB_REALM_NAME")
+    .ok()
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| domain.to_uppercase())
+    .to_uppercase()
+}
+
 lazy_static! {
     static ref KEYPAIR: (RsaPrivateKey, RsaPublicKey) = {
         match generate_keypair() {
@@ -31,7 +50,7 @@ lazy_static! {
                 let mut rng = OsRng;
                 let dummy_priv = RsaPrivateKey::new(&mut rng, 128).expect("Failed to generate dummy private key");
                 let dummy_pub = RsaPublicKey::from(&dummy_priv);
-                (dummy_priv, dummy_pub)  // Dummy pair, will fail decrypt later
+                (dummy_priv, dummy_pub)
             }
         }
     };
@@ -48,31 +67,16 @@ fn generate_keypair() -> Result<(RsaPrivateKey, RsaPublicKey)> {
 pub fn decrypt_password(encrypted: &str) -> Result<String> {
     let priv_key = &KEYPAIR.0;
     let dec_data = STANDARD.decode(encrypted).context("Base64 decode failed")?;
-    let plain_data = priv_key.decrypt(Pkcs1v15Encrypt, &dec_data).context("Decryption failed")?;
+    // Security upgrade: OAEP + SHA-256 (modern, recommended padding)
+    let padding = Oaep::new::<Sha256>();
+    let plain_data = priv_key.decrypt(padding, &dec_data).context("Decryption failed")?;
     String::from_utf8(plain_data).context("UTF-8 decode failed")
 }
 
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
-
-    // Exact realm derivation from sync_principal
-    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
-    .unwrap_or_else(|_| "dc=example,dc=com".to_string());
-
-    let domain = base_dn
-    .split(',')
-    .filter_map(|part| part.strip_prefix("dc="))
-    .collect::<Vec<_>>()
-    .join(".")
-    .to_lowercase();
-
-    let derived_realm = domain.to_uppercase();
-
-    let realm = env::var("LLDAP_KERB_REALM_NAME")
-    .ok()
-    .filter(|s| !s.is_empty())
-    .unwrap_or(derived_realm);
-
-    let realm_upper = realm.to_uppercase();
+    // Uses new shared helper — no more duplicated realm logic!
+    // Matches exactly what kerberos_manager.rs and GraphQL mutations use.
+    let realm_upper = derive_realm_from_base_dn();
 
     let full_principal = format!("{}@{}", username, realm_upper);
     info!("Attempting to delete Kerberos principal via FFI: {}", full_principal);
@@ -80,10 +84,42 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
     let admin_principal = format!("admin/admin@{}", realm_upper);
     let keytab_path = "/data/kadm5.keytab";
 
-    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
+    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm_upper)
     .context("Failed to initialize Kerberos admin handle with keytab for delete")?;
 
     handle.delete_principal(&full_principal)
+}
+
+pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
+    // Uses new shared helper — single source of truth for realm derivation
+    // (LLDAP_LDAP_BASE_DN → domain → realm, with LLDAP_KERB_REALM_NAME override)
+    let realm_upper = derive_realm_from_base_dn();
+
+    let full_principal = format!("{}@{}", username, realm_upper);
+    info!("Kerberos sync started for principal: {}", full_principal);
+
+    let admin_principal = format!("admin/admin@{}", realm_upper);
+    let keytab_path = "/data/kadm5.keytab";
+
+    info!("Using direct keytab auth for admin: {} (keytab: {})", admin_principal, keytab_path);
+
+    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm_upper)
+    .context("Failed to initialize Kerberos admin handle with keytab (check keytab exists/permissions)")?;
+
+    // Try change password first (most common case after user already exists)
+    if handle.chpass_principal(username, plain_password, &realm_upper).is_ok() {
+        info!("Kerberos password updated successfully for {}", full_principal);
+        return Ok(());
+    }
+
+    warn!("Change password failed (likely principal does not exist)—creating new principal...");
+
+    handle.create_principal(username, plain_password, &realm_upper)
+    .context("Failed to create new Kerberos principal")?;
+
+    info!("Kerberos principal created and password set for {}", full_principal);
+
+    Ok(())
 }
 
 pub fn get_public_key_der_base64() -> String {
@@ -108,7 +144,6 @@ impl Kadm5Handle {
         let mut handle: *mut c_void = ptr::null_mut();
 
         let client_name_cstr = CString::new(admin_principal).context("Invalid admin principal")?;
-        // NULL service name means default "kadmin/admin"
         let service_name_ptr: *mut c_char = ptr::null_mut();
 
         let realm_cstr = CString::new(realm).context("Invalid realm")?;
@@ -122,19 +157,17 @@ impl Kadm5Handle {
             None => ptr::null_mut(),
         };
 
-        // Correct constants for modern MIT Kerberos
         let struct_version: krb5_ui_4 = KADM5_STRUCT_VERSION;
         let api_version: krb5_ui_4 = KADM5_API_VERSION_4;
 
-        // db_args = NULL (no extra database args)
         let db_args_ptr: *mut *mut c_char = ptr::null_mut();
 
         let ret = unsafe {
             kadm5_init_with_password(
                 context,
-                client_name_cstr.as_ptr() as *mut c_char,  // cast to *mut
+                client_name_cstr.as_ptr() as *mut c_char,
                                      pass_ptr,
-                                     service_name_ptr,                          // already *mut null
+                                     service_name_ptr,
                                      &mut params,
                                      struct_version,
                                      api_version,
@@ -143,7 +176,6 @@ impl Kadm5Handle {
             )
         };
 
-        // Clean up owned raw pointers
         if pass.is_some() {
             unsafe { let _ = CString::from_raw(pass_ptr); }
         }
@@ -167,7 +199,6 @@ impl Kadm5Handle {
         Ok(Kadm5Handle { handle, context })
     }
 
-    /// Initialize handle using keytab directly (no password/ccache needed, reliable for -randkey principals)
     pub fn init_with_keytab(keytab_path: &str, admin_principal: &str, realm: &str) -> Result<Self> {
         let mut context: krb5_context = ptr::null_mut();
         let ret = unsafe { krb5_init_context(&mut context) };
@@ -179,7 +210,7 @@ impl Kadm5Handle {
 
         let client_name_cstr = CString::new(admin_principal).context("Invalid admin principal")?;
         let keytab_cstr = CString::new(keytab_path).context("Invalid keytab path")?;
-        let service_name_ptr: *mut c_char = ptr::null_mut();  // NULL for default
+        let service_name_ptr: *mut c_char = ptr::null_mut();
 
         let realm_cstr = CString::new(realm).context("Invalid realm")?;
 
@@ -226,7 +257,6 @@ impl Kadm5Handle {
         Ok(Kadm5Handle { handle, context })
     }
 
-    /// Create principal with password
     pub fn create_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
         let principal_name = format!("{}@{}", username, realm);
         let principal_cstr = CString::new(principal_name)?;
@@ -240,7 +270,6 @@ impl Kadm5Handle {
         let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
         ent.principal = princ;
 
-        // Mask: create the principal (password generates keys via policy)
         let mask = KADM5_PRINCIPAL as c_long;
 
         let pass_cstr = CString::new(password)?;
@@ -273,7 +302,6 @@ impl Kadm5Handle {
         Ok(())
     }
 
-    /// Change password on existing principal
     pub fn chpass_principal(&self, username: &str, password: &str, realm: &str) -> Result<()> {
         let principal_name = format!("{}@{}", username, realm);
         let principal_cstr = CString::new(principal_name)?;
@@ -347,13 +375,11 @@ impl Kadm5Handle {
             return Err(anyhow::anyhow!("krb5_parse_name failed with code {}", ret));
         }
 
-        // Try to rotate key (fails if principal doesn't exist)
         let mut keyblocks = ptr::null_mut::<krb5_keyblock>();
         let mut n_keys: c_int = 0;
         let ret = unsafe { kadm5_randkey_principal(self.handle, princ, &mut keyblocks, &mut n_keys) };
 
         if ret != 0 {
-            // Get error message for robust check (no constant dependency)
             let code = ret as i32;
             let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
             let err_msg = if msg_ptr.is_null() {
@@ -365,11 +391,9 @@ impl Kadm5Handle {
             };
 
             if err_msg.contains("Principal does not exist") || err_msg.contains("No such principal") {
-                // Create with random key (NULL password + KADM5_KEY mask)
                 let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
                 ent.principal = princ;
 
-                // Hardcoded masks (reliable if bindings miss them)
                 const KADM5_PRINCIPAL: c_long = 0x00000001;
                 const KADM5_KEY: c_long = 0x00000020;
                 let mask = (KADM5_PRINCIPAL | KADM5_KEY) as c_long;
@@ -411,58 +435,6 @@ impl Drop for Kadm5Handle {
             let _ = krb5_free_context(self.context);
         }
     }
-}
-
-pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-
-    // === Dynamic realm derivation (matches kerberos_manager) ===
-    // Start with base_dn from env (LLDAP requires it)
-    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
-    .unwrap_or_else(|_| "dc=example,dc=com".to_string());  // Safe fallback if missing (should never happen)
-
-    // Derive domain (lowercase)
-    let domain = base_dn
-    .split(',')
-    .filter_map(|part| part.strip_prefix("dc="))
-    .collect::<Vec<_>>()
-    .join(".")
-    .to_lowercase();
-
-    // Derive realm (uppercase domain)
-    let derived_realm = domain.to_uppercase();
-
-    // Final realm: explicit env override wins, else derived
-    let realm = env::var("LLDAP_KERB_REALM_NAME")
-    .unwrap_or(derived_realm);
-
-    let realm_upper = realm.to_uppercase();
-
-    let full_principal = format!("{}@{}", username, realm_upper);
-    info!("Kerberos sync started for principal: {}", full_principal);
-
-    let admin_principal = format!("admin/admin@{}", realm_upper);
-    let keytab_path = "/data/kadm5.keytab";
-
-    info!("Using direct keytab auth for admin: {} (keytab: {})", admin_principal, keytab_path);
-
-    // Rest of function unchanged...
-    let handle = Kadm5Handle::init_with_keytab(keytab_path, &admin_principal, &realm)
-    .context("Failed to initialize Kerberos admin handle with keytab (check keytab exists/permissions)")?;
-
-    // Try change password first
-    if handle.chpass_principal(username, plain_password, &realm).is_ok() {
-        info!("Kerberos password updated successfully for {}", full_principal);
-        return Ok(());
-    }
-
-    warn!("Change password failed (likely principal does not exist)—creating new principal...");
-
-    handle.create_principal(username, plain_password, &realm)
-    .context("Failed to create new Kerberos principal")?;
-
-    info!("Kerberos principal created and password set for {}", full_principal);
-
-    Ok(())
 }
 
 /// Central call for Kerberos sync—callers pass if sync is enabled (from attr check).

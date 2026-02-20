@@ -76,13 +76,6 @@ macro_rules! uuid {
     };
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType)]
-#[sea_orm(
-column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
-          array_type = "Bytes"
-)]
-pub struct Serialized(Vec<u8>);
-
 const SERIALIZED_I64_LEN: usize = 8;
 
 impl std::fmt::Debug for Serialized {
@@ -438,6 +431,13 @@ impl IntoActiveValue<JpegPhoto> for JpegPhoto {
         }
     }
 }
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType)]
+#[sea_orm(
+column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
+          array_type = "Bytes"
+)]
+pub struct Serialized(pub Vec<u8>);
 
 // Represents values that can be either a singleton or a list of a specific type
 // Used by AttributeValue to model attributes with types that might be a list.

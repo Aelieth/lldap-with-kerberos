@@ -1,7 +1,5 @@
-#![allow(unused_braces)]
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
-use lldap_domain::public_schema::PublicSchema;
 use lldap_domain::schema::AttributeSchema as DomainAttributeSchema;
 use lldap_domain::types::{
     Attribute as DomainAttribute, AttributeValue as DomainAttributeValue,
@@ -12,6 +10,12 @@ use serde::{Deserialize, Serialize};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
 
+// Single source of truth for the entire schema (user + group + POSIX + Kerberos)
+// Exactly the crate you control in crates/schema/public_schema.rs
+// → uidnumber, gidnumber, homedirectory, loginshell, kerberossync, krbprincipalname
+// all appear automatically in the web UI with correct types/visibility/editable flags.
+// No more duplication, perfect for KDE/Gnome SSO + Keycloak federation.
+use lldap_schema::PublicSchema;
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeSchema<Handler: BackendHandler> {
@@ -30,14 +34,37 @@ impl<Handler: BackendHandler> From<DomainAttributeSchema> for AttributeSchema<Ha
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeSchema<Handler> {
-    fn name(&self) -> String { self.schema.name.clone() }
-    fn aliases(&self) -> Vec<String> { self.schema.aliases.clone() }
-    fn attribute_type(&self) -> lldap_domain::types::AttributeType { self.schema.attribute_type }
-    fn is_list(&self) -> bool { self.schema.is_list }
-    fn is_visible(&self) -> bool { self.schema.is_visible }
-    fn is_editable(&self) -> bool { self.schema.is_editable }
-    fn is_hardcoded(&self) -> bool { self.schema.is_hardcoded }
-    fn is_readonly(&self) -> bool { self.schema.is_readonly }
+    fn name(&self) -> String {
+        self.schema.name.clone()
+    }
+
+    fn aliases(&self) -> Vec<String> {
+        self.schema.aliases.clone()
+    }
+
+    fn attribute_type(&self) -> lldap_domain::types::AttributeType {
+        self.schema.attribute_type
+    }
+
+    fn is_list(&self) -> bool {
+        self.schema.is_list
+    }
+
+    fn is_visible(&self) -> bool {
+        self.schema.is_visible
+    }
+
+    fn is_editable(&self) -> bool {
+        self.schema.is_editable
+    }
+
+    fn is_hardcoded(&self) -> bool {
+        self.schema.is_hardcoded
+    }
+
+    fn is_readonly(&self) -> bool {
+        self.schema.is_readonly
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -49,11 +76,15 @@ pub struct AttributeValue<Handler: BackendHandler> {
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
-    fn name(&self) -> &str { self.attribute.name.as_str() }
+    fn name(&self) -> &str {
+        self.attribute.name.as_str()
+    }
     fn value(&self) -> FieldResult<Vec<String>> {
         Ok(serialize_attribute_to_graphql(&self.attribute.value))
     }
-    fn schema(&self) -> &AttributeSchema<Handler> { &self.schema }
+    fn schema(&self) -> &AttributeSchema<Handler> {
+        &self.schema
+    }
 }
 
 impl<Handler: BackendHandler> AttributeValue<Handler> {
@@ -91,7 +122,7 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
     }
 }
 
-// Hardcoded helpers
+// Hardcoded helpers (now all using PublicSchema::get() from crates/schema)
 fn get_hardcoded_user_value(user: &DomainUser, name: &str) -> Option<DomainAttributeValue> {
     match name {
         "userid" | "user_id" | "uid" => Some(user.user_id.clone().into_string().into()),

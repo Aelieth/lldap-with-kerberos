@@ -26,69 +26,74 @@ async fn handle_modify_change(
         .atype
         .eq_ignore_ascii_case("userpassword")
         || change.operation != LdapModifyType::Replace
-        {
-            return Err(LdapError {
-                code: LdapResultCode::UnwillingToPerform,
-                message: format!(
-                    r#"Unsupported operation: `{:?}` for `{}`"#,
-                    change.operation, change.modification.atype
-                ),
-            });
-        }
-        if !credentials.can_change_password(&user_id, user_is_admin) {
-            return Err(LdapError {
-                code: LdapResultCode::InsufficentAccessRights,
-                message: format!(
-                    r#"User `{}` cannot modify the password of user `{}`"#,
-                    &credentials.user, &user_id
-                ),
-            });
-        }
-        if let [value] = &change.modification.vals.as_slice() {
-            password::change_password(opaque_handler, user_id.clone(), value)
+    {
+        return Err(LdapError {
+            code: LdapResultCode::UnwillingToPerform,
+            message: format!(
+                r#"Unsupported operation: `{:?}` for `{}`"#,
+                change.operation, change.modification.atype
+            ),
+        });
+    }
+
+    if !credentials.can_change_password(&user_id, user_is_admin) {
+        return Err(LdapError {
+            code: LdapResultCode::InsufficentAccessRights,
+            message: format!(
+                r#"User `{}` cannot modify the password of user `{}`"#,
+                &credentials.user, &user_id
+            ),
+        });
+    }
+
+    if let [value] = &change.modification.vals.as_slice() {
+        password::change_password(opaque_handler, user_id.clone(), value)
             .await
             .map_err(|e| LdapError {
                 code: LdapResultCode::Other,
                 message: format!("Error while changing the password: {e:#?}"),
             })?;
 
-            // Kerberos sync on LDAP password change
-            if let Ok(plain_pass) = std::str::from_utf8(value) {
-                // Fetch user to check kerberossync attribute
-                let user = match readable_handler.get_user_details(&user_id).await {
-                    Ok(u) => u,
-                    Err(e) => {
-                        warn!("Failed to fetch user for Kerberos sync check during LDAP password change: {}", e);
-                        return Ok(());
-                    }
-                };
-
-                let sync_enabled = user.attributes.iter().any(|attr| {
-                    attr.name.as_str() == "kerberossync"
-                    && matches!(attr.value, lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1)))
-                });
-
-                if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
-                    warn!("Kerberos sync failed after LDAP password change: {}", e);
+        // Kerberos sync after LDAP password change (if enabled for this user)
+        // Uses our PublicSchema single source of truth via the integer attribute
+        if let Ok(plain_pass) = std::str::from_utf8(value) {
+            let user = match readable_handler.get_user_details(&user_id).await {
+                Ok(u) => u,
+                Err(e) => {
+                    warn!("Failed to fetch user for Kerberos sync check: {}", e);
+                    return Ok(());
                 }
+            };
+
+            let sync_enabled = user.attributes.iter().any(|attr| {
+                attr.name.as_str() == "kerberossync"
+                    && matches!(
+                        &attr.value,
+                        lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1))
+                    )
+            });
+
+            if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
+                warn!("Kerberos sync failed after LDAP password change: {}", e);
             }
-            Ok(())
-        } else {
-            Err(LdapError {
-                code: LdapResultCode::InvalidAttributeSyntax,
-                message: format!(
-                    r#"Wrong number of values for password attribute: {}"#,
-                    change.modification.vals.len()
-                ),
-            })
         }
+        Ok(())
+    } else {
+        Err(LdapError {
+            code: LdapResultCode::InvalidAttributeSyntax,
+            message: format!(
+                r#"Wrong number of values for password attribute: {}"#,
+                change.modification.vals.len()
+            ),
+        })
+    }
 }
 
 pub(crate) async fn handle_modify_request<'cred, UserBackendHandler>(
     opaque_handler: &impl OpaqueHandler,
-    get_readable_handler: impl Fn(  // Changed from FnOnce to Fn
-    &'cred ValidationResults,
-    UserId,
+    get_readable_handler: impl Fn(
+        &'cred ValidationResults,
+        UserId,
     ) -> Option<&'cred UserBackendHandler>,
     ldap_info: &LdapInfo,
     credentials: &'cred ValidationResults,
@@ -174,22 +179,22 @@ mod tests {
         groups: Vec<&'static str>,
     ) {
         mock.expect_get_user_groups()
-            .times(1)
-            .with(eq(UserId::from(target_user)))
-            .return_once(move |_| {
-                let mut g = HashSet::<GroupDetails>::new();
-                for group in groups {
-                    g.insert(GroupDetails {
-                        group_id: GroupId(42),
-                        display_name: GroupName::from(group),
-                        creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                        uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
-                        attributes: Vec::new(),
-                        modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    });
-                }
-                Ok(g)
-            });
+        .times(1)
+        .with(eq(UserId::from(target_user)))
+        .return_once(move |_| {
+            let mut g = HashSet::<GroupDetails>::new();
+            for group in groups {
+                g.insert(GroupDetails {
+                    group_id: GroupId(42),
+                         display_name: GroupName::from(group),
+                         creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
+                         uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+                         attributes: Vec::new(),
+                         modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
+                });
+            }
+            Ok(g)
+        });
     }
 
     fn make_password_modify_request(target_user: &str) -> LdapModifyRequest {
@@ -209,8 +214,8 @@ mod tests {
         vec![LdapOp::ModifyResponse(LdapResultOp {
             code: LdapResultCode::Success,
             matcheddn: "".to_string(),
-            message: "".to_string(),
-            referral: vec![],
+                                    message: "".to_string(),
+                                    referral: vec![],
         })]
     }
 
@@ -218,8 +223,8 @@ mod tests {
         vec![LdapOp::ModifyResponse(LdapResultOp {
             code,
             matcheddn: "".to_string(),
-            message: message.to_string(),
-            referral: vec![],
+                                    message: message.to_string(),
+                                    referral: vec![],
         })]
     }
 
@@ -232,7 +237,7 @@ mod tests {
         let request = make_password_modify_request("bob");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_success_response()
+                   make_modify_success_response()
         );
     }
 
@@ -245,7 +250,7 @@ mod tests {
         let request = make_password_modify_request("test");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_success_response()
+                   make_modify_success_response()
         );
     }
 
@@ -258,7 +263,7 @@ mod tests {
         let request = make_password_modify_request("bob");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_success_response()
+                   make_modify_success_response()
         );
     }
 
@@ -270,24 +275,24 @@ mod tests {
         let request = make_password_modify_request("bob");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_failure_response(
-                LdapResultCode::InsufficentAccessRights,
-                "User `test` cannot modify the password of user `bob`"
-            )
+                   make_modify_failure_response(
+                       LdapResultCode::InsufficentAccessRights,
+                       "User `test` cannot modify the password of user `bob`"
+                   )
         );
     }
 
     #[tokio::test]
     async fn test_modify_password_of_other_regular_as_regular() {
         let ldap_handler =
-            setup_bound_handler_with_group(MockTestBackendHandler::new(), "regular").await;
+        setup_bound_handler_with_group(MockTestBackendHandler::new(), "regular").await;
         let request = make_password_modify_request("bob");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_failure_response(
-                LdapResultCode::InsufficentAccessRights,
-                "User `test` cannot modify user `bob`"
-            )
+                   make_modify_failure_response(
+                       LdapResultCode::InsufficentAccessRights,
+                       "User `test` cannot modify user `bob`"
+                   )
         );
     }
 
@@ -300,7 +305,7 @@ mod tests {
         let request = make_password_modify_request("test");
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_success_response()
+                   make_modify_success_response()
         );
     }
 
@@ -324,10 +329,10 @@ mod tests {
         };
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_failure_response(
-                LdapResultCode::InvalidAttributeSyntax,
-                "Wrong number of values for password attribute: 2"
-            )
+                   make_modify_failure_response(
+                       LdapResultCode::InvalidAttributeSyntax,
+                       "Wrong number of values for password attribute: 2"
+                   )
         );
     }
 }

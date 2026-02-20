@@ -1,3 +1,6 @@
+// Single source of truth helper: resolves attribute descriptions from GraphQL
+// (which now comes from crates/schema/public_schema.rs)
+// Used by the UI components below to display POSIX + Kerberos fields nicely.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttributeDescription<'a> {
     pub attribute_identifier: &'a str,

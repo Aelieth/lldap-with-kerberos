@@ -184,12 +184,12 @@ fn get_user_attribute_equality_filter(
     value: &str,
 ) -> UserRequestFilter {
     let value_lc = value.to_ascii_lowercase();
-    let serialized_value = deserialize_attribute_value(&[value.to_owned()], typ, is_list);
-    let serialized_value_lc = deserialize_attribute_value(&[value_lc.to_owned()], typ, is_list);
-    match (serialized_value, serialized_value_lc) {
+    let attribute_value = deserialize_attribute_value(&[value.to_owned()], typ, is_list);
+    let attribute_value_lc = deserialize_attribute_value(&[value_lc.to_owned()], typ, is_list);
+    match (attribute_value, attribute_value_lc) {
         (Ok(v), Ok(v_lc)) => UserRequestFilter::Or(vec![
             UserRequestFilter::AttributeEquality(field.clone(), v),
-            UserRequestFilter::AttributeEquality(field.clone(), v_lc),
+                                                   UserRequestFilter::AttributeEquality(field.clone(), v_lc),
         ]),
         (Ok(_), Err(e)) => {
             warn!("Invalid value for attribute {} (lowercased): {}", field, e);

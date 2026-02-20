@@ -4,7 +4,7 @@ use lldap_domain::{
     requests::{CreateUserRequest, UpdateUserRequest},
     schema::Schema,
     types::{
-        Attribute, AttributeName, GroupDetails, GroupId, Serialized, User, UserAndGroups, UserId,
+        Attribute, AttributeName, AttributeValue, Cardinality, GroupDetails, GroupId, Serialized, User, UserAndGroups, UserId,
         Uuid,
     },
 };
@@ -25,19 +25,31 @@ use sea_orm::{
 use std::collections::HashSet;
 use tracing::instrument;
 
-fn attribute_condition(name: AttributeName, value: Option<Serialized>) -> Cond {
+// Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
+// Replaces all old Serialized usage — fast, no bincode, perfect for ZimaBlade
+fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
+    match value {
+        AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
+        AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
+        AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
+        AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
+        _ => vec![], // lists are rare in equality filters
+    }
+}
+
+fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> Cond {
     Expr::in_subquery(
         Expr::col(UserColumn::UserId.as_column_ref()),
-        model::UserAttributes::find()
-            .select_only()
-            .column(model::UserAttributesColumn::UserId)
-            .filter(model::UserAttributesColumn::AttributeName.eq(name))
-            .filter(
-                value
-                    .map(|value| model::UserAttributesColumn::Value.eq(value))
-                    .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
-            )
-            .into_query(),
+                      model::UserAttributes::find()
+                      .select_only()
+                      .column(model::UserAttributesColumn::UserId)
+                      .filter(model::UserAttributesColumn::AttributeName.eq(name))
+                      .filter(
+                          value
+                          .map(|v| model::UserAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
+                          .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
+                      )
+                      .into_query(),
     )
     .into_condition()
 }
@@ -45,12 +57,12 @@ fn attribute_condition(name: AttributeName, value: Option<Serialized>) -> Cond {
 fn user_id_subcondition(filter: Cond) -> Cond {
     Expr::in_subquery(
         Expr::col(UserColumn::UserId.as_column_ref()),
-        model::User::find()
-            .find_also_linked(model::memberships::UserToGroup)
-            .select_only()
-            .column(UserColumn::UserId)
-            .filter(filter)
-            .into_query(),
+                      model::User::find()
+                      .find_also_linked(model::memberships::UserToGroup)
+                      .select_only()
+                      .column(UserColumn::UserId)
+                      .filter(filter)
+                      .into_query(),
     )
     .into_condition()
 }
@@ -70,8 +82,8 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-                .map(get_user_filter_expr)
-                .fold(condition, Cond::add)
+            .map(get_user_filter_expr)
+            .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -86,29 +98,29 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
                 panic!("User id should be wrapped")
             } else if column == UserColumn::Email {
                 ColumnTrait::eq(&UserColumn::LowercaseEmail, value.as_str().to_lowercase())
-                    .into_condition()
+                .into_condition()
             } else {
                 ColumnTrait::eq(&column, value).into_condition()
             }
         }
-        AttributeEquality(column, value) => attribute_condition(column, Some(value.into())),
+        AttributeEquality(column, value) => attribute_condition(column, Some(&value)),
         MemberOf(group) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::LowercaseDisplayName))
-                .eq(group.as_str().to_lowercase())
-                .into_condition(),
+            .eq(group.as_str().to_lowercase())
+            .into_condition(),
         ),
         MemberOfId(group_id) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::GroupId))
-                .eq(group_id)
-                .into_condition(),
+            .eq(group_id)
+            .into_condition(),
         ),
         UserIdSubString(filter) => UserColumn::UserId
-            .like(filter.to_sql_filter())
-            .into_condition(),
+        .like(filter.to_sql_filter())
+        .into_condition(),
         SubString(col, filter) => {
             SimpleExpr::FunctionCall(Func::lower(Expr::col(col.as_column_ref())))
-                .like(filter.to_sql_filter())
-                .into_condition()
+            .like(filter.to_sql_filter())
+            .into_condition()
         }
         CustomAttributePresent(name) => attribute_condition(name, None),
     }
@@ -189,7 +201,7 @@ impl UserListerBackendHandler for SqlBackendHandler {
 }
 
 impl SqlBackendHandler {
-    fn compute_user_attribute_changes(
+        fn compute_user_attribute_changes(
         user_id: &UserId,
         insert_attributes: Vec<Attribute>,
         delete_attributes: Vec<AttributeName>,
@@ -197,27 +209,19 @@ impl SqlBackendHandler {
     ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>)> {
         let mut update_user_attributes = Vec::new();
         let mut remove_user_attributes = Vec::new();
-        let mut process_serialized =
-            |value: ActiveValue<Serialized>, attribute_name: AttributeName| match &value {
-                ActiveValue::NotSet => {
-                    remove_user_attributes.push(attribute_name);
-                }
-                ActiveValue::Set(_) => {
-                    update_user_attributes.push(model::user_attributes::ActiveModel {
-                        user_id: Set(user_id.clone()),
-                        attribute_name: Set(attribute_name),
-                        value,
-                    })
-                }
-                _ => unreachable!(),
-            };
+
         for attribute in insert_attributes {
             if schema
                 .user_attributes
                 .get_attribute_type(attribute.name.as_str())
                 .is_some()
             {
-                process_serialized(ActiveValue::Set(attribute.value.into()), attribute.name);
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
+                update_user_attributes.push(model::user_attributes::ActiveModel {
+                    user_id: Set(user_id.clone()),
+                    attribute_name: Set(attribute.name),
+                    value: Set(Serialized(db_value)),
+                });
             } else {
                 return Err(DomainError::InternalError(format!(
                     "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
@@ -225,6 +229,7 @@ impl SqlBackendHandler {
                 )));
             }
         }
+
         for attribute in delete_attributes {
             if schema
                 .user_attributes

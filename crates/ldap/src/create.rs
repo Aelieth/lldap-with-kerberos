@@ -1,3 +1,6 @@
+// crates/ldap/src/create.rs
+// LDAP ADD for users/groups → our clean EAV backend
+// POSIX attributes (givenName/sn/avatar) + kerberossync default are handled here
 use crate::{
     core::{
         error::{LdapError, LdapResult},
@@ -12,7 +15,7 @@ use lldap_access_control::AdminBackendHandler;
 use lldap_domain::{
     deserialize,
     requests::{CreateGroupRequest, CreateUserRequest},
-    types::{Attribute, AttributeName, AttributeType, Email, GroupName, UserId},
+    types::{Attribute, AttributeType, Email, GroupName, UserId},
 };
 use std::collections::HashMap;
 use tracing::instrument;
@@ -61,62 +64,70 @@ async fn create_user(
             }
         }
     }
+
     let mut attributes: HashMap<String, Vec<u8>> = attributes
-    .into_iter()
-    .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
-    .map(parse_attribute)
-    .collect::<LdapResult<_>>()?;
-    fn decode_attribute_value(val: &[u8]) -> LdapResult<String> {
-        std::str::from_utf8(val)
-            .map_err(|e| LdapError {
-                code: LdapResultCode::ConstraintViolation,
-                message: format!("Attribute value is invalid UTF-8: {e:#?} (value {val:?})"),
-            })
-            .map(str::to_owned)
-    }
-    // Default kerberossync=0 (enabled) if not provided in LDAP add
+        .into_iter()
+        .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
+        .map(parse_attribute)
+        .collect::<LdapResult<_>>()?;
+
+    // Default kerberossync = 0 (do not sync to Kerberos yet) if not provided
+    // This matches our PublicSchema single source of truth
     if !attributes.contains_key("kerberossync") {
-        attributes.insert("kerberossync".to_ascii_lowercase(), "0".as_bytes().to_vec());
+        attributes.insert("kerberossync".to_string(), b"0".to_vec());
     }
-    let get_attribute = |name| {
+
+    let get_attribute = |name: &str| {
         attributes
             .get(name)
             .map(Vec::as_slice)
-            .map(decode_attribute_value)
+            .map(|v| {
+                std::str::from_utf8(v)
+                    .map(str::to_owned)
+                    .map_err(|e| LdapError {
+                        code: LdapResultCode::ConstraintViolation,
+                        message: format!("Attribute value is invalid UTF-8: {e:#?}"),
+                    })
+            })
     };
-    let make_encoded_attribute = |name: &str, typ: AttributeType, value: String| {
-        Ok(Attribute {
-            name: AttributeName::from(name),
-            value: deserialize::deserialize_attribute_value(&[value], typ, false).map_err(|e| {
-                LdapError {
-                    code: LdapResultCode::ConstraintViolation,
-                    message: format!("Invalid attribute value: {e}"),
-                }
-            })?,
-        })
-    };
+
     let mut new_user_attributes: Vec<Attribute> = Vec::new();
+
+    // Map standard LDAP POSIX attributes to our internal schema
     if let Some(first_name) = get_attribute("givenname").transpose()? {
-        new_user_attributes.push(make_encoded_attribute(
-            "first_name",
-            AttributeType::String,
-            first_name,
-        )?);
+        new_user_attributes.push(Attribute {
+            name: "first_name".into(),
+            value: deserialize::deserialize_attribute_value(&[first_name], AttributeType::String, false)
+                .map_err(|e| LdapError {
+                    code: LdapResultCode::ConstraintViolation,
+                    message: format!("Invalid first_name value: {e}"),
+                })?,
+        });
     }
     if let Some(last_name) = get_attribute("sn").transpose()? {
-        new_user_attributes.push(make_encoded_attribute(
-            "last_name",
-            AttributeType::String,
-            last_name,
-        )?);
+        new_user_attributes.push(Attribute {
+            name: "last_name".into(),
+            value: deserialize::deserialize_attribute_value(&[last_name], AttributeType::String, false)
+                .map_err(|e| LdapError {
+                    code: LdapResultCode::ConstraintViolation,
+                    message: format!("Invalid last_name value: {e}"),
+                })?,
+        });
     }
-    if let Some(avatar) = get_attribute("avatar").transpose()? {
-        new_user_attributes.push(make_encoded_attribute(
-            "avatar",
-            AttributeType::JpegPhoto,
-            avatar,
-        )?);
+    if let Some(avatar) = get_attribute("avatar")
+        .or_else(|| get_attribute("jpegphoto"))
+        .transpose()?
+    {
+        new_user_attributes.push(Attribute {
+            name: "avatar".into(),
+            value: deserialize::deserialize_attribute_value(&[avatar], AttributeType::JpegPhoto, false)
+                .map_err(|e| LdapError {
+                    code: LdapResultCode::ConstraintViolation,
+                    message: format!("Invalid avatar value: {e}"),
+                })?,
+        });
     }
+
     backend_handler
         .create_user(CreateUserRequest {
             user_id,
@@ -134,6 +145,7 @@ async fn create_user(
             code: LdapResultCode::OperationsError,
             message: format!("Could not create user: {e:#?}"),
         })?;
+
     Ok(vec![make_add_response(
         LdapResultCode::Success,
         String::new(),

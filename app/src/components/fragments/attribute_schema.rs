@@ -1,6 +1,21 @@
+// Single source of truth: renders attribute names from crates/schema/public_schema.rs
+// Friendly display names added for POSIX/Kerberos fields so the web UI looks polished
+// and user-friendly for home/lab KDE/Gnome SSO + Keycloak federation on ZimaBlade.
 use crate::infra::attributes::AttributeDescription;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use yew::{Html, html};
+
+fn get_friendly_name(name: &str) -> String {
+  match name {
+    "kerberossync" => "Kerberos Sync Enabled".to_string(),
+    "krbprincipalname" => "Kerberos Principal Name".to_string(),
+    "uidnumber" => "POSIX UID Number".to_string(),
+    "gidnumber" => "POSIX GID Number".to_string(),
+    "homedirectory" => "Home Directory".to_string(),
+    "loginshell" => "Login Shell".to_string(),
+    _ => name.to_string(),
+  }
+}
 
 fn render_attribute_aliases(attribute_description: &AttributeDescription) -> Html {
   if attribute_description.aliases.is_empty() {
@@ -40,9 +55,10 @@ pub fn render_attribute_name(
   hardcoded: bool,
   attribute_description: &AttributeDescription,
 ) -> Html {
+  let friendly = get_friendly_name(&attribute_description.attribute_name);
   html! {
     <>
-    {&attribute_description.attribute_name}
+    {friendly}
     {if hardcoded { render_attribute_aliases(attribute_description) } else { html!{} }}
     {render_attribute_validation_warnings(&attribute_description.attribute_name)}
     </>

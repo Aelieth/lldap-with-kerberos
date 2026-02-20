@@ -1,3 +1,7 @@
+// Single source of truth: renders the full user schema table from GraphQL
+// (which pulls directly from crates/schema/public_schema.rs)
+// POSIX + Kerberos fields (uidnumber, kerberossync, etc.) now appear with friendly names
+// in the hardcoded table — perfect for web UI on ZimaBlade home/lab setup.
 use crate::{
     components::{
         delete_user_attribute::DeleteUserAttribute,
