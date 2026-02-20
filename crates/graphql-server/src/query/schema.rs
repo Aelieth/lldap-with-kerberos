@@ -94,8 +94,8 @@ pub struct Schema<Handler: BackendHandler> {
 impl<Handler: BackendHandler + OpaqueHandler> Schema<Handler> {
     fn user_schema(&self) -> AttributeList<Handler> {
         AttributeList::<Handler>::new(
-            self.schema.get_schema().user_attributes.clone(),
-                                      get_default_user_object_classes(),
+            self.schema.user_attributes().clone(),   // ← unified helper (single source of truth)
+        get_default_user_object_classes(),
                                       self.schema.get_schema().extra_user_object_classes
                                       .iter()
                                       .map(|s| lldap_domain::types::LdapObjectClass::from(s.as_str()))
@@ -105,8 +105,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Schema<Handler> {
 
     fn group_schema(&self) -> AttributeList<Handler> {
         AttributeList::<Handler>::new(
-            self.schema.get_schema().group_attributes.clone(),
-                                      get_default_group_object_classes(),
+            self.schema.group_attributes().clone(),   // ← unified helper (single source of truth)
+        get_default_group_object_classes(),
                                       self.schema.get_schema().extra_group_object_classes
                                       .iter()
                                       .map(|s| lldap_domain::types::LdapObjectClass::from(s.as_str()))

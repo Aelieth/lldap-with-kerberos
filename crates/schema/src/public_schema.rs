@@ -244,4 +244,14 @@ impl PublicSchema {
     pub fn get_schema(&self) -> &Schema {
         &self.0
     }
+
+    /// Direct access for domain-model delegation (zero duplication)
+    pub fn user_attributes(&self) -> &AttributeList {
+        &self.0.user_attributes
+    }
+
+    /// Direct access for domain-model delegation (zero duplication)
+    pub fn group_attributes(&self) -> &AttributeList {
+        &self.0.group_attributes
+    }
 }

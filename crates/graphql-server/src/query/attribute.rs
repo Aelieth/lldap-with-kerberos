@@ -162,7 +162,7 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let user_attributes = std::mem::take(&mut user.attributes);
-        let schema_list = &schema.get_schema().user_attributes;
+        let schema_list = schema.user_attributes();   // ← unified helper (single source of truth)
 
         let mut all = schema_list
         .attributes
@@ -190,7 +190,7 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
-        let schema_list = &schema.get_schema().group_attributes;
+        let schema_list = schema.group_attributes();   // ← unified helper (single source of truth)
 
         let mut all = schema_list
         .attributes
@@ -218,7 +218,7 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
         schema: &PublicSchema,
     ) -> Vec<AttributeValue<Handler>> {
         let group_attributes = std::mem::take(&mut group.attributes);
-        let schema_list = &schema.get_schema().group_attributes;
+        let schema_list = schema.group_attributes();   // ← unified helper (single source of truth)
 
         let mut all = schema_list
         .attributes

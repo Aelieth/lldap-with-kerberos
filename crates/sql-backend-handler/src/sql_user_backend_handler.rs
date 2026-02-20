@@ -2,12 +2,12 @@ use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
     requests::{CreateUserRequest, UpdateUserRequest},
-    schema::Schema,
     types::{
         Attribute, AttributeName, AttributeValue, Cardinality, GroupDetails, GroupId, Serialized, User, UserAndGroups, UserId,
         Uuid,
     },
 };
+use lldap_schema::Schema;   // ← now from single source of truth
 use lldap_domain_handlers::handler::{
     ReadSchemaBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
 };
@@ -201,7 +201,7 @@ impl UserListerBackendHandler for SqlBackendHandler {
 }
 
 impl SqlBackendHandler {
-        fn compute_user_attribute_changes(
+    fn compute_user_attribute_changes(
         user_id: &UserId,
         insert_attributes: Vec<Attribute>,
         delete_attributes: Vec<AttributeName>,
@@ -215,19 +215,19 @@ impl SqlBackendHandler {
                 .user_attributes
                 .get_attribute_type(attribute.name.as_str())
                 .is_some()
-            {
-                let db_value = attribute_value_to_db_bytes(&attribute.value);
-                update_user_attributes.push(model::user_attributes::ActiveModel {
-                    user_id: Set(user_id.clone()),
-                    attribute_name: Set(attribute.name),
-                    value: Set(Serialized(db_value)),
-                });
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
-                    &attribute.name
-                )));
-            }
+                {
+                    let db_value = attribute_value_to_db_bytes(&attribute.value);
+                    update_user_attributes.push(model::user_attributes::ActiveModel {
+                        user_id: Set(user_id.clone()),
+                                                attribute_name: Set(attribute.name),
+                                                value: Set(Serialized(db_value)),
+                    });
+                } else {
+                    return Err(DomainError::InternalError(format!(
+                        "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                        &attribute.name
+                    )));
+                }
         }
 
         for attribute in delete_attributes {
@@ -235,13 +235,13 @@ impl SqlBackendHandler {
                 .user_attributes
                 .get_attribute_type(attribute.as_str())
                 .is_some()
-            {
-                remove_user_attributes.push(attribute);
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "User attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
-                )));
-            }
+                {
+                    remove_user_attributes.push(attribute);
+                } else {
+                    return Err(DomainError::InternalError(format!(
+                        "User attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                    )));
+                }
         }
         Ok((update_user_attributes, remove_user_attributes))
     }

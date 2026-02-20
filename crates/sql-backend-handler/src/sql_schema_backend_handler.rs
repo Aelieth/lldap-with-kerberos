@@ -13,6 +13,7 @@ use lldap_domain_model::{
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
+use tracing::debug;
 
 #[async_trait]
 impl ReadSchemaBackendHandler for SqlBackendHandler {
@@ -134,25 +135,51 @@ impl SqlBackendHandler {
     async fn get_user_attributes(
         transaction: &DatabaseTransaction,
     ) -> Result<Vec<AttributeSchema>> {
-        Ok(model::UserAttributeSchema::find()
-            .order_by_asc(model::UserAttributeSchemaColumn::AttributeName)
-            .all(transaction)
-            .await?
-            .into_iter()
-            .map(|m| m.into())
-            .collect())
+        debug!("SCHEMA_TX STEP USER_ATTR 1: START - clean model load (raw bypass removed - AttributeType now SeaORM-native)");
+        let raw_models = model::UserAttributeSchema::find()
+        .order_by_asc(model::UserAttributeSchemaColumn::AttributeName)
+        .all(transaction)
+        .await
+        .map_err(|e| {
+            debug!("SCHEMA_TX STEP USER_ATTR 1 FAILED model query: {:?}", e);
+            e
+        })?;
+        debug!("SCHEMA_TX STEP USER_ATTR 2: SUCCESS - {} raw models returned", raw_models.len());
+        let mut result = Vec::with_capacity(raw_models.len());
+        for (i, m) in raw_models.into_iter().enumerate() {
+            debug!("SCHEMA_TX STEP USER_ATTR 3.{:02} MODEL_ROW: name='{}' | type='{:?}' | is_list={} | visible={} | editable={} | hardcoded={}",
+                   i, m.attribute_name, m.attribute_type, m.is_list, m.is_user_visible, m.is_user_editable, m.is_hardcoded);
+            let converted = m.into();
+            debug!("SCHEMA_TX STEP USER_ATTR 3.{:02}.1 SUCCESS - converted to AttributeSchema (delegates to schema crate)", i);
+            result.push(converted);
+        }
+        debug!("SCHEMA_TX STEP USER_ATTR 4: SUCCESS - returning {} user attributes", result.len());
+        Ok(result)
     }
 
     async fn get_group_attributes(
         transaction: &DatabaseTransaction,
     ) -> Result<Vec<AttributeSchema>> {
-        Ok(model::GroupAttributeSchema::find()
-            .order_by_asc(model::GroupAttributeSchemaColumn::AttributeName)
-            .all(transaction)
-            .await?
-            .into_iter()
-            .map(|m| m.into())
-            .collect())
+        debug!("SCHEMA_TX STEP GROUP_ATTR 1: START - about to query group_attribute_schema");
+        let raw_models = model::GroupAttributeSchema::find()
+        .order_by_asc(model::GroupAttributeSchemaColumn::AttributeName)
+        .all(transaction)
+        .await
+        .map_err(|e| {
+            debug!("SCHEMA_TX STEP GROUP_ATTR 1 FAILED query: {:?}", e);
+            e
+        })?;
+        debug!("SCHEMA_TX STEP GROUP_ATTR 2: raw_models.len() = {}", raw_models.len());
+        let mut result = Vec::with_capacity(raw_models.len());
+        for (i, m) in raw_models.into_iter().enumerate() {
+            debug!("SCHEMA_TX STEP GROUP_ATTR 3.{:02} RAW_DB_ROW: name='{}' | type_string='{:?}' | is_list={} | visible={} | editable={} | hardcoded={}",
+                   i, m.attribute_name, m.attribute_type, m.is_list, m.is_group_visible, m.is_group_editable, m.is_hardcoded);
+            let converted = m.into();
+            debug!("SCHEMA_TX STEP GROUP_ATTR 3.{:02}.1 SUCCESS - converted to AttributeSchema", i);
+            result.push(converted);
+        }
+        debug!("SCHEMA_TX STEP GROUP_ATTR 4: SUCCESS - returning {} group attributes", result.len());
+        Ok(result)
     }
 
     async fn get_user_object_classes(

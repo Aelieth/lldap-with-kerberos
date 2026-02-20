@@ -1,6 +1,7 @@
 use crate::sql_tables::{DbConnection, LAST_SCHEMA_VERSION, SchemaVersion};
 use itertools::Itertools;
-use lldap_domain::types::{AttributeType, GroupId, JpegPhoto, UserId, Uuid};
+use lldap_domain::types::{GroupId, JpegPhoto, UserId, Uuid};
+use lldap_domain::types::AttributeType;  // still needed for older migrations
 use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
@@ -1214,7 +1215,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     ))
     .await;
 
-    let public_schema = lldap_domain::PublicSchema::get();
+    let public_schema = lldap_schema::PublicSchema::get();   // ← now uses unified schema crate
     let schema = public_schema.get_schema();
 
     // 3. Re-seed ALL hardcoded USER attributes from crates/schema (POSIX + Kerberos included)

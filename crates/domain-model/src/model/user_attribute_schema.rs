@@ -41,8 +41,17 @@ impl ActiveModelBehavior for ActiveModel {}
 
 impl From<Model> for AttributeSchema {
     fn from(value: Model) -> Self {
-        Self {
-            name: value.attribute_name.into_string(),
+        // Full delegation to single source of truth (schema crate)
+        // We call into_string() only once to avoid move error
+        let name_str = value.attribute_name.into_string();
+
+        let schema = lldap_schema::PublicSchema::get();
+        let full_attr = schema
+        .user_attributes()
+        .get_by_name_or_alias(&name_str)
+        .cloned()
+        .unwrap_or_else(|| AttributeSchema {
+            name: name_str,
             aliases: vec![],
             attribute_type: value.attribute_type,
             is_list: value.is_list,
@@ -50,6 +59,8 @@ impl From<Model> for AttributeSchema {
             is_editable: value.is_user_editable,
             is_hardcoded: value.is_hardcoded,
             is_readonly: false,
-        }
+        });
+
+        full_attr
     }
 }

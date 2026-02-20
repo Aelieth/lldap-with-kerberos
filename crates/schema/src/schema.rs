@@ -1,24 +1,28 @@
 use serde::{Deserialize, Serialize};
-use sea_orm::DeriveValueType;
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumIter, EnumString, IntoStaticStr};
 use juniper::GraphQLEnum;
 use derive_more::Display;
 
 // ==================== ATTRIBUTE TYPE (SINGLE SOURCE OF TRUTH) ====================
 #[derive(
-PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Copy,
-DeriveValueType,
-EnumString, IntoStaticStr, GraphQLEnum,
-Display,
+Clone, Copy, Debug, PartialEq, Eq,
+Serialize, Deserialize,
+sea_orm::DeriveActiveEnum,   // ← SeaORM can now read/write this enum from DB columns
+EnumIter,                    // ← required by DeriveActiveEnum
+EnumString, IntoStaticStr, GraphQLEnum, Display,
 )]
+#[sea_orm(rs_type = "String", db_type = "Text")]   // Text = simple VARCHAR/TEXT, avoids StringLen constructor conflict
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[display("{_0}")]
-#[sea_orm(value_type = "String")]
 pub enum AttributeType {
+    #[sea_orm(string_value = "String")]
     String,
+    #[sea_orm(string_value = "Integer")]
     Integer,
+    #[sea_orm(string_value = "JpegPhoto")]
     JpegPhoto,
+    #[sea_orm(string_value = "DateTime")]
     DateTime,
 }
 
