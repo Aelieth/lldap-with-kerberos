@@ -76,36 +76,19 @@ macro_rules! uuid {
     };
 }
 
-const SERIALIZED_I64_LEN: usize = 8;
-
 impl std::fmt::Debug for Serialized {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Serialized")
-        .field(
-            &self
-            .convert_to()
-            .and_then(|s| {
-                String::from_utf8(s)
-                .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
-            })
-            .or_else(|e| {
-                if self.0.len() == SERIALIZED_I64_LEN {
-                    self.convert_to::<i64>()
-                    .map(|i| i.to_string())
-                    .map_err(|_| Box::new(bincode::ErrorKind::InvalidCharEncoding))
-                } else {
-                    Err(e)
-                }
-            })
-            .unwrap_or_else(|_| {
-                format!("hash: {:#016X}", {
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    std::hash::Hash::hash(&self.0, &mut hasher);
-                    std::hash::Hasher::finish(&hasher)
-                })
-            }),
-        )
-        .finish()
+        if self.0.is_empty() {
+            f.debug_tuple("Serialized").field(&"empty").finish()
+        } else if let Ok(s) = String::from_utf8(self.0.clone()) {
+            if let Ok(i) = s.parse::<i64>() {
+                f.debug_tuple("Serialized").field(&i).finish()
+            } else {
+                f.debug_tuple("Serialized").field(&s).finish()
+            }
+        } else {
+            f.debug_tuple("Serialized").field(&format!("raw[{} bytes]", self.0.len())).finish()
+        }
     }
 }
 
@@ -569,7 +552,7 @@ pub struct Group {
     pub modified_date: NaiveDateTime,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupDetails {
     pub group_id: GroupId,
     pub display_name: GroupName,

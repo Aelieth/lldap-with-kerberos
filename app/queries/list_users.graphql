@@ -3,11 +3,14 @@ query ListUsersQuery($filters: RequestFilter) {
     id
     email
     displayName
-    firstName
-    lastName
     creationDate
+    attributes {
+      name
+      value
+    }
   }
 }
+
 query ListUserNames($filters: RequestFilter) {
   users(filters: $filters) {
     id

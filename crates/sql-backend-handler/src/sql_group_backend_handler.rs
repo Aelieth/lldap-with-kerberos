@@ -17,8 +17,10 @@ use sea_orm::{
     QuerySelect, QueryTrait, Set, TransactionTrait,
     sea_query::{Alias, Cond, Expr, Func, IntoCondition, OnConflict, SimpleExpr},
 };
-use tracing::{debug, instrument};
+use tracing::instrument;
 
+// Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
+// Matches exactly what we use on the user side for POSIX/Kerberos consistency
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
@@ -32,16 +34,16 @@ fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
 fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> Cond {
     Expr::in_subquery(
         Expr::col(GroupColumn::GroupId.as_column_ref()),
-                      model::GroupAttributes::find()
-                      .select_only()
-                      .column(model::GroupAttributesColumn::GroupId)
-                      .filter(model::GroupAttributesColumn::AttributeName.eq(name))
-                      .filter(
-                          value
-                          .map(|v| model::GroupAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
-                          .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
-                      )
-                      .into_query(),
+        model::GroupAttributes::find()
+            .select_only()
+            .column(model::GroupAttributesColumn::GroupId)
+            .filter(model::GroupAttributesColumn::AttributeName.eq(name))
+            .filter(
+                value
+                    .map(|v| model::GroupAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
+                    .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
+            )
+            .into_query(),
     )
     .into_condition()
 }
@@ -61,8 +63,8 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-            .map(get_group_filter_expr)
-            .fold(condition, Cond::add)
+                .map(get_group_filter_expr)
+                .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -72,19 +74,19 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
         Or(fs) => get_repeated_filter(fs, Cond::any(), false),
         Not(f) => get_group_filter_expr(*f).not(),
         DisplayName(name) => GroupColumn::LowercaseDisplayName
-        .eq(name.as_str().to_lowercase())
-        .into_condition(),
+            .eq(name.as_str().to_lowercase())
+            .into_condition(),
         GroupId(id) => GroupColumn::GroupId.eq(id.0).into_condition(),
         Uuid(uuid) => GroupColumn::Uuid.eq(uuid.to_string()).into_condition(),
         Member(user) => GroupColumn::GroupId
-        .in_subquery(
-            model::Membership::find()
-            .select_only()
-            .column(MembershipColumn::GroupId)
-            .filter(MembershipColumn::UserId.eq(user))
-            .into_query(),
-        )
-        .into_condition(),
+            .in_subquery(
+                model::Membership::find()
+                    .select_only()
+                    .column(MembershipColumn::GroupId)
+                    .filter(MembershipColumn::UserId.eq(user))
+                    .into_query(),
+            )
+            .into_condition(),
         DisplayNameSubString(filter) => SimpleExpr::FunctionCall(Func::lower(Expr::col((
             group_table,
             GroupColumn::LowercaseDisplayName,
@@ -101,65 +103,64 @@ impl GroupListerBackendHandler for SqlBackendHandler {
     #[instrument(skip(self), level = "debug", ret, err)]
     async fn list_groups(&self, filters: Option<GroupRequestFilter>) -> Result<Vec<Group>> {
         let filters = filters
-        .map(|f| {
-            GroupColumn::GroupId
-            .in_subquery(
-                model::Group::find()
-                .find_also_linked(model::memberships::GroupToUser)
-                .select_only()
-                .column(GroupColumn::GroupId)
-                .filter(get_group_filter_expr(f))
-                .into_query(),
-            )
-            .into_condition()
-        })
-        .unwrap_or_else(|| SimpleExpr::Value(true.into()).into_condition());
+            .map(|f| {
+                GroupColumn::GroupId
+                    .in_subquery(
+                        model::Group::find()
+                            .find_also_linked(model::memberships::GroupToUser)
+                            .select_only()
+                            .column(GroupColumn::GroupId)
+                            .filter(get_group_filter_expr(f))
+                            .into_query(),
+                    )
+                    .into_condition()
+            })
+            .unwrap_or_else(|| SimpleExpr::Value(true.into()).into_condition());
         let results = model::Group::find()
-        .order_by_asc(GroupColumn::GroupId)
-        .find_with_related(model::Membership)
-        .filter(filters.clone())
-        .all(&self.sql_pool)
-        .await?;
+            .order_by_asc(GroupColumn::GroupId)
+            .find_with_related(model::Membership)
+            .filter(filters.clone())
+            .all(&self.sql_pool)
+            .await?;
         let mut groups: Vec<_> = results
-        .into_iter()
-        .map(|(group, users)| {
-            let users: Vec<_> = users.into_iter().map(|u| u.user_id).collect();
-            Group {
-                users,
-                ..group.into()
-            }
-        })
-        .collect();
-        debug!("LIST_GROUPS STEP A: loaded {} groups before attributes", groups.len());
+            .into_iter()
+            .map(|(group, users)| {
+                let users: Vec<_> = users.into_iter().map(|u| u.user_id).collect();
+                Group {
+                    users,
+                    ..group.into()
+                }
+            })
+            .collect();
+
         let schema = self.get_schema().await?;
-        debug!("LIST_GROUPS STEP B: schema loaded (PublicSchema) - group_attributes.attributes.len() = {}", schema.group_attributes().attributes.len());
         let attributes = model::GroupAttributes::find()
-        .filter(
-            model::GroupAttributesColumn::GroupId.in_subquery(
-                model::Group::find()
-                .filter(filters)
-                .select_only()
-                .column(model::groups::Column::GroupId)
-                .into_query(),
-            ),
-        )
-        .order_by_asc(model::GroupAttributesColumn::GroupId)
-        .order_by_asc(model::GroupAttributesColumn::AttributeName)
-        .all(&self.sql_pool)
-        .await?;
+            .filter(
+                model::GroupAttributesColumn::GroupId.in_subquery(
+                    model::Group::find()
+                        .filter(filters)
+                        .select_only()
+                        .column(model::groups::Column::GroupId)
+                        .into_query(),
+                ),
+            )
+            .order_by_asc(model::GroupAttributesColumn::GroupId)
+            .order_by_asc(model::GroupAttributesColumn::AttributeName)
+            .all(&self.sql_pool)
+            .await?;
         let mut attributes_iter = attributes.into_iter().peekable();
         use itertools::Itertools;
         for group in groups.iter_mut() {
             group.attributes = attributes_iter
-            .take_while_ref(|u| u.group_id == group.id)
-            .map(|a| {
-                deserialize::deserialize_attribute(
-                    a.attribute_name,
-                    &a.value,
-                    &schema.group_attributes(),   // ← unified helper method
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+                .take_while_ref(|u| u.group_id == group.id)
+                .map(|a| {
+                    deserialize::deserialize_attribute(
+                        a.attribute_name,
+                        &a.value,
+                        &schema.group_attributes(),   // ← method call (PublicSchema helper)
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
         }
         groups.sort_by(|g1, g2| g1.display_name.cmp(&g2.display_name));
         Ok(groups)
@@ -171,44 +172,43 @@ impl GroupBackendHandler for SqlBackendHandler {
     #[instrument(skip(self), level = "debug", ret, err)]
     async fn get_group_details(&self, group_id: GroupId) -> Result<GroupDetails> {
         let mut group_details = model::Group::find_by_id(group_id)
-        .one(&self.sql_pool)
-        .await?
-        .map(Into::<GroupDetails>::into)
-        .ok_or_else(|| DomainError::EntityNotFound(format!("{group_id:?}")))?;
-        let attributes = model::GroupAttributes::find()
-        .filter(model::GroupAttributesColumn::GroupId.eq(group_details.group_id))
-        .order_by_asc(model::GroupAttributesColumn::AttributeName)
-        .all(&self.sql_pool)
-        .await?;
+            .one(&self.sql_pool)
+            .await?
+            .map(Into::<GroupDetails>::into)
+            .ok_or_else(|| DomainError::EntityNotFound(format!("{group_id:?}")))?;
+       let attributes = model::GroupAttributes::find()
+            .filter(model::GroupAttributesColumn::GroupId.eq(group_details.group_id))
+            .order_by_asc(model::GroupAttributesColumn::AttributeName)
+            .all(&self.sql_pool)
+            .await?;
         let schema = self.get_schema().await?;
         group_details.attributes = attributes
-        .into_iter()
-        .map(|a| {
-            deserialize::deserialize_attribute(
-                a.attribute_name,
-                &a.value,
-                &schema.group_attributes(),   // ← unified helper method
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+            .into_iter()
+            .map(|a| {
+                deserialize::deserialize_attribute(
+                    a.attribute_name,
+                    &a.value,
+                    &schema.group_attributes(),   // ← method call (PublicSchema helper)
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(group_details)
     }
 
     #[instrument(skip(self), level = "debug", err, fields(group_id = ?request.group_id))]
     async fn update_group(&self, request: UpdateGroupRequest) -> Result<()> {
         Ok(self
-        .sql_pool
-        .transaction::<_, (), DomainError>(|transaction| {
-            Box::pin(
-                async move { Self::update_group_with_transaction(request, transaction).await },
-            )
-        })
-        .await?)
+            .sql_pool
+            .transaction::<_, (), DomainError>(|transaction| {
+                Box::pin(
+                    async move { Self::update_group_with_transaction(request, transaction).await },
+                )
+            })
+            .await?)
     }
 
     #[instrument(skip(self), level = "debug", ret, err)]
     async fn create_group(&self, request: CreateGroupRequest) -> Result<GroupId> {
-        debug!("CREATE_GROUP STEP 0: Transaction START - display_name='{}' | attributes_len={}", request.display_name, request.attributes.len());
         let now = chrono::Utc::now().naive_utc();
         let uuid = Uuid::from_name_and_date(request.display_name.as_str(), &now);
         let lower_display_name = request.display_name.as_str().to_lowercase();
@@ -220,80 +220,49 @@ impl GroupBackendHandler for SqlBackendHandler {
             modified_date: Set(now),
             ..Default::default()
         };
-        debug!("CREATE_GROUP STEP 0.1: new_group ActiveModel built (display_name moved safely)");
         Ok(self
-        .sql_pool
-        .transaction::<_, GroupId, DomainError>(|transaction| {
-            Box::pin(async move {
-                debug!("CREATE_GROUP STEP 1: ENTERED transaction closure");
-                debug!("CREATE_GROUP STEP 2: ABOUT TO CALL get_schema_with_transaction() <- VariantNotFound usually here");
-                let schema = Self::get_schema_with_transaction(transaction).await
-                .map_err(|e| {
-                    debug!("CREATE_GROUP STEP 2 FAILED - schema load error: {:?}", e);
-                    e
-                })?;
-                debug!("CREATE_GROUP STEP 2 SUCCESS - schema loaded (inner Schema)");
-                debug!("CREATE_GROUP STEP 3: group_attributes.attributes.len() = {}", schema.group_attributes.attributes.len());
-                for (i, attr) in schema.group_attributes.attributes.iter().enumerate() {
-                    debug!("CREATE_GROUP STEP 3.{:02} GROUP_ATTR: name='{}' | type='{:?}' | visible={} | editable={} | hardcoded={}",
-                           i, attr.name, attr.attribute_type, attr.is_visible, attr.is_editable, attr.is_hardcoded);
-                }
-                let group_id = new_group.insert(transaction).await
-                .map_err(|e| {
-                    debug!("CREATE_GROUP STEP 4 FAILED - insert group: {:?}", e);
-                    e
-                })?.group_id;
-                debug!("CREATE_GROUP STEP 4 SUCCESS - group_id={:?}", group_id);
-                let mut new_group_attributes = Vec::new();
-                debug!("CREATE_GROUP STEP 5: Processing request.attributes (len={})", request.attributes.len());
-                for (idx, attribute) in request.attributes.iter().enumerate() {
-                    debug!("CREATE_GROUP STEP 5.{:02} CHECKING attr name='{}'", idx, attribute.name);
-                    if schema
-                        .group_attributes
-                        .get_attribute_type(attribute.name.as_str())
-                        .is_some()
+            .sql_pool
+            .transaction::<_, GroupId, DomainError>(|transaction| {
+                Box::pin(async move {
+                    let schema = Self::get_schema_with_transaction(transaction).await?;
+                    let group_id = new_group.insert(transaction).await?.group_id;
+                    let mut new_group_attributes = Vec::new();
+                    for attribute in request.attributes {
+                        if schema
+                            .group_attributes   // ← field, not method
+                            .get_attribute_type(attribute.name.as_str())
+                            .is_some()
                         {
-                            debug!("CREATE_GROUP STEP 5.{:02}.1 OK in schema", idx);
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
-                            debug!("CREATE_GROUP STEP 5.{:02}.2 db_value bytes.len()={}", idx, db_value.len());
                             new_group_attributes.push(model::group_attributes::ActiveModel {
                                 group_id: Set(group_id),
-                                                      attribute_name: Set(attribute.name.clone()),
-                                                      value: Set(Serialized(db_value)),
+                                attribute_name: Set(attribute.name),
+                                value: Set(Serialized(db_value)),
                             });
                         } else {
-                            debug!("CREATE_GROUP STEP 5.{:02}.3 MISSING in schema - will error", idx);
                             return Err(DomainError::InternalError(format!(
-                                "Attribute name {} doesn't exist in the group schema",
+                                "Attribute name {} doesn't exist in the group schema,
+                                    yet was attempted to be inserted in the database",
                                 &attribute.name
                             )));
                         }
-                }
-                if !new_group_attributes.is_empty() {
-                    debug!("CREATE_GROUP STEP 6: insert_many {} attributes", new_group_attributes.len());
-                    model::GroupAttributes::insert_many(new_group_attributes)
-                    .exec(transaction)
-                    .await
-                    .map_err(|e| {
-                        debug!("CREATE_GROUP STEP 6 FAILED - attribute insert: {:?}", e);
-                        e
-                    })?;
-                    debug!("CREATE_GROUP STEP 6 SUCCESS");
-                } else {
-                    debug!("CREATE_GROUP STEP 6: no attributes to insert");
-                }
-                debug!("CREATE_GROUP STEP 7: TRANSACTION COMPLETE - returning group_id={:?}", group_id);
-                Ok(group_id)
+                    }
+                    if !new_group_attributes.is_empty() {
+                        model::GroupAttributes::insert_many(new_group_attributes)
+                            .exec(transaction)
+                            .await?;
+                    }
+                    Ok(group_id)
+                })
             })
-        })
-        .await?)
+            .await?)
     }
 
     #[instrument(skip(self), level = "debug", err)]
     async fn delete_group(&self, group_id: GroupId) -> Result<()> {
         let res = model::Group::delete_by_id(group_id)
-        .exec(&self.sql_pool)
-        .await?;
+            .exec(&self.sql_pool)
+            .await?;
         if res.rows_affected == 0 {
             return Err(DomainError::EntityNotFound(format!(
                 "No such group: '{group_id:?}'"
@@ -308,11 +277,10 @@ impl SqlBackendHandler {
         request: UpdateGroupRequest,
         transaction: &DatabaseTransaction,
     ) -> Result<()> {
-        debug!("UPDATE_GROUP_TX STEP 0: ENTERED - group_id={:?}", request.group_id);
         let lower_display_name = request
-        .display_name
-        .as_ref()
-        .map(|s| s.as_str().to_lowercase());
+            .display_name
+            .as_ref()
+            .map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
         let update_group = model::groups::ActiveModel {
             group_id: Set(request.group_id),
@@ -321,71 +289,62 @@ impl SqlBackendHandler {
             modified_date: Set(now),
             ..Default::default()
         };
-        debug!("UPDATE_GROUP_TX STEP 1: ActiveModel built");
-        update_group.update(transaction).await
-        .map_err(|e| { debug!("UPDATE_GROUP_TX STEP 1 FAILED update: {:?}", e); e })?;
-        debug!("UPDATE_GROUP_TX STEP 1 SUCCESS");
-        debug!("UPDATE_GROUP_TX STEP 2: ABOUT TO CALL get_schema_with_transaction()");
-        let schema = Self::get_schema_with_transaction(transaction).await
-        .map_err(|e| { debug!("UPDATE_GROUP_TX STEP 2 FAILED schema: {:?}", e); e })?;
-        debug!("UPDATE_GROUP_TX STEP 2 SUCCESS - group_attributes.attributes.len() = {}", schema.group_attributes.attributes.len());
+        update_group.update(transaction).await?;
+        let schema = Self::get_schema_with_transaction(transaction).await?;
         let mut update_group_attributes = Vec::new();
         let mut remove_group_attributes = Vec::new();
-        debug!("UPDATE_GROUP_TX STEP 3: processing insert_attributes (len={})", request.insert_attributes.len());
         for attribute in request.insert_attributes {
             if schema
-                .group_attributes
+                .group_attributes   // ← field, not method
                 .get_attribute_type(attribute.name.as_str())
                 .is_some()
-                {
-                    let db_value = attribute_value_to_db_bytes(&attribute.value);
-                    update_group_attributes.push(model::group_attributes::ActiveModel {
-                        group_id: Set(request.group_id),
-                                                 attribute_name: Set(attribute.name.to_owned()),
-                                                 value: Set(Serialized(db_value)),
-                    });
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "Group attribute name {} doesn't exist in the schema",
-                        &attribute.name
-                    )));
-                }
+            {
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
+                update_group_attributes.push(model::group_attributes::ActiveModel {
+                    group_id: Set(request.group_id),
+                    attribute_name: Set(attribute.name.to_owned()),
+                    value: Set(Serialized(db_value)),
+                });
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                    &attribute.name
+                )));
+            }
         }
         for attribute in request.delete_attributes {
             if schema
-                .group_attributes
+                .group_attributes   // ← field, not method
                 .get_attribute_type(attribute.as_str())
                 .is_some()
-                {
-                    remove_group_attributes.push(attribute);
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "Group attribute name {} doesn't exist in the schema",
-                        attribute
-                    )));
-                }
+            {
+                remove_group_attributes.push(attribute);
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                )));
+            }
         }
         if !remove_group_attributes.is_empty() {
             model::GroupAttributes::delete_many()
-            .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
-            .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
-            .exec(transaction)
-            .await?;
+                .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
+                .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
+                .exec(transaction)
+                .await?;
         }
         if !update_group_attributes.is_empty() {
             model::GroupAttributes::insert_many(update_group_attributes)
-            .on_conflict(
-                OnConflict::columns([
-                    model::GroupAttributesColumn::GroupId,
-                    model::GroupAttributesColumn::AttributeName,
-                ])
-                .update_column(model::GroupAttributesColumn::Value)
-                .to_owned(),
-            )
-            .exec(transaction)
-            .await?;
+                .on_conflict(
+                    OnConflict::columns([
+                        model::GroupAttributesColumn::GroupId,
+                        model::GroupAttributesColumn::AttributeName,
+                    ])
+                    .update_column(model::GroupAttributesColumn::Value)
+                    .to_owned(),
+                )
+                .exec(transaction)
+                .await?;
         }
-        debug!("UPDATE_GROUP_TX STEP 4: TRANSACTION COMPLETE");
         Ok(())
     }
 }
@@ -500,7 +459,6 @@ mod tests {
                 })),
             )
             .await,
-            // Best group
             vec![fixture.groups[0]]
         );
     }

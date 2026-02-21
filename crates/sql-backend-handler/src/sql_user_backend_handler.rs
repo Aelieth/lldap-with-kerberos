@@ -1,3 +1,4 @@
+// crates/sql-backend-handler/src/sql_user_backend_handler.rs
 use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
@@ -7,7 +8,7 @@ use lldap_domain::{
         Uuid,
     },
 };
-use lldap_schema::Schema;   // ← now from single source of truth
+use lldap_schema::Schema;   // ← single source of truth (POSIX + Kerberos fields)
 use lldap_domain_handlers::handler::{
     ReadSchemaBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
 };
@@ -16,7 +17,7 @@ use lldap_domain_model::{
     model::{self, GroupColumn, UserColumn, deserialize},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait,
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait,
     QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
     sea_query::{
         Alias, Cond, Expr, Func, IntoColumnRef, IntoCondition, SimpleExpr, query::OnConflict,
@@ -26,7 +27,7 @@ use std::collections::HashSet;
 use tracing::instrument;
 
 // Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
-// Replaces all old Serialized usage — fast, no bincode, perfect for ZimaBlade
+// This replaces old bincode/Serialized and works perfectly with POSIX (Integer) + Kerberos fields
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
@@ -40,16 +41,16 @@ fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
 fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> Cond {
     Expr::in_subquery(
         Expr::col(UserColumn::UserId.as_column_ref()),
-                      model::UserAttributes::find()
-                      .select_only()
-                      .column(model::UserAttributesColumn::UserId)
-                      .filter(model::UserAttributesColumn::AttributeName.eq(name))
-                      .filter(
-                          value
-                          .map(|v| model::UserAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
-                          .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
-                      )
-                      .into_query(),
+        model::UserAttributes::find()
+            .select_only()
+            .column(model::UserAttributesColumn::UserId)
+            .filter(model::UserAttributesColumn::AttributeName.eq(name))
+            .filter(
+                value
+                    .map(|v| model::UserAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
+                    .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
+            )
+            .into_query(),
     )
     .into_condition()
 }
@@ -57,12 +58,12 @@ fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> C
 fn user_id_subcondition(filter: Cond) -> Cond {
     Expr::in_subquery(
         Expr::col(UserColumn::UserId.as_column_ref()),
-                      model::User::find()
-                      .find_also_linked(model::memberships::UserToGroup)
-                      .select_only()
-                      .column(UserColumn::UserId)
-                      .filter(filter)
-                      .into_query(),
+        model::User::find()
+            .find_also_linked(model::memberships::UserToGroup)
+            .select_only()
+            .column(UserColumn::UserId)
+            .filter(filter)
+            .into_query(),
     )
     .into_condition()
 }
@@ -82,8 +83,8 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-            .map(get_user_filter_expr)
-            .fold(condition, Cond::add)
+                .map(get_user_filter_expr)
+                .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -98,7 +99,7 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
                 panic!("User id should be wrapped")
             } else if column == UserColumn::Email {
                 ColumnTrait::eq(&UserColumn::LowercaseEmail, value.as_str().to_lowercase())
-                .into_condition()
+                    .into_condition()
             } else {
                 ColumnTrait::eq(&column, value).into_condition()
             }
@@ -106,21 +107,21 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
         AttributeEquality(column, value) => attribute_condition(column, Some(&value)),
         MemberOf(group) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::LowercaseDisplayName))
-            .eq(group.as_str().to_lowercase())
-            .into_condition(),
+                .eq(group.as_str().to_lowercase())
+                .into_condition(),
         ),
         MemberOfId(group_id) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::GroupId))
-            .eq(group_id)
-            .into_condition(),
+                .eq(group_id)
+                .into_condition(),
         ),
         UserIdSubString(filter) => UserColumn::UserId
-        .like(filter.to_sql_filter())
-        .into_condition(),
+            .like(filter.to_sql_filter())
+            .into_condition(),
         SubString(col, filter) => {
             SimpleExpr::FunctionCall(Func::lower(Expr::col(col.as_column_ref())))
-            .like(filter.to_sql_filter())
-            .into_condition()
+                .like(filter.to_sql_filter())
+                .into_condition()
         }
         CustomAttributePresent(name) => attribute_condition(name, None),
     }
@@ -215,19 +216,19 @@ impl SqlBackendHandler {
                 .user_attributes
                 .get_attribute_type(attribute.name.as_str())
                 .is_some()
-                {
-                    let db_value = attribute_value_to_db_bytes(&attribute.value);
-                    update_user_attributes.push(model::user_attributes::ActiveModel {
-                        user_id: Set(user_id.clone()),
-                                                attribute_name: Set(attribute.name),
-                                                value: Set(Serialized(db_value)),
-                    });
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
-                        &attribute.name
-                    )));
-                }
+            {
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
+                update_user_attributes.push(model::user_attributes::ActiveModel {
+                    user_id: Set(user_id.clone()),
+                    attribute_name: Set(attribute.name),
+                    value: Set(Serialized(db_value)),
+                });
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                    &attribute.name
+                )));
+            }
         }
 
         for attribute in delete_attributes {
@@ -235,13 +236,13 @@ impl SqlBackendHandler {
                 .user_attributes
                 .get_attribute_type(attribute.as_str())
                 .is_some()
-                {
-                    remove_user_attributes.push(attribute);
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "User attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
-                    )));
-                }
+            {
+                remove_user_attributes.push(attribute);
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "User attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                )));
+            }
         }
         Ok((update_user_attributes, remove_user_attributes))
     }
@@ -324,12 +325,17 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip_all, level = "debug", ret, err, fields(user_id = ?user_id.as_str()))]
     async fn get_user_groups(&self, user_id: &UserId) -> Result<HashSet<GroupDetails>> {
-        let _user = model::User::find_by_id(user_id.to_owned())
-            .one(&self.sql_pool)
-            .await?
-            .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?;
-            // Temporary stub until we load groups via relation (safe for now)
-            Ok(std::collections::HashSet::new())
+        let user = model::User::find_by_id(user_id.to_owned())
+        .one(&self.sql_pool)
+        .await?
+        .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?;
+
+        Ok(user.find_linked(model::memberships::UserToGroup)
+        .all(&self.sql_pool)
+        .await?
+        .into_iter()
+        .map(Into::<GroupDetails>::into)
+        .collect())
     }
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
@@ -338,7 +344,7 @@ impl UserBackendHandler for SqlBackendHandler {
         if !request.attributes.iter().any(|attr| attr.name.as_str() == "kerberossync") {
             request.attributes.push(Attribute {
                 name: "kerberossync".into(),
-                                    value: AttributeValue::Integer(Cardinality::Singleton(0)),
+                value: AttributeValue::Integer(Cardinality::Singleton(0)),
             });
         }
 
@@ -358,20 +364,20 @@ impl UserBackendHandler for SqlBackendHandler {
         };
         let mut new_user_attributes = Vec::new();
         self.sql_pool
-        .transaction::<_, (), DomainError>(|transaction| {
-            Box::pin(async move {
-                let schema = Self::get_schema_with_transaction(transaction).await?;
-                for attribute in request.attributes {
-                    if schema
-                        .user_attributes
-                        .get_attribute_type(attribute.name.as_str())
-                        .is_some()
+            .transaction::<_, (), DomainError>(|transaction| {
+                Box::pin(async move {
+                    let schema = Self::get_schema_with_transaction(transaction).await?;
+                    for attribute in request.attributes {
+                        if schema
+                            .user_attributes
+                            .get_attribute_type(attribute.name.as_str())
+                            .is_some()
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
-                                                     attribute_name: Set(attribute.name),
-                                                     value: Set(Serialized(db_value)),
+                                attribute_name: Set(attribute.name),
+                                value: Set(Serialized(db_value)),
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
@@ -380,17 +386,17 @@ impl UserBackendHandler for SqlBackendHandler {
                                 &attribute.name
                             )));
                         }
-                }
-                new_user.insert(transaction).await?;
-                if !new_user_attributes.is_empty() {
-                    model::UserAttributes::insert_many(new_user_attributes)
-                    .exec(transaction)
-                    .await?;
-                }
-                Ok(())
+                    }
+                    new_user.insert(transaction).await?;
+                    if !new_user_attributes.is_empty() {
+                        model::UserAttributes::insert_many(new_user_attributes)
+                            .exec(transaction)
+                            .await?;
+                    }
+                    Ok(())
+                })
             })
-        })
-        .await?;
+            .await?;
         Ok(())
     }
 

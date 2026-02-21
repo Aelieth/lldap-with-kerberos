@@ -127,7 +127,7 @@ impl CommonComponent<CreateGroupForm> for CreateGroupForm {
             Msg::CreateGroupResponse(response) => {
                 log!(&format!(
                     "Created group '{}'",
-                    &response?.create_group_with_details.display_name
+                    &response?.create_group.display_name
                 ));
                 ctx.link().history().unwrap().push(AppRoute::ListGroups);
                 Ok(true)
