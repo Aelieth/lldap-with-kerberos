@@ -23,6 +23,8 @@ pub struct Model {
     pub is_group_editable: bool,
     #[sea_orm(column_name = "group_attribute_schema_is_hardcoded")]
     pub is_hardcoded: bool,
+    #[sea_orm(column_name = "aliases")]
+    pub aliases: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -41,26 +43,29 @@ impl ActiveModelBehavior for ActiveModel {}
 
 impl From<Model> for AttributeSchema {
     fn from(value: Model) -> Self {
-        // Full delegation to single source of truth (schema crate)
-        // Call into_string() only once to avoid move error
         let name_str = value.attribute_name.into_string();
 
         let schema = lldap_schema::PublicSchema::get();
-        let full_attr = schema
-        .group_attributes()
-        .get_by_name_or_alias(&name_str)
-        .cloned()
-        .unwrap_or_else(|| AttributeSchema {
+        if let Some(full_attr) = schema
+            .group_attributes()
+            .get_by_name_or_alias(&name_str)
+            .cloned()
+            {
+                return full_attr;
+            }
+
+            let aliases: Vec<String> = serde_json::from_str(&value.aliases)
+            .unwrap_or_else(|_| vec![]);
+
+        AttributeSchema {
             name: name_str,
-            aliases: vec![],
+            aliases,
             attribute_type: value.attribute_type,
             is_list: value.is_list,
             is_visible: value.is_group_visible,
             is_editable: value.is_group_editable,
             is_hardcoded: value.is_hardcoded,
             is_readonly: false,
-        });
-
-        full_attr
+        }
     }
 }

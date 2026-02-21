@@ -16,8 +16,6 @@ use crate::api::{Context, field_error_callback};
 // Single source of truth — merges hardcoded + dynamic DB attributes
 use lldap_schema::{PublicSchema, schema::AttributeList};
 
-// Helper to always get the live merged schema (static hardcoded + dynamic custom attributes from DB)
-// This ensures custom attributes (and POSIX/Kerberos) are always visible in mutations
 pub async fn get_live_schema<Handler: BackendHandler>(handler: &Handler) -> Result<PublicSchema, anyhow::Error> {
     let inner = handler.get_schema().await?;
     Ok(PublicSchema(inner))
@@ -34,9 +32,8 @@ pub fn unpack_attributes(
     schema: &PublicSchema,
     is_admin: bool,
 ) -> FieldResult<UnpackedAttributes> {
-    // SAFETY CHECK — this will fail at runtime if we ever accidentally pass the static schema again
     if schema.user_attributes().attributes.len() < 17 {
-        tracing::warn!("CRITICAL: unpack_attributes received static schema with only {} attributes — custom attributes will be missing!", schema.user_attributes().attributes.len());
+        tracing::warn!("CRITICAL: unpack_attributes received schema with only {} attributes!", schema.user_attributes().attributes.len());
     }
 
     let user_schema = schema.user_attributes();
@@ -112,7 +109,10 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
     let handler = context
     .get_admin_handler()
     .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
-    let schema = handler.get_schema().await?;   // live merged schema (17+ attributes)
+
+    // handler.get_schema() returns Schema — wrap to get PublicSchema methods + correct Arc type
+    let inner = handler.get_schema().await?;
+    let schema = PublicSchema(inner);
 
     let attributes = request
     .attributes
@@ -144,22 +144,19 @@ pub fn deserialize_attribute(
         return Err(anyhow!(
             "Permission denied: Attribute {} is read-only",
             attribute.name
-        )
-        .into());
+        ).into());
     }
     if !is_admin && !attribute_schema.is_editable {
         return Err(anyhow!(
             "Permission denied: Attribute {} is not editable by regular users",
             attribute.name
-        )
-        .into());
+        ).into());
     }
     let deserialized_values = deserialize_attribute_value(
         &attribute.value,
         attribute_schema.attribute_type,
         attribute_schema.is_list,
-    )
-    .context(format!("While deserializing attribute {}", attribute.name))?;
+    ).context(format!("While deserializing attribute {}", attribute.name))?;
 
     Ok(DomainAttribute {
         name: attribute_name,

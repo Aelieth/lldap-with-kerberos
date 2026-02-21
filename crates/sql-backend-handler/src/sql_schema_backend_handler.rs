@@ -37,6 +37,7 @@ impl SchemaBackendHandler for SqlBackendHandler {
             is_user_visible: Set(request.is_visible),
             is_user_editable: Set(request.is_editable),
             is_hardcoded: Set(false),
+            aliases: Set("[]".to_string()),
         };
         new_attribute.insert(&self.sql_pool).await?;
         Ok(())
@@ -50,6 +51,7 @@ impl SchemaBackendHandler for SqlBackendHandler {
             is_group_visible: Set(request.is_visible),
             is_group_editable: Set(request.is_editable),
             is_hardcoded: Set(false),
+            aliases: Set("[]".to_string()),
         };
         new_attribute.insert(&self.sql_pool).await?;
         Ok(())

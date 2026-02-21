@@ -36,7 +36,6 @@ use std::collections::HashMap;
 // Single source of truth for the entire schema (user + group + POSIX + Kerberos)
 // Used by delete_attribute checks, future UI visibility, Keycloak federation, etc.
 use lldap_schema::PublicSchema;
-use crate::mutation::helpers::get_live_schema;
 
 #[derive(juniper::GraphQLInputObject)]
 struct CreateServicePrincipalInput {
@@ -98,12 +97,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let span = debug_span!("[GraphQL mutation] create_user");
         span.in_scope(|| debug!("{:?}", &user.id));
 
+        let user_id = UserId::new(&user.id);
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
 
-        let user_id = UserId::new(&user.id);
-        let schema = get_live_schema(handler).await?;   // ← already PublicSchema (live + custom attributes)
+        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
@@ -222,7 +221,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
 
         let is_admin = context.validation_result.is_admin();
-        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
+        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
 
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
@@ -314,13 +313,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot change lldap_admin group name".into());
         }
 
-        let schema = handler.get_schema().await?;
+        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
         let insert_attributes = group
         .insert_attributes
         .unwrap_or_default()
         .into_iter()
         .filter(|attr| attr.name != "display_name")
-        .map(|attr| deserialize_attribute(&schema.get_schema().group_attributes, attr, true))
+        .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
         .collect::<Result<Vec<_>, _>>()?;
 
         handler
@@ -550,7 +549,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized attribute deletion"))?;
-        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
+
+        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
 
         let attribute_schema = schema
         .user_attributes()
@@ -578,7 +578,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let handler = context
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized attribute deletion"))?;
-        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
+
+        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
 
         let attribute_schema = schema
         .group_attributes()
