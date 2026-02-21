@@ -127,7 +127,7 @@ impl DeleteGroupAttribute {
         html! {
           <div
             class="modal fade"
-            id={"deleteGroupAttributeModal".to_string() + &ctx.props().attribute_name}
+            id={format!("deleteGroupAttributeModal{}", ctx.props().attribute_name)}
             tabindex="-1"
             aria-labelledby="deleteGroupAttributeModalLabel"
             aria-hidden="true"

@@ -41,29 +41,29 @@ pub fn unpack_attributes(
 
     let user_schema = schema.user_attributes();
     let email = attributes
-    .iter()
-    .find(|attr| attr.name == "mail")
-    .cloned()
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .transpose()?
-    .map(|attr| attr.value.into_string().unwrap())
-    .map(Email::from);
+        .iter()
+        .find(|attr| attr.name == "mail")
+        .cloned()
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .transpose()?
+        .map(|attr| attr.value.into_string().unwrap())
+        .map(Email::from);
     let display_name = attributes
-    .iter()
-    .find(|attr| attr.name == "display_name")
-    .cloned()
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .transpose()?
-    .map(|attr| attr.value.into_string().unwrap());
+        .iter()
+        .find(|attr| attr.name == "display_name")
+        .cloned()
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .transpose()?
+        .map(|attr| attr.value.into_string().unwrap());
     let attributes = attributes
-    .into_iter()
-    .filter(|attr| attr.name != "mail" && attr.name != "display_name")
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .collect::<Result<Vec<_>, _>>()?;
+        .into_iter()
+        .filter(|attr| attr.name != "mail" && attr.name != "display_name")
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(UnpackedAttributes {
         email,
-       display_name,
-       attributes,
+        display_name,
+        attributes,
     })
 }
 
@@ -74,17 +74,17 @@ pub fn consolidate_attributes(
     avatar: Option<String>,
 ) -> Vec<AttributeValue> {
     let mut provided_attributes: BTreeMap<AttributeName, AttributeValue> = attributes
-    .into_iter()
-    .map(|x| {
-        (
-            x.name.clone().into(),
-         AttributeValue {
-             name: x.name.to_ascii_lowercase(),
-         value: x.value,
-         },
-        )
-    })
-    .collect::<BTreeMap<_, _>>();
+        .into_iter()
+        .map(|x| {
+            (
+                x.name.clone().into(),
+                AttributeValue {
+                    name: x.name.to_ascii_lowercase(),
+                    value: x.value,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let field_attrs = [
         ("first_name", first_name),
         ("last_name", last_name),
@@ -94,11 +94,11 @@ pub fn consolidate_attributes(
         if let Some(val) = value {
             let attr_name: AttributeName = name.into();
             provided_attributes
-            .entry(attr_name)
-            .or_insert_with(|| AttributeValue {
-                name: name.to_string(),
-                            value: vec![val],
-            });
+                .entry(attr_name)
+                .or_insert_with(|| AttributeValue {
+                    name: name.to_string(),
+                    value: vec![val],
+                });
         }
     }
     provided_attributes.into_values().collect()
@@ -110,16 +110,16 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
     span: Span,
 ) -> FieldResult<crate::query::Group<Handler>> {
     let handler = context
-    .get_admin_handler()
-    .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
     let schema = handler.get_schema().await?;   // live merged schema (17+ attributes)
 
     let attributes = request
-    .attributes
-    .unwrap_or_default()
-    .into_iter()
-    .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
-    .collect::<Result<Vec<_>, _>>()?;
+        .attributes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let request = CreateGroupRequest {
         display_name: request.display_name.into(),
@@ -138,8 +138,8 @@ pub fn deserialize_attribute(
     let attribute_name = AttributeName::from(attribute.name.as_str());
 
     let attribute_schema = attribute_schema
-    .get_attribute_schema(attribute_name.as_str())
-    .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
+        .get_attribute_schema(attribute_name.as_str())
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
     if attribute_schema.is_readonly {
         return Err(anyhow!(
             "Permission denied: Attribute {} is read-only",
@@ -163,6 +163,6 @@ pub fn deserialize_attribute(
 
     Ok(DomainAttribute {
         name: attribute_name,
-       value: deserialized_values,
+        value: deserialized_values,
     })
 }

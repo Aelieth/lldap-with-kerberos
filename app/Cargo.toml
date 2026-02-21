@@ -31,6 +31,7 @@ rsa = "0.9.6"
 rand = "0.8.5"
 # Needed because of https://github.com/tkaitchuck/aHash/issues/95
 indexmap = "=1.6.2"
+sha2 = "0.10"
 
 [dependencies.lldap_schema]
 path = "../crates/schema"

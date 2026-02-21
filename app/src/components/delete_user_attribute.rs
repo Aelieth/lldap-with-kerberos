@@ -127,7 +127,7 @@ impl DeleteUserAttribute {
         html! {
           <div
             class="modal fade"
-            id={"deleteUserAttributeModal".to_string() + &ctx.props().attribute_name}
+            id={format!("deleteUserAttributeModal{}", ctx.props().attribute_name)}
             tabindex="-1"
             aria-labelledby="deleteUserAttributeModalLabel"
             aria-hidden="true"

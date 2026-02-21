@@ -1,5 +1,5 @@
 mutation CreateGroup($group: CreateGroupInput!) {
-  createGroup(request: $group) {
+  createGroup(group: $group) {
     id
     displayName
   }

@@ -36,6 +36,7 @@ use std::collections::HashMap;
 // Single source of truth for the entire schema (user + group + POSIX + Kerberos)
 // Used by delete_attribute checks, future UI visibility, Keycloak federation, etc.
 use lldap_schema::PublicSchema;
+use crate::mutation::helpers::get_live_schema;
 
 #[derive(juniper::GraphQLInputObject)]
 struct CreateServicePrincipalInput {
@@ -90,7 +91,7 @@ fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
-        async fn create_user(
+    async fn create_user(
         context: &Context<Handler>,
         user: CreateUserInput,
     ) -> FieldResult<super::query::User<Handler>> {
@@ -98,17 +99,17 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| debug!("{:?}", &user.id));
 
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
 
         let user_id = UserId::new(&user.id);
-        let schema = handler.get_schema().await?;
+        let schema = get_live_schema(handler).await?;   // ← already PublicSchema (live + custom attributes)
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
-            user.first_name,
-            user.last_name,
-            user.avatar,
+                                                             user.first_name,
+                                                             user.last_name,
+                                                             user.avatar,
         );
 
         let UnpackedAttributes {
@@ -118,18 +119,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         } = unpack_attributes(consolidated_attributes, &schema, true)?;
 
         handler
-            .create_user(CreateUserRequest {
-                user_id: user_id.clone(),
-                email: user
-                    .email
-                    .map(Email::from)
-                    .or(email)
-                    .ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
-                display_name: user.display_name.or(display_name),
-                attributes,
-            })
-            .instrument(span.clone())
-            .await?;
+        .create_user(CreateUserRequest {
+            user_id: user_id.clone(),
+                     email: user
+                     .email
+                     .map(Email::from)
+                     .or(email)
+                     .ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
+                     display_name: user.display_name.or(display_name),
+                     attributes,
+        })
+        .instrument(span.clone())
+        .await?;
 
         let user_details = handler.get_user_details(&user_id).instrument(span).await?;
         super::query::User::<Handler>::from_user(user_details, Arc::new(schema))
@@ -188,21 +189,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
     async fn create_group(
         context: &Context<Handler>,
-        name: String,
+        group: CreateGroupInput,
     ) -> FieldResult<super::query::Group<Handler>> {
         let span = debug_span!("[GraphQL mutation] create_group");
         span.in_scope(|| {
-            debug!(?name);
+            debug!(?group);
         });
-        create_group_with_details(
-            context,
-            CreateGroupInput {
-                display_name: name,
-                attributes: Some(Vec::new()),
-            },
-            span,
-        )
-        .await
+        create_group_with_details(context, group, span).await
     }
 
     async fn create_group_with_details(
@@ -229,7 +222,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
 
         let is_admin = context.validation_result.is_admin();
-        let schema = handler.get_schema().await?;
+        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
 
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
@@ -238,19 +231,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                                                              user.avatar,
         );
 
-        // Extract any empty attributes into a list of attributes for deletion
         let (delete_attrs, insert_attrs): (Vec<_>, Vec<_>) = consolidated_attributes
         .into_iter()
         .partition(|a| a.value == vec!["".to_string()]);
 
-        // Combine lists of attributes for removal
         let mut delete_attributes: Vec<String> = delete_attrs
         .iter()
         .map(|a| a.name.to_owned())
         .collect();
         delete_attributes.extend(user.remove_attributes.unwrap_or_default());
 
-        // Unpack attributes for update
         let UnpackedAttributes {
             email,
             display_name,
@@ -289,7 +279,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let sync_enabled = extract_kerberos_sync(&new_user.attributes) == "1";
 
         if !sync_enabled {
-            // Sync turned off → delete principal (safe and idempotent)
             if let Err(e) = lldap_kerberos::delete_kerberos_principal(user_id.as_str()) {
                 warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
             } else {
@@ -555,22 +544,19 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         name: String,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] delete_user_attribute");
-        let name = AttributeName::from(name);
-        span.in_scope(|| {
-            debug!(?name);
-        });
+        let name = AttributeName::from(name.as_str());
+        span.in_scope(|| debug!(?name));
+
         let handler = context
         .get_admin_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized attribute deletion",
-        ))?;
-        let schema = handler.get_schema().await?;
+        .ok_or_else(field_error_callback(&span, "Unauthorized attribute deletion"))?;
+        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
+
         let attribute_schema = schema
-        .get_schema()
-        .user_attributes
+        .user_attributes()
         .get_attribute_schema(name.as_str())
         .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
         }
@@ -586,22 +572,19 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         name: String,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] delete_group_attribute");
-        let name = AttributeName::from(name);
-        span.in_scope(|| {
-            debug!(?name);
-        });
+        let name = AttributeName::from(name.as_str());
+        span.in_scope(|| debug!(?name));
+
         let handler = context
         .get_admin_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized attribute deletion",
-        ))?;
-        let schema = handler.get_schema().await?;
+        .ok_or_else(field_error_callback(&span, "Unauthorized attribute deletion"))?;
+        let schema = get_live_schema(handler).await?;   // ← live PublicSchema
+
         let attribute_schema = schema
-        .get_schema()
-        .group_attributes
+        .group_attributes()
         .get_attribute_schema(name.as_str())
         .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+
         if attribute_schema.is_hardcoded {
             return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
         }

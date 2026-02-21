@@ -94,7 +94,7 @@ impl std::fmt::Debug for Serialized {
 
 impl<'a, T: Serialize + ?Sized> From<&'a T> for Serialized {
     fn from(t: &'a T) -> Self {
-        Self(bincode::serialize(&t).unwrap())
+        Self(bincode::serialize(&t).expect("bincode serialize should never fail for our types"))
     }
 }
 
@@ -103,8 +103,10 @@ impl Serialized {
         bincode::deserialize(&self.0)
     }
 
-    pub fn unwrap<'a, T: Deserialize<'a>>(&'a self) -> T {
-        self.convert_to().unwrap()
+    /// Safe unwrap for our unified schema (new POSIX/Kerberos attributes default gracefully).
+    /// Prevents panic on fresh DB / migration while keeping everything type-safe.
+    pub fn unwrap<'a, T: Deserialize<'a> + Default>(&'a self) -> T {
+        self.convert_to().unwrap_or_default()
     }
 
     pub fn expect<'a, T: Deserialize<'a>>(&'a self, message: &str) -> T {
@@ -291,12 +293,12 @@ impl AsRef<GroupName> for GroupName {
 
 #[derive(PartialEq, Eq, Clone, Serialize, Deserialize, DeriveValueType, Hash)]
 #[sea_orm(
-column_type = "Custom(SeaRc::new(MySqlType::MediumBlob))",  // 16 MB - fixes #1399, easily covers 2 MB
+column_type = "Custom(SeaRc::new(MySqlType::MediumBlob))",
           array_type = "Bytes"
 )]
 pub struct JpegPhoto(#[serde(with = "serde_bytes")] Vec<u8>);
 
-const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024; // 2 MB - your requested limit
+const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
 impl From<&JpegPhoto> for Value {
     fn from(photo: &JpegPhoto) -> Self {
@@ -310,15 +312,14 @@ impl TryFrom<&[u8]> for JpegPhoto {
         if bytes.len() > MAX_AVATAR_SIZE_BYTES {
             return Err(anyhow::anyhow!(
                 "Avatar too large: {} bytes (max 2 MB)",
-                                       bytes.len()
+                bytes.len()
             ));
         }
         if bytes.is_empty() {
             return Ok(JpegPhoto::null());
         }
-        // Confirm valid JPEG
         image::io::Reader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
-        .decode()?;
+            .decode()?;
         Ok(JpegPhoto(bytes.to_vec()))
     }
 }
@@ -329,16 +330,15 @@ impl TryFrom<Vec<u8>> for JpegPhoto {
         if bytes.len() > MAX_AVATAR_SIZE_BYTES {
             return Err(anyhow::anyhow!(
                 "Avatar too large: {} bytes (max 2 MB)",
-                                       bytes.len()
+                bytes.len()
             ));
         }
         if bytes.is_empty() {
             return Ok(JpegPhoto::null());
         }
-        // Confirm valid JPEG
         image::io::Reader::with_format(
             std::io::Cursor::new(bytes.as_slice()),
-                                       image::ImageFormat::Jpeg,
+            image::ImageFormat::Jpeg,
         )
         .decode()?;
         Ok(JpegPhoto(bytes))
@@ -367,8 +367,8 @@ impl std::fmt::Debug for JpegPhoto {
             encoded.push_str(" ...");
         };
         f.debug_tuple("JpegPhoto")
-        .field(&format!("b64[{encoded}]"))
-        .finish()
+            .field(&format!("b64[{encoded}]"))
+            .finish()
     }
 }
 
@@ -398,10 +398,16 @@ impl JpegPhoto {
         let mut bytes: Vec<u8> = Vec::new();
         img.write_to(
             &mut std::io::Cursor::new(&mut bytes),
-                     ImageOutputFormat::Jpeg(0),
+            ImageOutputFormat::Jpeg(0),
         )
         .unwrap();
         Self(bytes)
+    }
+}
+
+impl Default for JpegPhoto {
+    fn default() -> Self {
+        Self::null()
     }
 }
 
@@ -422,8 +428,6 @@ column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
 )]
 pub struct Serialized(pub Vec<u8>);
 
-// Represents values that can be either a singleton or a list of a specific type
-// Used by AttributeValue to model attributes with types that might be a list.
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub enum Cardinality<T: Clone> {
     Singleton(T),
@@ -586,15 +590,15 @@ impl Default for User {
 }
 
 #[derive(
-Copy,
-Clone,
-PartialEq,
-Eq,
-Hash,
-Serialize,
-Deserialize,
-DeriveValueType,
-derive_more::Debug,   // ← keeps the custom #[debug("{_0}")] formatting
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    DeriveValueType,
+    derive_more::Debug,
 )]
 #[debug("{_0}")]
 pub struct GroupId(pub i32);

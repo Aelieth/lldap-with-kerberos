@@ -59,7 +59,14 @@ impl UserTable {
         user.attributes
         .iter()
         .find(|a| a.name == name)
-        .and_then(|a| a.value.first().cloned())  // ← take first element (singleton)
+        .and_then(|a| a.value.first().cloned())
+    }
+
+    /// New helper for Integer fields like kerberossync (works whether GraphQL sends "0"/"1" or future raw int)
+    fn get_kerberos_sync(user: &User) -> bool {
+        Self::get_attribute_value(user, "kerberossync")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map_or(false, |i| i != 0)
     }
 }
 
@@ -129,7 +136,7 @@ impl UserTable {
     fn view_user(&self, ctx: &Context<Self>, user: &User) -> Html {
         let first_name = Self::get_attribute_value(user, "firstname").unwrap_or_default();
         let last_name = Self::get_attribute_value(user, "lastname").unwrap_or_default();
-        let kerberos_sync = Self::get_attribute_value(user, "kerberossync").map_or(false, |v| v == "1");
+        let kerberos_sync = Self::get_kerberos_sync(user);
 
         html! {
             <tr key={user.id.clone()}>

@@ -127,7 +127,7 @@ impl UserDetails {
         let make_group_row = |group: &Group| {
             let display_name = group.display_name.clone();
             html! {
-              <tr key={"groupRow_".to_string() + &display_name}>
+              <tr key={format!("groupRow_{}", display_name)}>
                 {if ctx.props().is_admin { html! {
                   <>
                     <td>

@@ -127,7 +127,7 @@ impl DeleteUser {
         html! {
           <div
             class="modal fade"
-            id={"deleteUserModal".to_string() + &ctx.props().username}
+            id={format!("deleteUserModal{}", ctx.props().username)}
             tabindex="-1"
             //role="dialog"
             aria-labelledby="deleteUserModalLabel"

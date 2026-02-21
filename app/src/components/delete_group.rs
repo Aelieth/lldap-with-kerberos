@@ -128,7 +128,7 @@ impl DeleteGroup {
         html! {
           <div
             class="modal fade"
-            id={"deleteGroupModal".to_string() + &ctx.props().group.id.to_string()}
+            id={format!("deleteGroupModal{}", ctx.props().group.id)}
             tabindex="-1"
             aria-labelledby="deleteGroupModalLabel"
             aria-hidden="true"
