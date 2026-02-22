@@ -111,7 +111,7 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
             debug!(user_id = ?self.user.user_id);
         });
         let handler = context
-        .get_readable_handler(&self.user.user_id)
+        .get_readable_handler(self.user.user_id.clone())
         .expect("We shouldn't be able to get there without readable permission");
         let domain_groups = handler
         .get_user_groups(&self.user.user_id)

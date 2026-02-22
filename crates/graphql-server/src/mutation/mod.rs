@@ -136,19 +136,23 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         password: String,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] set_user_password");
-        let handler = context
-        .get_admin_handler()
+        span.in_scope(|| debug!("Setting password for user: {}", &user_id));
+
+        let target_user_id = UserId::new(&user_id);
+
+        // Simplified: get_writeable_handler already allows self OR admin (cleaner, no match, no type issues)
+        let handler = context.get_writeable_handler(target_user_id.clone())
         .ok_or_else(field_error_callback(&span, "Unauthorized password set"))?;
 
-        // OPAQUE registration – core LLDAP password handling (unchanged, zero impact on performance)
+        // OPAQUE registration – core LLDAP password handling (unchanged)
         use lldap_auth::{opaque, registration};
-        use anyhow::Context;
+        use anyhow::Context as AnyhowContext;
         use rand::rngs::OsRng;
         let mut rng = OsRng;
         let registration_start_request = opaque::client::registration::start_registration(password.as_bytes(), &mut rng)
         .context("Could not initiate password registration")?;
         let req = registration::ClientRegistrationStartRequest {
-            username: UserId::new(&user_id),
+            username: target_user_id.clone(),
             registration_start_request: registration_start_request.message,
         };
         let start_response = handler.registration_start(req).await
@@ -166,17 +170,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
 
-        let user_id_typed = UserId::new(&user_id);
-        let user = handler.get_user_details(&user_id_typed).await
+        let user = handler.get_user_details(&target_user_id).await
         .context("Failed to fetch user for Kerberos sync check")?;
 
         let schema = handler.get_schema().await?;
         let sync_enabled = extract_kerberos_sync(&schema, &user.attributes);
 
         if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, &user_id, &password) {
-            warn!("Kerberos sync failed after admin password set: {}", e);
+            warn!("Kerberos sync failed after password set: {}", e);
         } else if sync_enabled {
-            info!("Kerberos principal synced for user {} (triggered by admin password change)", user_id);
+            info!("Kerberos principal synced for user {} (password change)", user_id);
         }
 
         Ok(Success::new())
@@ -213,7 +216,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let user_id = UserId::new(&user.id);
         let handler = context
-        .get_writeable_handler(&user_id)
+        .get_writeable_handler(user_id.clone())
         .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
 
         let is_admin = context.validation_result.is_admin();

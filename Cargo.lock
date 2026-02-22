@@ -3182,6 +3182,7 @@ dependencies = [
  "lldap_auth",
  "lldap_domain",
  "lldap_domain_model",
+ "lldap_opaque_handler",
  "lldap_schema",
  "pretty_assertions",
  "serde",

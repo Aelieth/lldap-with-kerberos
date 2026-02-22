@@ -5,7 +5,7 @@ use lldap_access_control::{
     UserReadableBackendHandler, UserWriteableBackendHandler,
 };
 use lldap_auth::{access_control::ValidationResults, types::UserId};
-use lldap_domain_handlers::handler::BackendHandler;
+use lldap_domain_handlers::handler::{BackendHandler, PasswordHandler};  // ← NEW: for self-password
 use tracing::debug;
 use lldap_opaque_handler::OpaqueHandler;
 
@@ -33,7 +33,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
         }
     }
 
-    pub fn get_admin_handler(&self) -> Option<&(impl AdminBackendHandler + '_)> {
+    pub fn get_admin_handler(&self) -> Option<&(impl AdminBackendHandler + Send + Sync + '_)> {
         self.handler.get_admin_handler(&self.validation_result)
     }
 
@@ -41,20 +41,22 @@ impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
         self.handler.get_readonly_handler(&self.validation_result)
     }
 
+    // Now returns impl that satisfies BOTH UserWriteableBackendHandler + PasswordHandler.
+    // Takes owned UserId to match access-control exactly (zero extra cloning).
     pub fn get_writeable_handler(
         &self,
-        user_id: &UserId,
-    ) -> Option<&(impl UserWriteableBackendHandler + '_)> {
+        user_id: UserId,
+    ) -> Option<&(impl UserWriteableBackendHandler + PasswordHandler + '_)> {
         self.handler
-        .get_writeable_handler(&self.validation_result, user_id.clone())
+        .get_writeable_handler(&self.validation_result, user_id)
     }
 
     pub fn get_readable_handler(
         &self,
-        user_id: &UserId,
+        user_id: UserId,
     ) -> Option<&(impl UserReadableBackendHandler + '_)> {
         self.handler
-        .get_readable_handler(&self.validation_result, user_id.clone())
+        .get_readable_handler(&self.validation_result, user_id)
     }
 }
 

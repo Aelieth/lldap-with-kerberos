@@ -12,6 +12,7 @@ use lldap_domain::{
 };
 use lldap_domain_handlers::handler::{
     BackendHandler, GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter,
+    PasswordHandler,          // ← NEW: supertrait for own-password + editable attributes
     ReadSchemaBackendHandler, SchemaBackendHandler, UserBackendHandler, UserListerBackendHandler,
     UserRequestFilter,
 };
@@ -170,7 +171,7 @@ impl<Handler> AccessControlledBackendHandler<Handler> {
     }
 }
 
-impl<Handler: BackendHandler + OpaqueHandler> AccessControlledBackendHandler<Handler> {
+impl<Handler: BackendHandler + OpaqueHandler + PasswordHandler> AccessControlledBackendHandler<Handler> {
     pub fn new(handler: Handler) -> Self {
         Self { handler }
     }
@@ -196,11 +197,15 @@ impl<Handler: BackendHandler + OpaqueHandler> AccessControlledBackendHandler<Han
         validation_result.can_read_all().then_some(&self.handler)
     }
 
+    // ==================== UPDATED FOR PASSWORDHANDLER (TURTLE STEP 2) ====================
+    // Bound tightened so Handler satisfies the new return type of get_writeable_handler.
+    // Regular users can now safely call set_user_password (and any is_editable: true field)
+    // on their own account. Admins still use get_admin_handler (unchanged).
     pub fn get_writeable_handler<'a>(
         &'a self,
         validation_result: &ValidationResults,
         user_id: UserId,   // owned UserId (no &)
-    ) -> Option<&'a (impl UserWriteableBackendHandler + 'a)> {
+    ) -> Option<&'a (impl UserWriteableBackendHandler + PasswordHandler + 'a)> {
         validation_result.can_write(&user_id).then_some(&self.handler)
     }
 

@@ -14,6 +14,7 @@ use lldap_domain_model::{error::Result, model::UserColumn};
 use lldap_schema::PublicSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use lldap_opaque_handler::OpaqueHandler;   // needed for PasswordHandler supertrait
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct BindRequest {
@@ -168,6 +169,20 @@ pub trait SchemaBackendHandler: ReadSchemaBackendHandler {
     async fn delete_user_object_class(&self, name: &LdapObjectClass) -> Result<()>;
     async fn delete_group_object_class(&self, name: &LdapObjectClass) -> Result<()>;
 }
+
+// ==================== NEW PASSWORDHANDLER SUPERTRAIT (TURTLE STEP 1 + FIX) ====================
+// Marker supertrait so get_writeable_handler can expose password ops for owners.
+// Regular users get self-password + any is_editable=true fields from public_schema.rs.
+#[async_trait]
+pub trait PasswordHandler: BackendHandler + OpaqueHandler {
+    // no extra methods — just a marker
+}
+
+// ==================== BLANKET IMPL (fixes all LDAP E0599 errors) ====================
+// Any concrete handler that already has BackendHandler + OpaqueHandler
+// automatically satisfies PasswordHandler. This is the clean, zero-duplication fix.
+#[async_trait]
+impl<Handler: BackendHandler + OpaqueHandler> PasswordHandler for Handler {}
 
 #[async_trait]
 pub trait BackendHandler:

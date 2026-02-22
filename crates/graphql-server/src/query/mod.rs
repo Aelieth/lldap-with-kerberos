@@ -63,7 +63,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let user_id = urlencoding::decode(&user_id).context("Invalid user parameter")?;
         let user_id = UserId::new(&user_id);
         let handler = context
-        .get_readable_handler(&user_id)
+        .get_readable_handler(user_id.clone())
         .ok_or_else(field_error_callback(
             &span,
             "Unauthorized access to user data",
