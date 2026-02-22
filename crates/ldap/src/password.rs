@@ -101,23 +101,23 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
         (Some(user), Some(password)) => {
             match get_user_id_from_distinguished_name(
                 &user.to_ascii_lowercase(),
-                &ldap_info.base_dn,
-                &ldap_info.base_dn_str,
+                                                      &ldap_info.base_dn,
+                                                      &ldap_info.base_dn_str,
             ) {
                 Ok(uid) => {
                     let user_is_admin = backend_handler
-                        .get_readable_handler(credentials, &uid)
-                        .expect("Unexpected permission error")
-                        .get_user_groups(&uid)
-                        .await
-                        .map_err(|e| LdapError {
-                            code: LdapResultCode::OperationsError,
-                            message: format!(
-                                "Internal error while requesting user's groups: {e:#?}"
-                            ),
-                        })?
-                        .iter()
-                        .any(|g| g.display_name == "lldap_admin".into());
+                    .get_readable_handler(credentials, uid.clone())   // owned UserId, no &
+                    .expect("Unexpected permission error")
+                    .get_user_groups(&uid)
+                    .await
+                    .map_err(|e| LdapError {
+                        code: LdapResultCode::OperationsError,
+                        message: format!(
+                            "Internal error while requesting user's groups: {e:#?}"
+                        ),
+                    })?
+                    .iter()
+                    .any(|g| g.display_name == "lldap_admin".into());
                     if !credentials.can_change_password(&uid, user_is_admin) {
                         Err(LdapError {
                             code: LdapResultCode::InsufficentAccessRights,
@@ -128,17 +128,17 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
                         })
                     } else if let Err(e) =
                         change_password(opaque_handler, uid, password.as_bytes()).await
-                    {
-                        Err(LdapError {
-                            code: LdapResultCode::Other,
-                            message: format!("Error while changing the password: {e:#?}"),
-                        })
-                    } else {
-                        Ok(vec![make_extended_response(
-                            LdapResultCode::Success,
-                            "".to_string(),
-                        )])
-                    }
+                        {
+                            Err(LdapError {
+                                code: LdapResultCode::Other,
+                                message: format!("Error while changing the password: {e:#?}"),
+                            })
+                        } else {
+                            Ok(vec![make_extended_response(
+                                LdapResultCode::Success,
+                                "".to_string(),
+                            )])
+                        }
                 }
                 Err(e) => Err(LdapError {
                     code: LdapResultCode::InvalidDNSyntax,

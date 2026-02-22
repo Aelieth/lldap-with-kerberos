@@ -33,28 +33,28 @@ impl<Handler: BackendHandler + OpaqueHandler> Context<Handler> {
         }
     }
 
-    pub fn get_admin_handler<'a>(&'a self) -> Option<&'a (impl AdminBackendHandler + Send + Sync + 'a)> {
-        self.handler.get_admin_handler::<Handler>(&self.validation_result)
+    pub fn get_admin_handler(&self) -> Option<&(impl AdminBackendHandler + '_)> {
+        self.handler.get_admin_handler(&self.validation_result)
     }
 
-    pub fn get_readonly_handler(&self) -> Option<&(impl ReadonlyBackendHandler + use<Handler>)> {
+    pub fn get_readonly_handler(&self) -> Option<&(impl ReadonlyBackendHandler + '_)> {
         self.handler.get_readonly_handler(&self.validation_result)
     }
 
     pub fn get_writeable_handler(
         &self,
         user_id: &UserId,
-    ) -> Option<&(impl UserWriteableBackendHandler + use<Handler>)> {
+    ) -> Option<&(impl UserWriteableBackendHandler + '_)> {
         self.handler
-        .get_writeable_handler(&self.validation_result, user_id)
+        .get_writeable_handler(&self.validation_result, user_id.clone())
     }
 
     pub fn get_readable_handler(
         &self,
         user_id: &UserId,
-    ) -> Option<&(impl UserReadableBackendHandler + use<Handler>)> {
+    ) -> Option<&(impl UserReadableBackendHandler + '_)> {
         self.handler
-        .get_readable_handler(&self.validation_result, user_id)
+        .get_readable_handler(&self.validation_result, user_id.clone())
     }
 }
 

@@ -13,13 +13,8 @@ use lldap_opaque_handler::OpaqueHandler;
 use super::inputs::AttributeValue;
 use crate::api::{Context, field_error_callback};
 
-// Single source of truth — merges hardcoded + dynamic DB attributes
+// Single source of truth — now always the live PublicSchema from DB
 use lldap_schema::{PublicSchema, schema::AttributeList};
-
-pub async fn get_live_schema<Handler: BackendHandler>(handler: &Handler) -> Result<PublicSchema, anyhow::Error> {
-    let inner = handler.get_schema().await?;
-    Ok(PublicSchema(inner))
-}
 
 pub struct UnpackedAttributes {
     pub email: Option<Email>,
@@ -110,9 +105,8 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
     .get_admin_handler()
     .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
 
-    // handler.get_schema() returns Schema — wrap to get PublicSchema methods + correct Arc type
-    let inner = handler.get_schema().await?;
-    let schema = PublicSchema(inner);
+    // handler.get_schema() now returns PublicSchema directly (live from DB)
+    let schema = handler.get_schema().await?;
 
     let attributes = request
     .attributes

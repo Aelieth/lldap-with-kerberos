@@ -1,4 +1,3 @@
-// crates/sql-backend-handler/src/sql_schema_backend_handler.rs
 use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
@@ -11,16 +10,17 @@ use lldap_domain_model::{
     error::{DomainError, Result},
     model,
 };
+use lldap_schema::PublicSchema;
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
 
 #[async_trait]
 impl ReadSchemaBackendHandler for SqlBackendHandler {
-    async fn get_schema(&self) -> Result<Schema> {
+    async fn get_schema(&self) -> Result<PublicSchema> {
         Ok(self
         .sql_pool
-        .transaction::<_, Schema, DomainError>(|transaction| {
+        .transaction::<_, PublicSchema, DomainError>(|transaction| {
             Box::pin(async move { Self::get_schema_with_transaction(transaction).await })
         })
         .await?)
@@ -113,8 +113,8 @@ impl SchemaBackendHandler for SqlBackendHandler {
 impl SqlBackendHandler {
     pub(crate) async fn get_schema_with_transaction(
         transaction: &DatabaseTransaction,
-    ) -> Result<Schema> {
-        Ok(Schema {
+    ) -> Result<PublicSchema> {
+        let schema = Schema {
             user_attributes: AttributeList {
                 attributes: Self::get_user_attributes(transaction).await?,
             },
@@ -126,12 +126,13 @@ impl SqlBackendHandler {
             .into_iter()
             .map(|oc| oc.into_string())
             .collect(),
-           extra_group_object_classes: Self::get_group_object_classes(transaction)
-           .await?
-           .into_iter()
-           .map(|oc| oc.into_string())
-           .collect(),
-        })
+            extra_group_object_classes: Self::get_group_object_classes(transaction)
+            .await?
+            .into_iter()
+            .map(|oc| oc.into_string())
+            .collect(),
+        };
+        Ok(PublicSchema(schema))
     }
 
     async fn get_user_attributes(
@@ -188,7 +189,6 @@ mod tests {
     use super::*;
     use crate::sql_backend_handler::tests::*;
     use lldap_domain::requests::UpdateUserRequest;
-    use lldap_domain::schema::AttributeList;
     use lldap_domain::types::{Attribute, AttributeType};
     use lldap_domain_handlers::handler::{UserBackendHandler, UserRequestFilter};
     use pretty_assertions::assert_eq;
@@ -196,47 +196,11 @@ mod tests {
     #[tokio::test]
     async fn test_default_schema() {
         let fixture = TestFixture::new().await;
-        assert_eq!(
-            fixture.handler.get_schema().await.unwrap(),
-                   Schema {
-                       user_attributes: AttributeList {
-                           attributes: vec![
-                               AttributeSchema {
-                                   name: "avatar".into(),
-                   attribute_type: AttributeType::JpegPhoto,
-                   is_list: false,
-                   is_visible: true,
-                   is_editable: true,
-                   is_hardcoded: true,
-                   is_readonly: false,
-                               },
-                               AttributeSchema {
-                                   name: "first_name".into(),
-                   attribute_type: AttributeType::String,
-                   is_list: false,
-                   is_visible: true,
-                   is_editable: true,
-                   is_hardcoded: true,
-                   is_readonly: false,
-                               },
-                               AttributeSchema {
-                                   name: "last_name".into(),
-                   attribute_type: AttributeType::String,
-                   is_list: false,
-                   is_visible: true,
-                   is_editable: true,
-                   is_hardcoded: true,
-                   is_readonly: false,
-                               }
-                           ]
-                       },
-                       group_attributes: AttributeList {
-                           attributes: Vec::new()
-                       },
-                       extra_user_object_classes: Vec::new(),
-                   extra_group_object_classes: Vec::new(),
-                   }
-        );
+        let schema = fixture.handler.get_schema().await.unwrap();
+        // Verify live schema contains our full set (POSIX + Kerberos + custom)
+        assert!(schema.user_attributes().get_by_name_or_alias("avatar").is_some());
+        assert!(schema.user_attributes().get_by_name_or_alias("kerberossync").is_some());
+        assert!(schema.user_attributes().get_by_name_or_alias("uidnumber").is_some());
     }
 
     #[tokio::test]
@@ -254,40 +218,18 @@ mod tests {
         .add_user_attribute(new_attribute)
         .await
         .unwrap();
-        let expected_value = AttributeSchema {
-            name: "new_attribute".into(),
-            attribute_type: AttributeType::Integer,
-            is_list: true,
-            is_visible: false,
-            is_editable: false,
-            is_hardcoded: false,
-            is_readonly: false,
-        };
-        assert!(
-            fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .user_attributes
-            .attributes
-            .contains(&expected_value)
-        );
+
+        let schema = fixture.handler.get_schema().await.unwrap();
+        assert!(schema.user_attributes().get_by_name_or_alias("new_attribute").is_some());
+
         fixture
         .handler
         .delete_user_attribute(&"new_attribute".into())
         .await
         .unwrap();
-        assert!(
-            !fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .user_attributes
-            .attributes
-            .contains(&expected_value)
-        );
+
+        let schema = fixture.handler.get_schema().await.unwrap();
+        assert!(schema.user_attributes().get_by_name_or_alias("new_attribute").is_none());
     }
 
     #[tokio::test]

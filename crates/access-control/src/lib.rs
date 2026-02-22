@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 use lldap_auth::access_control::{Permission, ValidationResults};
 use lldap_domain::{
-    public_schema::PublicSchema,
     requests::{
         CreateAttributeRequest, CreateGroupRequest, CreateUserRequest, UpdateGroupRequest,
         UpdateUserRequest,
     },
-    schema::{AttributeSchema, Schema},
     types::{
         AttributeName, Group, GroupDetails, GroupId, GroupName, LdapObjectClass, User,
         UserAndGroups, UserId,
@@ -18,6 +16,7 @@ use lldap_domain_handlers::handler::{
     UserRequestFilter,
 };
 use lldap_domain_model::error::Result;
+use lldap_schema::PublicSchema;
 use std::collections::HashSet;
 use tracing::info;
 use lldap_opaque_handler::OpaqueHandler;
@@ -27,7 +26,6 @@ use lldap_auth::{login, registration};
 pub trait UserReadableBackendHandler: ReadSchemaBackendHandler {
     async fn get_user_details(&self, user_id: &UserId) -> Result<User>;
     async fn get_user_groups(&self, user_id: &UserId) -> Result<HashSet<GroupDetails>>;
-    async fn get_schema(&self) -> Result<PublicSchema>;
 }
 
 #[async_trait]
@@ -48,11 +46,11 @@ pub trait UserWriteableBackendHandler: UserReadableBackendHandler {
 
 #[async_trait]
 pub trait AdminBackendHandler:
-    UserWriteableBackendHandler
-    + ReadonlyBackendHandler
-    + UserWriteableBackendHandler
-    + SchemaBackendHandler
-    + OpaqueHandler
+UserWriteableBackendHandler
++ ReadonlyBackendHandler
++ UserWriteableBackendHandler
++ SchemaBackendHandler
++ OpaqueHandler
 {
     async fn create_user(&self, request: CreateUserRequest) -> Result<()>;
     async fn delete_user(&self, user_id: &UserId) -> Result<()>;
@@ -79,9 +77,6 @@ impl<Handler: BackendHandler> UserReadableBackendHandler for Handler {
     async fn get_user_groups(&self, user_id: &UserId) -> Result<HashSet<GroupDetails>> {
         <Handler as UserBackendHandler>::get_user_groups(self, user_id).await
     }
-    async fn get_schema(&self) -> Result<PublicSchema> {
-        Ok(lldap_domain::schema())
-    }
 }
 
 #[async_trait]
@@ -107,6 +102,7 @@ impl<Handler: BackendHandler> UserWriteableBackendHandler for Handler {
         <Handler as UserBackendHandler>::update_user(self, request).await
     }
 }
+
 #[async_trait]
 impl<Handler: BackendHandler + OpaqueHandler> AdminBackendHandler for Handler {
     async fn create_user(&self, request: CreateUserRequest) -> Result<()> {
@@ -186,36 +182,34 @@ impl<Handler: BackendHandler + OpaqueHandler> AccessControlledBackendHandler<Han
         Some(&self.handler)
     }
 
-    pub fn get_admin_handler<'a, H: BackendHandler + OpaqueHandler + Send + Sync>(
+    pub fn get_admin_handler<'a>(
         &'a self,
         validation_results: &ValidationResults,
     ) -> Option<&'a (impl AdminBackendHandler + Send + Sync + 'a)> {
         validation_results.is_admin().then_some(&self.handler)
     }
 
-    pub fn get_readonly_handler(
-        &self,
+    pub fn get_readonly_handler<'a>(
+        &'a self,
         validation_result: &ValidationResults,
-    ) -> Option<&(impl ReadonlyBackendHandler + use<Handler>)> {
+    ) -> Option<&'a (impl ReadonlyBackendHandler + 'a)> {
         validation_result.can_read_all().then_some(&self.handler)
     }
 
-    pub fn get_writeable_handler(
-        &self,
+    pub fn get_writeable_handler<'a>(
+        &'a self,
         validation_result: &ValidationResults,
-        user_id: &UserId,
-    ) -> Option<&(impl UserWriteableBackendHandler + use<Handler>)> {
-        validation_result
-            .can_write(user_id)
-            .then_some(&self.handler)
+        user_id: UserId,   // owned UserId (no &)
+    ) -> Option<&'a (impl UserWriteableBackendHandler + 'a)> {
+        validation_result.can_write(&user_id).then_some(&self.handler)
     }
 
-    pub fn get_readable_handler(
-        &self,
+    pub fn get_readable_handler<'a>(
+        &'a self,
         validation_result: &ValidationResults,
-        user_id: &UserId,
-    ) -> Option<&(impl UserReadableBackendHandler + use<Handler>)> {
-        validation_result.can_read(user_id).then_some(&self.handler)
+        user_id: UserId,   // owned UserId (no &)
+    ) -> Option<&'a (impl UserReadableBackendHandler + 'a)> {
+        validation_result.can_read(&user_id).then_some(&self.handler)
     }
 
     pub fn get_user_restricted_lister_handler(
@@ -244,8 +238,8 @@ impl<Handler: BackendHandler + OpaqueHandler> AccessControlledBackendHandler<Han
         groups: Groups,
     ) -> ValidationResults
     where
-        Groups: Iterator<Item = T> + Clone,
-        T: AsRef<GroupName>,
+    Groups: Iterator<Item = T> + Clone,
+    T: AsRef<GroupName>,
     {
         let is_in_group = |name: GroupName| groups.clone().any(|g| *g.as_ref() == name);
         ValidationResults {
@@ -270,24 +264,25 @@ pub struct UserRestrictedListerBackendHandler<'a, Handler> {
 
 #[async_trait]
 impl<Handler: ReadSchemaBackendHandler + Sync> ReadSchemaBackendHandler
-    for UserRestrictedListerBackendHandler<'_, Handler>
+for UserRestrictedListerBackendHandler<'_, Handler>
 {
-    async fn get_schema(&self) -> Result<Schema> {
-        let mut schema = self.handler.get_schema().await?;
+    async fn get_schema(&self) -> Result<PublicSchema> {
+        let mut public_schema = self.handler.get_schema().await?;
         if self.user_filter.is_some() {
-            let filter_attributes = |attributes: &mut Vec<AttributeSchema>| {
+            let filter_attributes = |attributes: &mut Vec<lldap_domain::schema::AttributeSchema>| {
                 attributes.retain(|a| a.is_visible);
             };
-            filter_attributes(&mut schema.user_attributes.attributes);
-            filter_attributes(&mut schema.group_attributes.attributes);
+            let inner = &mut public_schema.0;
+            filter_attributes(&mut inner.user_attributes.attributes);
+            filter_attributes(&mut inner.group_attributes.attributes);
         }
-        Ok(schema)
+        Ok(public_schema)
     }
 }
 
 #[async_trait]
 impl<Handler: UserListerBackendHandler + Sync> UserListerBackendHandler
-    for UserRestrictedListerBackendHandler<'_, Handler>
+for UserRestrictedListerBackendHandler<'_, Handler>
 {
     async fn list_users(
         &self,
@@ -295,9 +290,9 @@ impl<Handler: UserListerBackendHandler + Sync> UserListerBackendHandler
         get_groups: bool,
     ) -> Result<Vec<UserAndGroups>> {
         let user_filter = self
-            .user_filter
-            .as_ref()
-            .map(|u| UserRequestFilter::UserId(u.clone()));
+        .user_filter
+        .as_ref()
+        .map(|u| UserRequestFilter::UserId(u.clone()));
         let filters = match (filters, user_filter) {
             (None, None) => None,
             (None, u) => u,
@@ -310,13 +305,13 @@ impl<Handler: UserListerBackendHandler + Sync> UserListerBackendHandler
 
 #[async_trait]
 impl<Handler: GroupListerBackendHandler + Sync> GroupListerBackendHandler
-    for UserRestrictedListerBackendHandler<'_, Handler>
+for UserRestrictedListerBackendHandler<'_, Handler>
 {
     async fn list_groups(&self, filters: Option<GroupRequestFilter>) -> Result<Vec<Group>> {
         let group_filter = self
-            .user_filter
-            .as_ref()
-            .map(|u| GroupRequestFilter::Member(u.clone()));
+        .user_filter
+        .as_ref()
+        .map(|u| GroupRequestFilter::Member(u.clone()));
         let filters = match (filters, group_filter) {
             (None, None) => None,
             (None, u) => u,
@@ -329,14 +324,14 @@ impl<Handler: GroupListerBackendHandler + Sync> GroupListerBackendHandler
 
 #[async_trait]
 pub trait UserAndGroupListerBackendHandler:
-    UserListerBackendHandler + GroupListerBackendHandler
+UserListerBackendHandler + GroupListerBackendHandler
 {
     fn user_filter(&self) -> &Option<UserId>;
 }
 
 #[async_trait]
 impl<Handler: GroupListerBackendHandler + UserListerBackendHandler + Sync>
-    UserAndGroupListerBackendHandler for UserRestrictedListerBackendHandler<'_, Handler>
+UserAndGroupListerBackendHandler for UserRestrictedListerBackendHandler<'_, Handler>
 {
     fn user_filter(&self) -> &Option<UserId> {
         &self.user_filter
@@ -355,7 +350,7 @@ impl<Inner: OpaqueHandler + Send + Sync> OpaqueHandler for AccessControlledBacke
     async fn login_finish(
         &self,
         request: login::ClientLoginFinishRequest,
-    ) -> Result<UserId> {  // From trait: Returns UserId
+    ) -> Result<UserId> {
         self.handler.login_finish(request).await
     }
 

@@ -18,7 +18,7 @@ use lldap_domain::{
     types::{AttributeName, Email, GroupId, LdapObjectClass, UserId},
     schema::AttributeType,
 };
-use lldap_domain_handlers::handler::BackendHandler;
+use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
 use lldap_opaque_handler::OpaqueHandler;
@@ -65,11 +65,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Default for Mutation<Handler> {
     }
 }
 
-fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
-    let schema = PublicSchema::get();
+fn extract_kerberos_sync(schema: &PublicSchema, attrs: &[lldap_domain::types::Attribute]) -> bool {
     let kerb_name = schema
-    .get_schema()
-    .user_attributes
+    .user_attributes()
     .get_by_name_or_alias("kerberossync")
     .map(|a| a.name.as_str())
     .unwrap_or("kerberossync");
@@ -79,13 +77,10 @@ fn extract_kerberos_sync(attrs: &[lldap_domain::types::Attribute]) -> &str {
     .and_then(|a| match &a.value {
         lldap_domain::types::AttributeValue::Integer(
             lldap_domain::types::Cardinality::Singleton(i),
-        ) if *i == 1 => Some("1"),
-              lldap_domain::types::AttributeValue::Integer(
-                  lldap_domain::types::Cardinality::Singleton(i),
-              ) if *i == 0 => Some("0"),
+        ) if *i == 1 => Some(true),
               _ => None,
     })
-    .unwrap_or("0")
+    .unwrap_or(false)
 }
 
 #[graphql_object(context = Context<Handler>)]
@@ -175,7 +170,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let user = handler.get_user_details(&user_id_typed).await
         .context("Failed to fetch user for Kerberos sync check")?;
 
-        let sync_enabled = extract_kerberos_sync(&user.attributes) == "1";
+        let schema = handler.get_schema().await?;
+        let sync_enabled = extract_kerberos_sync(&schema, &user.attributes);
 
         if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, &user_id, &password) {
             warn!("Kerberos sync failed after admin password set: {}", e);
@@ -275,7 +271,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        let sync_enabled = extract_kerberos_sync(&new_user.attributes) == "1";
+        let schema = handler.get_schema().await?;
+        let sync_enabled = extract_kerberos_sync(&schema, &new_user.attributes);
 
         if !sync_enabled {
             if let Err(e) = lldap_kerberos::delete_kerberos_principal(user_id.as_str()) {
@@ -417,7 +414,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        // Delete Kerberos principal (non-fatal with warn) — uses extract_kerberos_sync from schema
+        // Delete Kerberos principal (non-fatal with warn)
         if let Err(e) = delete_kerberos_principal(&user_id) {
             warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
         } else {
@@ -761,7 +758,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        let sync_enabled = extract_kerberos_sync(&user.attributes) == "1";
+        let schema = handler.get_schema().await?;
+        let sync_enabled = extract_kerberos_sync(&schema, &user.attributes);
 
         if sync_enabled {
             sync_kerberos_principal(&user_id, &plain_password)

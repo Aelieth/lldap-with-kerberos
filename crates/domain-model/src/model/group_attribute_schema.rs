@@ -45,17 +45,8 @@ impl From<Model> for AttributeSchema {
     fn from(value: Model) -> Self {
         let name_str = value.attribute_name.into_string();
 
-        let schema = lldap_schema::PublicSchema::get();
-        if let Some(full_attr) = schema
-            .group_attributes()
-            .get_by_name_or_alias(&name_str)
-            .cloned()
-            {
-                return full_attr;
-            }
-
-            let aliases: Vec<String> = serde_json::from_str(&value.aliases)
-            .unwrap_or_else(|_| vec![]);
+        let aliases: Vec<String> = serde_json::from_str(&value.aliases)
+        .unwrap_or_else(|_| vec![]);
 
         AttributeSchema {
             name: name_str,
