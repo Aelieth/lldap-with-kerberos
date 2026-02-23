@@ -1,7 +1,3 @@
-// Single source of truth: renders the full group schema table from GraphQL
-// (which pulls directly from crates/schema/public_schema.rs)
-// POSIX + Kerberos fields (gidnumber, kerberossync, etc.) now appear with friendly names
-// in the hardcoded table — perfect for web UI on ZimaBlade home/lab setup.
 use crate::{
     components::{
         delete_group_attribute::DeleteGroupAttribute,
@@ -14,8 +10,7 @@ use crate::{
         schema::AttributeType,
     },
 };
-use anyhow::{Error, Result, anyhow};
-use gloo_console::log;
+use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 
@@ -28,8 +23,6 @@ custom_scalars_module = "crate::infra::graphql",
 extern_enums("AttributeType")
 )]
 pub struct GetGroupAttributesSchema;
-
-use get_group_attributes_schema::ResponseData;
 
 pub type Attribute =
 get_group_attributes_schema::GetGroupAttributesSchemaSchemaGroupSchemaAttributes;
@@ -45,7 +38,7 @@ pub struct GroupSchemaTable {
 }
 
 pub enum Msg {
-    ListAttributesResponse(Result<ResponseData>),
+    ListAttributesResponse(Result<get_group_attributes_schema::ResponseData>),
     OnAttributeDeleted(String),
     OnError(Error),
 }
@@ -54,25 +47,16 @@ impl CommonComponent<GroupSchemaTable> for GroupSchemaTable {
     fn handle_msg(&mut self, _: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
         match msg {
             Msg::ListAttributesResponse(schema) => {
-                self.attributes = Some(schema?.schema.group_schema.attributes.into_iter().collect());
+                self.attributes = Some(schema?.schema.group_schema.attributes);
                 Ok(true)
             }
             Msg::OnError(e) => Err(e),
-            Msg::OnAttributeDeleted(attribute_name) => match self.attributes {
-                None => {
-                    log!(format!(
-                        "Attribute {attribute_name} was deleted but component has no attributes"
-                    ));
-                    Err(anyhow!("invalid state"))
+            Msg::OnAttributeDeleted(attribute_name) => {
+                if let Some(attrs) = &mut self.attributes {
+                    attrs.retain(|a| a.name != attribute_name);
                 }
-                Some(_) => {
-                    self.attributes
-                    .as_mut()
-                    .unwrap()
-                    .retain(|a| a.name != attribute_name);
-                    Ok(true)
-                }
-            },
+                Ok(true)
+            }
         }
     }
 
@@ -149,7 +133,6 @@ impl GroupSchemaTable {
     fn view_attribute(&self, ctx: &Context<Self>, attribute: &Attribute) -> Html {
         let desc = group::resolve_group_attribute_description_or_default(&attribute.name, &attribute.aliases);
 
-        // Convert GraphQL Vec<String> → Vec<&str> to match AttributeDescription
         let aliases: Vec<&str> = attribute.aliases.iter().map(|s| s.as_str()).collect();
 
         let mut desc_with_aliases = desc;

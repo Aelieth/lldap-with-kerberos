@@ -17,6 +17,7 @@ query GetGroupDetails($id: Int!) {
     groupSchema {
       attributes {
         name
+        aliases
         attributeType
         isList
         isVisible

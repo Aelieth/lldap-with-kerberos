@@ -36,7 +36,7 @@ pub struct UserDetailsForm {
     just_updated: bool,
     user: User,
     form_ref: NodeRef,
-    kerberossync_enabled: bool,  // State for toggle (load from attr, send on submit if changed)
+        kerberossync_enabled: bool,  // State for toggle (load from attr, send on submit if changed)
 }
 
 pub enum Msg {
@@ -120,8 +120,13 @@ impl Component for UserDetailsForm {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
 
+        // ==================== LIVE SCHEMA RESPECT (TURTLE STEP 5) ====================
+        // Admins see EVERY field (even is_visible=false).
+        // NO ONE (admin or regular) can edit is_readonly=true fields.
+        // Regular users only edit is_editable=true fields.
         let can_edit =
-        |a: &AttributeSchema| (ctx.props().is_admin || a.is_editable) && !a.is_readonly;
+        |a: &AttributeSchema| !a.is_readonly && (ctx.props().is_admin || a.is_editable);
+
         let display_field = |a: &AttributeSchema| {
             if can_edit(a) {
                 get_custom_attribute_input(a, &self.user.attributes)
@@ -129,6 +134,7 @@ impl Component for UserDetailsForm {
                 get_custom_attribute_static(a, &self.user.attributes)
             }
         };
+
         html! {
             <div class="py-3">
             <form
@@ -206,14 +212,6 @@ impl Component for UserDetailsForm {
 
 impl UserDetailsForm {
     fn submit_user_update_form(&mut self, ctx: &Context<Self>) -> bool {
-        // TODO: Handle unloaded files.
-        // if let Some(JsFile {
-        //     file: Some(_),
-        //     contents: None,
-        // }) = &self.avatar
-        // {
-        //     bail!("Image file hasn't finished loading, try again");
-        // }
         let mut all_values = read_all_form_attributes(
             ctx.props().user_attributes_schema.iter(),
                                                       &self.form_ref,
@@ -230,7 +228,6 @@ impl UserDetailsForm {
             .unwrap_or(!a.values.is_empty())
         });
         // Handle kerberossync from toggle if changed
-        // Always push current kerberossync toggle state (override to ensure save)
         all_values.retain(|a| a.name != "kerberossync");  // Remove if present
         all_values.push(AttributeValue {
             name: "kerberossync".to_string(),

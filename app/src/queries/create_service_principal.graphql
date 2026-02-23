@@ -3,6 +3,6 @@ mutation CreateServicePrincipal($input: CreateServicePrincipalInput!) {
     ok
     principal
     realm
-    keytabPath
+    errorMsg
   }
 }

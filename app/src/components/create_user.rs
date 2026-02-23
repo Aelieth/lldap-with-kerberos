@@ -36,10 +36,11 @@ fn attribute_priority(name: &str) -> (i32, String) {
         "avatar",
         "uidnumber",
         "gidnumber",
+        "homedirectory",
         "loginshell",
     ];
     let index = priorities.iter().position(|&p| p == name).map(|i| i as i32).unwrap_or(100);
-    (index, name.to_lowercase())  // Tuple for stable sort (priority then alpha)
+    (index, name.to_lowercase())
 }
 
 #[derive(GraphQLQuery)]
@@ -151,8 +152,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
         match msg {
             Msg::Update => Ok(true),
             Msg::ListAttributesResponse(schema) => {
-                self.attributes_schema =
-                Some(schema?.schema.user_schema.attributes.into_iter().collect());
+                self.attributes_schema = Some(schema?.schema.user_schema.attributes);
                 self.common.call_graphql::<GetKerberosInfo, _>(
                     ctx,
                     get_kerberos_info::Variables {},
@@ -178,8 +178,6 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let model = self.form.model();
                 let new_password = model.password.clone();
 
-                // Encrypt password unconditionally (cheap, and keeps code simple)
-                // We'll only use it later if sync is enabled
                 if let Some(info) = &self.kerberos_info {
                     if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
                         match encrypt_password(pub_key_der_base64, &new_password) {
@@ -191,15 +189,8 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                             }
                         }
                     } else {
-                        bail!("Kerberos enabled but no public key available—check backend startup/logs and restart container if needed");
+                        bail!("Kerberos enabled but no public key available—check backend startup/logs");
                     }
-                } else {
-                    bail!("Kerberos info not loaded—try reloading or restart container");
-                }
-
-                // Strict require encrypted (blocks if missing/fail)
-                if self.encrypted_password.is_none() {
-                    bail!("Kerberos password encryption failed—user creation aborted (fix backend/restart container)");
                 }
 
                 let all_values = read_all_form_attributes(
@@ -207,19 +198,17 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                                           &self.form_ref,
                                                           IsAdmin(true),
                                                           EmailIsRequired(true),
-                )?;  // Unwrap Result with ? (propagates error to banner if form read fails)
+                )?;
 
-                // Make mutable so we can conditionally add kerberossync="0"
                 let mut attributes = all_values
-                .into_iter()  // Owned AttributeValue elements (move name/values)
+                .into_iter()
                 .filter(|a| !a.values.is_empty())
                 .map(|a| GraphQLAttributeValue {
                     name: a.name,
-                    value: a.values,  // Local plural 'values' moves to GraphQL singular 'value'
+                    value: a.values,
                 })
                 .collect::<Vec<_>>();
 
-                // If sync disabled, explicitly send kerberossync="0" to override backend default
                 if !self.kerberossync_enabled {
                     attributes.push(GraphQLAttributeValue {
                         name: "kerberossync".to_string(),
@@ -291,7 +280,6 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::RegistrationFinishResponse(response) => {
                 response?;
-                // Only sync if checkbox was enabled AND we have an encrypted password
                 if self.kerberossync_enabled {
                     if let Some(enc_pw) = &self.encrypted_password {
                         let variables = sync_kerberos_password::Variables {
@@ -306,11 +294,9 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                         );
                         Ok(false)
                     } else {
-                        // Shouldn't happen, but fall back to success
                         self.handle_msg(ctx, Msg::SuccessfulCreation)
                     }
                 } else {
-                    // Sync disabled → go straight to success
                     self.handle_msg(ctx, Msg::SuccessfulCreation)
                 }
             }
@@ -340,11 +326,11 @@ impl Component for CreateUserForm {
             form: yew_form::Form::<CreateUserModel>::new(CreateUserModel::default()),
                 attributes_schema: None,
                 form_ref: NodeRef::default(),
-                    kerberos_info: None,
                     fetched_schema: false,
                     encrypted_password: None,
                     user_id: None,
                     opaque_data: None,
+                    kerberos_info: None,
                     kerberossync_enabled: true,
         }
     }
@@ -356,10 +342,36 @@ impl Component for CreateUserForm {
     fn view(&self, ctx: &YewContext<Self>) -> Html {
         let link = ctx.link();
         if self.attributes_schema.is_none() || self.kerberos_info.is_none() {
-            html! {
-                <div>{"Loading schema and Kerberos info..."}</div>
-            }
+            html! { <div>{"Loading schema and Kerberos info..."}</div> }
         } else {
+            let attrs = self.attributes_schema.as_ref().unwrap();
+
+            // ==================== DEBUG LOGS (TURTLE STEP 6.5) ====================
+            // Open browser DevTools → Console tab after loading the Create User page.
+            // You will see exactly what the frontend receives from PublicSchema.
+            gloo_console::log!("=== CREATE USER SCHEMA DEBUG (from PublicSchema) ===");
+            for a in attrs.iter() {
+                gloo_console::log!(format!(
+                    "Attr: '{}' | is_readonly: {} | is_editable: {} | is_visible: {} | is_hardcoded: {} | type: {:?} | aliases: {:?}",
+                    a.name,
+                    a.is_readonly,
+                    a.is_editable,
+                    a.is_visible,
+                    a.is_hardcoded,
+                    a.attribute_type,
+                    a.aliases
+                ));
+            }
+            gloo_console::log!("=== END SCHEMA DEBUG ===");
+
+            // STRICT FILTER: Hide EVERY readonly field (backend generates them)
+            // Only show fields where is_readonly == false AND not kerberossync
+            let should_show = |a: &Attribute| !a.is_readonly && a.name != "kerberossync";
+
+            // Sort the fields that pass the filter (your original priority logic)
+            let mut visible_attrs: Vec<&Attribute> = attrs.iter().filter(|a| should_show(a)).collect();
+            visible_attrs.sort_by_key(|a| attribute_priority(&a.name));
+
             html! {
                 <div class="row justify-content-center">
                 <form class="form py-3" ref={self.form_ref.clone()}>
@@ -369,74 +381,61 @@ impl Component for CreateUserForm {
                 label="User name"
                 field_name="username"
                 oninput={link.callback(|_| Msg::Update)} />
-                {
-                    (|| {
-                        let attrs = self.attributes_schema.as_ref().unwrap();
-                        let mut indices: Vec<usize> = (0..attrs.len())
-                        .filter(|&i| !attrs[i].is_readonly && attrs[i].name != "kerberossync")
-                        .collect();
-                        indices.sort_by_key(|&i| attribute_priority(&attrs[i].name));
-                        indices
-                        .into_iter()
-                        .map(|i| get_custom_attribute_input(&attrs[i]))
-                        .collect::<Vec<Html>>()
-                    })()
-                }
-                // NEW: Kerberos sync toggle switch — placed here for good UX flow
-                <div class="mb-3 row">
-                <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
-                {"Kerberos Sync :"}
-                <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
-                <i aria-label="Info" class="bi bi-info-circle"></i>
-                </button>
-                </label>
-                <div class="col-8 d-flex align-items-center">
-                <div class="btn-group" role="group" style="width: 120px;">  // Width to match Clear, adjust if needed
-                <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
-                {"On"}
-                </button>
-                <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
-                {"Off"}
-                </button>
-                </div>
-                </div>
-                </div>
-                // End new toggle
-                <Field<CreateUserModel>
-                form={&self.form}
-                label="Password"
-                field_name="password"
-                input_type="password"
-                autocomplete="new-password"
-                oninput={link.callback(|_| Msg::Update)} />
-                <Field<CreateUserModel>
-                form={&self.form}
-                label="Confirm password"
-                field_name="confirm_password"
-                input_type="password"
-                autocomplete="new-password"
-                oninput={link.callback(|_| Msg::Update)} />
-                <Submit
-                disabled={self.common.is_task_running()}
-                onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
-                </form>
-                {
-                    if let Some(e) = &self.common.error {
-                        html! {
-                            <div class="alert alert-danger">
-                            {e.to_string() }
-                            </div>
-                        }
-                    } else { html! {} }
-                }
-                </div>
+
+                { visible_attrs.iter()
+                    .map(|&a| get_custom_attribute_input(a))
+                    .collect::<Vec<Html>>() }
+
+                    // Kerberos sync toggle
+                    <div class="mb-3 row">
+                    <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
+                    {"Kerberos Sync :"}
+                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
+                    <i aria-label="Info" class="bi bi-info-circle"></i>
+                    </button>
+                    </label>
+                    <div class="col-8 d-flex align-items-center">
+                    <div class="btn-group" role="group" style="width: 120px;">
+                    <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
+                    {"On"}
+                    </button>
+                    <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
+                    {"Off"}
+                    </button>
+                    </div>
+                    </div>
+                    </div>
+
+                    <Field<CreateUserModel>
+                    form={&self.form}
+                    label="Password"
+                    field_name="password"
+                    input_type="password"
+                    autocomplete="new-password"
+                    oninput={link.callback(|_| Msg::Update)} />
+                    <Field<CreateUserModel>
+                    form={&self.form}
+                    label="Confirm password"
+                    field_name="confirm_password"
+                    input_type="password"
+                    autocomplete="new-password"
+                    oninput={link.callback(|_| Msg::Update)} />
+
+                    <Submit
+                    disabled={self.common.is_task_running()}
+                    onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
+                    </form>
+
+                    { if let Some(e) = &self.common.error {
+                        html! { <div class="alert alert-danger">{e.to_string()}</div> }
+                    } else { html! {} }}
+                    </div>
             }
         }
     }
 
     fn rendered(&mut self, ctx: &YewContext<Self>, first_render: bool) {
         if first_render && !self.fetched_schema {
-            gloo_console::log!("Rendered: fetching schema");
             self.common.call_graphql::<GetUserAttributesSchema, _>(
                 ctx,
                 get_user_attributes_schema::Variables {},

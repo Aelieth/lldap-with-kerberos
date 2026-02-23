@@ -19,6 +19,7 @@ query GetUserDetails($id: String!) {
     userSchema {
       attributes {
         name
+        aliases
         attributeType
         isList
         isVisible

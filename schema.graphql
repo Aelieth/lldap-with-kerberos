@@ -1,6 +1,13 @@
+type AttributeValue {
+  name: String!
+  value: [String!]!
+  schema: AttributeSchema!
+}
+
 type Mutation {
   createUser(user: CreateUserInput!): User!
-  createGroup(name: String!): Group!
+  setUserPassword(userId: String!, password: String!): Success!
+  createGroup(group: CreateGroupInput!): Group!
   createGroupWithDetails(request: CreateGroupInput!): Group!
   updateUser(user: UpdateUserInput!): Success!
   updateGroup(group: UpdateGroupInput!): Success!
@@ -16,25 +23,8 @@ type Mutation {
   addGroupObjectClass(name: String!): Success!
   deleteUserObjectClass(name: String!): Success!
   deleteGroupObjectClass(name: String!): Success!
-  syncKerberosPassword(userId: ID!, encryptedPassword: String!): Boolean!
   createServicePrincipal(input: CreateServicePrincipalInput!): CreateServicePrincipalResponse!
-}
-
-"Response from creating/rotating a service principal."
-type CreateServicePrincipalResponse {
-  ok: Boolean!
-  "Full principal (e.g., HTTP/keycloak.testlab.local@REALM)"
-  principal: String!
-  "Realm (e.g., TESTLAB.LOCAL)"
-  realm: String!
-  "Path to exported keytab (volume-mounted)"
-  keytabPath: String!
-}
-
-type AttributeValue {
-  name: String!
-  value: [String!]!
-  schema: AttributeSchema!
+  syncKerberosPassword(userId: String!, encryptedPassword: String!): Boolean!
 }
 
 type Group {
@@ -44,7 +34,7 @@ type Group {
   uuid: String!
   "User-defined attributes."
   attributes: [AttributeValue!]!
-  "The groups to which this user belongs."
+  "The users that belong to this group."
   users: [User!]!
 }
 
@@ -63,6 +53,22 @@ input RequestFilter {
 
 "DateTime"
 scalar DateTimeUtc
+
+type KerberosInfo {
+  publicKeyDerBase64: String
+}
+
+input CreateServicePrincipalInput {
+  serviceName: String!
+  hostname: String!
+}
+
+type CreateServicePrincipalResponse {
+  ok: Boolean!
+  principal: String!
+  realm: String!
+  errorMsg: String!
+}
 
 type Query {
   apiVersion: String!
@@ -181,14 +187,6 @@ input CreateGroupInput {
   "User-defined attributes." attributes: [AttributeValueInput!]
 }
 
-"The details required to create a service principal (e.g., for Keycloak or SSSD host)."
-input CreateServicePrincipalInput {
-  "The service type (e.g., HTTP for web, host for desktops)."
-  serviceName: String!
-  "The fully qualified hostname (e.g., keycloak.mylab.local or desktop.mylab.local)."
-  hostname: String!
-}
-
 type User {
   id: String!
   email: String!
@@ -215,10 +213,6 @@ type AttributeList {
   attributes: [AttributeSchema!]!
   extraLdapObjectClasses: [String!]!
   ldapObjectClasses: [ObjectClassInfo!]!
-}
-
-type KerberosInfo {
-  publicKeyDerBase64: String
 }
 
 type Success {

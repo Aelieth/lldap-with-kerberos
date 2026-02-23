@@ -28,6 +28,7 @@ pub enum AttributeType {
 
 // ==================== SCHEMA STRUCTS ====================
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Schema {
     pub user_attributes: AttributeList,
     pub group_attributes: AttributeList,
@@ -36,6 +37,7 @@ pub struct Schema {
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AttributeSchema {
     pub name: String,
     pub aliases: Vec<String>,
@@ -48,6 +50,7 @@ pub struct AttributeSchema {
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AttributeList {
     pub attributes: Vec<AttributeSchema>,
 }
