@@ -2,7 +2,6 @@ use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
     requests::CreateAttributeRequest,
-    schema::{AttributeList, AttributeSchema, Schema},
     types::{AttributeName, LdapObjectClass},
 };
 use lldap_domain_handlers::handler::{ReadSchemaBackendHandler, SchemaBackendHandler};
@@ -10,7 +9,7 @@ use lldap_domain_model::{
     error::{DomainError, Result},
     model,
 };
-use lldap_schema::PublicSchema;
+use lldap_schema::{AttributeList, AttributeSchema, PublicSchema, Schema};
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
@@ -37,6 +36,7 @@ impl SchemaBackendHandler for SqlBackendHandler {
             is_user_visible: Set(request.is_visible),
             is_user_editable: Set(request.is_editable),
             is_hardcoded: Set(false),
+            is_readonly: Set(false),  // custom attributes are never readonly
             aliases: Set("[]".to_string()),
         };
         new_attribute.insert(&self.sql_pool).await?;
@@ -51,6 +51,7 @@ impl SchemaBackendHandler for SqlBackendHandler {
             is_group_visible: Set(request.is_visible),
             is_group_editable: Set(request.is_editable),
             is_hardcoded: Set(false),
+            is_readonly: Set(false),  // custom attributes are never readonly
             aliases: Set("[]".to_string()),
         };
         new_attribute.insert(&self.sql_pool).await?;
@@ -143,7 +144,16 @@ impl SqlBackendHandler {
         .all(transaction)
         .await?
         .into_iter()
-        .map(|m| m.into())
+        .map(|m| AttributeSchema {
+            name: m.attribute_name.into_string(),   // ← fixed here
+             aliases: serde_json::from_str(&m.aliases).unwrap_or_default(),
+             attribute_type: m.attribute_type,
+             is_list: m.is_list,
+             is_visible: m.is_user_visible,
+             is_editable: m.is_user_editable,
+             is_hardcoded: m.is_hardcoded,
+             is_readonly: m.is_readonly,
+        })
         .collect())
     }
 
@@ -155,7 +165,16 @@ impl SqlBackendHandler {
         .all(transaction)
         .await?
         .into_iter()
-        .map(|m| m.into())
+        .map(|m| AttributeSchema {
+            name: m.attribute_name.into_string(),   // ← fixed here
+             aliases: serde_json::from_str(&m.aliases).unwrap_or_default(),
+             attribute_type: m.attribute_type,
+             is_list: m.is_list,
+             is_visible: m.is_group_visible,
+             is_editable: m.is_group_editable,
+             is_hardcoded: m.is_hardcoded,
+             is_readonly: m.is_readonly,
+        })
         .collect())
     }
 
@@ -197,7 +216,6 @@ mod tests {
     async fn test_default_schema() {
         let fixture = TestFixture::new().await;
         let schema = fixture.handler.get_schema().await.unwrap();
-        // Verify live schema contains our full set (POSIX + Kerberos + custom)
         assert!(schema.user_attributes().get_by_name_or_alias("avatar").is_some());
         assert!(schema.user_attributes().get_by_name_or_alias("kerberossync").is_some());
         assert!(schema.user_attributes().get_by_name_or_alias("uidnumber").is_some());

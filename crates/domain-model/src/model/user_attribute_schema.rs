@@ -23,6 +23,8 @@ pub struct Model {
     pub is_user_editable: bool,
     #[sea_orm(column_name = "user_attribute_schema_is_hardcoded")]
     pub is_hardcoded: bool,
+    #[sea_orm(column_name = "user_attribute_schema_is_readonly")]
+    pub is_readonly: bool,
     #[sea_orm(column_name = "aliases")]
     pub aliases: String,
 }
@@ -56,7 +58,7 @@ impl From<Model> for AttributeSchema {
             is_visible: value.is_user_visible,
             is_editable: value.is_user_editable,
             is_hardcoded: value.is_hardcoded,
-            is_readonly: false,
+            is_readonly: value.is_readonly,
         }
     }
 }

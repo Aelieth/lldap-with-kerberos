@@ -60,6 +60,7 @@ pub(crate) enum UserAttributeSchema {
     UserAttributeSchemaIsUserVisible,
     UserAttributeSchemaIsUserEditable,
     UserAttributeSchemaIsHardcoded,
+    UserAttributeSchemaIsReadonly,   // ← NEW
     Aliases,
 }
 
@@ -81,6 +82,7 @@ pub(crate) enum GroupAttributeSchema {
     GroupAttributeSchemaIsGroupVisible,
     GroupAttributeSchemaIsGroupEditable,
     GroupAttributeSchemaIsHardcoded,
+    GroupAttributeSchemaIsReadonly,   // ← NEW
     Aliases,
 }
 
@@ -1190,7 +1192,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     ))
     .await?;
 
-    // 2. Ensure aliases column exists (safe idempotent add)
+    // 2. Ensure aliases + is_readonly columns exist (safe idempotent add for SQLite)
     let _ = transaction
     .execute(backend.build(
         Table::alter()
@@ -1199,6 +1201,18 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
             ColumnDef::new(UserAttributeSchema::Aliases)
             .string_len(1024)
             .default("[]"),
+        ),
+    ))
+    .await;
+    let _ = transaction
+    .execute(backend.build(
+        Table::alter()
+        .table(UserAttributeSchema::Table)
+        .add_column_if_not_exists(
+            ColumnDef::new(UserAttributeSchema::UserAttributeSchemaIsReadonly)
+            .boolean()
+            .not_null()
+            .default(false),
         ),
     ))
     .await;
@@ -1214,8 +1228,20 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         ),
     ))
     .await;
+    let _ = transaction
+    .execute(backend.build(
+        Table::alter()
+        .table(GroupAttributeSchema::Table)
+        .add_column_if_not_exists(
+            ColumnDef::new(GroupAttributeSchema::GroupAttributeSchemaIsReadonly)
+            .boolean()
+            .not_null()
+            .default(false),
+        ),
+    ))
+    .await;
 
-    let public_schema = lldap_schema::PublicSchema::get();   // ← now uses unified schema crate
+    let public_schema = lldap_schema::PublicSchema::get();
     let schema = public_schema.get_schema();
 
     // 3. Re-seed ALL hardcoded USER attributes from crates/schema (POSIX + Kerberos included)
@@ -1238,6 +1264,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                 UserAttributeSchema::UserAttributeSchemaIsUserVisible,
                 UserAttributeSchema::UserAttributeSchemaIsUserEditable,
                 UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                UserAttributeSchema::UserAttributeSchemaIsReadonly,   // ← NEW
                 UserAttributeSchema::Aliases,
             ])
             .values_panic([
@@ -1247,6 +1274,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                           attr.is_visible.into(),
                           attr.is_editable.into(),
                           true.into(),
+                          attr.is_readonly.into(),   // ← now uses real value from PublicSchema
                           aliases_json.into(),
             ]),
         ))
@@ -1273,6 +1301,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                 GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
                 GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
                 GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
+                GroupAttributeSchema::GroupAttributeSchemaIsReadonly,   // ← NEW
                 GroupAttributeSchema::Aliases,
             ])
             .values_panic([
@@ -1282,6 +1311,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                           attr.is_visible.into(),
                           attr.is_editable.into(),
                           true.into(),
+                          attr.is_readonly.into(),   // ← now uses real value from PublicSchema
                           aliases_json.into(),
             ]),
         ))
