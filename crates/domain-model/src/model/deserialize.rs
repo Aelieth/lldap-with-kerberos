@@ -19,10 +19,16 @@ pub fn deserialize_attribute_value(
             AttributeValue::String(Cardinality::Unbounded(value.unwrap()))
         }
         (AttributeType::Integer, false) => {
-            AttributeValue::Integer(Cardinality::Singleton(value.unwrap::<i64>()))
+            // NEW: parse string bytes ("1" or "0") back to i64
+            let s = std::str::from_utf8(&value.0).unwrap_or("0");
+            let i: i64 = s.parse().unwrap_or(0);
+            AttributeValue::Integer(Cardinality::Singleton(i))
         }
         (AttributeType::Integer, true) => {
-            AttributeValue::Integer(Cardinality::Unbounded(value.unwrap()))
+            // list of integers (future-proof)
+            let s = std::str::from_utf8(&value.0).unwrap_or("0");
+            let i: i64 = s.parse().unwrap_or(0);
+            AttributeValue::Integer(Cardinality::Unbounded(vec![i]))
         }
         (AttributeType::DateTime, false) => {
             AttributeValue::DateTime(Cardinality::Singleton(value.unwrap()))

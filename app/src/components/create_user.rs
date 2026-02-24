@@ -209,12 +209,13 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 })
                 .collect::<Vec<_>>();
 
-                if !self.kerberossync_enabled {
-                    attributes.push(GraphQLAttributeValue {
-                        name: "kerberossync".to_string(),
-                                    value: vec!["0".to_string()],
-                    });
-                }
+                // Always set kerberossync from the UI toggle (Integer in schema, sent as String for GraphQL)
+                // This guarantees the backend sees "1" when the toggle is On and the SyncKerberosPassword mutation runs.
+                let kerb_value = if self.kerberossync_enabled { "1" } else { "0" };
+                attributes.push(GraphQLAttributeValue {
+                    name: "kerberossync".to_string(),
+                                value: vec![kerb_value.to_string()],
+                });
 
                 let user = create_user::CreateUserInput {
                     id: model.username,

@@ -1,7 +1,5 @@
-// crates/sql-backend-handler/src/sql_group_backend_handler.rs
 use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
-use lldap_access_control::UserReadableBackendHandler;
 use lldap_domain::{
     requests::{CreateGroupRequest, UpdateGroupRequest},
     types::{AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
@@ -13,7 +11,6 @@ use lldap_domain_model::{
     error::{DomainError, Result},
     model::{self, GroupColumn, MembershipColumn, deserialize},
 };
-use lldap_schema::PublicSchema;   // ← live single source of truth
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, QueryTrait, Set, TransactionTrait,

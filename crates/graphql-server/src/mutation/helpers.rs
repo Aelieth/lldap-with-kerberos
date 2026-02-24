@@ -27,8 +27,14 @@ pub fn unpack_attributes(
     schema: &PublicSchema,
     is_admin: bool,
 ) -> FieldResult<UnpackedAttributes> {
-    if schema.user_attributes().attributes.len() < 17 {
-        tracing::warn!("CRITICAL: unpack_attributes received schema with only {} attributes!", schema.user_attributes().attributes.len());
+    // Single-source-of-truth size check (now 16 user attrs: core + POSIX + Kerberos)
+    let expected = PublicSchema::get().user_attributes().attributes.len();
+    let actual = schema.user_attributes().attributes.len();
+    if actual != expected {
+        tracing::warn!(
+            "Schema size mismatch in unpack_attributes: got {} attributes, expected {} from PublicSchema",
+            actual, expected
+        );
     }
 
     let user_schema = schema.user_attributes();

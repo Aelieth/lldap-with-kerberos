@@ -8,7 +8,7 @@ use crate::{
   infra::{
     common_component::{CommonComponent, CommonComponentParts},
     form_utils::GraphQlAttributeSchema,
-      schema::AttributeType,
+    schema::AttributeType,
   },
 };
 use anyhow::{Error, Result, bail};
@@ -43,8 +43,6 @@ impl From<&AttributeSchema> for GraphQlAttributeSchema {
 
 pub struct UserDetails {
   common: CommonComponentParts<Self>,
-  /// The user info. If none, the error is in `error`. If `error` is None, then we haven't
-  /// received the server response yet.
   user_and_schema: Option<(User, Vec<AttributeSchema>)>,
 }
 
@@ -54,10 +52,7 @@ impl UserDetails {
   }
 }
 
-/// State machine describing the possible transitions of the component state.
-/// It starts out by fetching the user's details from the backend when loading.
 pub enum Msg {
-  /// Received the user details response, either the user data or an error.
   UserDetailsResponse(Result<get_user_details::ResponseData>),
   OnError(Error),
   OnUserAddedToGroup(Group),
@@ -74,8 +69,8 @@ impl CommonComponent<UserDetails> for UserDetails {
   fn handle_msg(&mut self, _: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
     match msg {
       Msg::UserDetailsResponse(response) => match response {
-        Ok(user) => {
-          self.user_and_schema = Some((user.user, user.schema.user_schema.attributes))
+        Ok(data) => {
+          self.user_and_schema = Some((data.user, data.schema.user_schema.attributes));
         }
         Err(e) => {
           self.user_and_schema = None;
@@ -109,43 +104,104 @@ impl UserDetails {
       "Error trying to fetch user details",
     );
   }
+}
 
+impl Component for UserDetails {
+  type Message = Msg;
+  type Properties = Props;
+
+  fn create(ctx: &Context<Self>) -> Self {
+    let mut component = Self {
+      common: CommonComponentParts::<Self>::create(),
+      user_and_schema: None,
+    };
+    component.get_user_details(ctx);
+    component
+  }
+
+  fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+    CommonComponentParts::<Self>::update(self, ctx, msg)
+  }
+
+  fn view(&self, ctx: &Context<Self>) -> Html {
+    match (&self.user_and_schema, &self.common.error) {
+      (Some((u, schema)), error) => {
+        let can_change_password = ctx.props().is_admin || ctx.props().username == u.id;
+
+        html! {
+          <>
+          <h3>{u.id.to_string()}</h3>
+          <div class="d-flex flex-row-reverse">
+          { if can_change_password {
+            html! {
+              <Link
+              to={AppRoute::ChangePassword{user_id: u.id.clone()}}
+              classes="btn btn-secondary">
+              <i class="bi-key me-2"></i>
+              {"Modify password"}
+              </Link>
+            }
+          } else { html! {} }}
+          </div>
+
+          <div>
+          <h5 class="row m-3 fw-bold">{"User details"}</h5>
+          </div>
+
+          <UserDetailsForm
+          user={u.clone()}
+          user_attributes_schema={schema.clone()}  // FULL schema — form handles sorting + readonly
+          is_admin={ctx.props().is_admin}
+          is_edited_user_admin={u.groups.iter().any(|g| g.display_name == "lldap_admin")}
+          />
+
+          {self.view_group_memberships(ctx, u)}
+          {self.view_add_group_button(ctx, u)}
+          {self.view_messages(error)}
+          </>
+        }
+      }
+      (None, None) => html! {{"Loading user details..."}},
+      (None, Some(e)) => html! {<div class="alert alert-danger">{"Error: "}{e.to_string()}</div>},
+    }
+  }
+}
+
+impl UserDetails {
   fn view_messages(&self, error: &Option<Error>) -> Html {
     if let Some(e) = error {
-      html! {
-        <div class="alert alert-danger">
-        <span>{"Error: "}{e.to_string()}</span>
-        </div>
-      }
+      html! { <div class="alert alert-danger"><span>{"Error: "}{e.to_string()}</span></div> }
     } else {
       html! {}
     }
   }
 
   fn view_group_memberships(&self, ctx: &Context<Self>, u: &User) -> Html {
-    let link = &ctx.link();
+    let link = ctx.link();
     let make_group_row = |group: &Group| {
       let display_name = group.display_name.clone();
       html! {
         <tr key={format!("groupRow_{}", display_name)}>
-        {if ctx.props().is_admin { html! {
-          <>
-          <td>
-          <Link to={AppRoute::GroupDetails{group_id: group.id}}>
-          {&group.display_name}
-          </Link>
-          </td>
-          <td>
-          <RemoveUserFromGroupComponent
-          username={u.id.clone()}
-          group_id={group.id}
-          on_user_removed_from_group={link.callback(Msg::OnUserRemovedFromGroup)}
-          on_error={link.callback(Msg::OnError)}/>
-          </td>
-          </>
-        } } else { html! {
-          <td>{&group.display_name}</td>
-        } } }
+        {if ctx.props().is_admin {
+          html! {
+            <>
+            <td>
+            <Link to={AppRoute::GroupDetails{group_id: group.id}}>
+            {&group.display_name}
+            </Link>
+            </td>
+            <td>
+            <RemoveUserFromGroupComponent
+            username={u.id.clone()}
+            group_id={group.id}
+            on_user_removed_from_group={link.callback(Msg::OnUserRemovedFromGroup)}
+            on_error={link.callback(Msg::OnError)}/>
+            </td>
+            </>
+          }
+        } else {
+          html! { <td>{&group.display_name}</td> }
+        }}
         </tr>
       }
     };
@@ -178,7 +234,7 @@ impl UserDetails {
   }
 
   fn view_add_group_button(&self, ctx: &Context<Self>, u: &User) -> Html {
-    let link = &ctx.link();
+    let link = ctx.link();
     if ctx.props().is_admin {
       html! {
         <AddUserToGroupComponent
@@ -189,79 +245,6 @@ impl UserDetails {
       }
     } else {
       html! {}
-    }
-  }
-
-  /// New helper: respect live PublicSchema visibility (non-admins see only is_visible=true)
-  /// Admins see everything (including hidden Kerberos fields for debugging).
-  fn get_displayed_schema(&self, is_admin: bool) -> Vec<AttributeSchema> {
-    if let Some((_, schema)) = &self.user_and_schema {
-      if is_admin {
-        schema.clone()
-      } else {
-        schema.iter().filter(|a| a.is_visible).cloned().collect()
-      }
-    } else {
-      vec![]
-    }
-  }
-}
-
-impl Component for UserDetails {
-  type Message = Msg;
-  type Properties = Props;
-
-  fn create(ctx: &Context<Self>) -> Self {
-    let mut table = Self {
-      common: CommonComponentParts::<Self>::create(),
-      user_and_schema: None,
-    };
-    table.get_user_details(ctx);
-    table
-  }
-
-  fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-    CommonComponentParts::<Self>::update(self, ctx, msg)
-  }
-
-  fn view(&self, ctx: &Context<Self>) -> Html {
-    match (&self.user_and_schema, &self.common.error) {
-      (Some((u, _schema)), error) => {
-        let displayed_schema = self.get_displayed_schema(ctx.props().is_admin);
-
-        // Password button only for self or admin (prevents regular users editing others)
-        let can_change_password = ctx.props().is_admin || ctx.props().username == u.id;
-
-        html! {
-          <>
-          <h3>{u.id.to_string()}</h3>
-          <div class="d-flex flex-row-reverse">
-          { if can_change_password { html! {
-            <Link
-            to={AppRoute::ChangePassword{user_id: u.id.clone()}}
-            classes="btn btn-secondary">
-            <i class="bi-key me-2"></i>
-            {"Modify password"}
-            </Link>
-          } } else { html! {} }}
-          </div>
-          <div>
-          <h5 class="row m-3 fw-bold">{"User details"}</h5>
-          </div>
-          <UserDetailsForm
-          user={u.clone()}
-          user_attributes_schema={displayed_schema}
-          is_admin={ctx.props().is_admin}
-          is_edited_user_admin={u.groups.iter().any(|g| g.display_name == "lldap_admin")}
-          />
-          {self.view_group_memberships(ctx, u)}
-          {self.view_add_group_button(ctx, u)}
-          {self.view_messages(error)}
-          </>
-        }
-      }
-      (None, None) => html! {{"Loading..."}},
-      (None, Some(e)) => html! {<div>{"Error: "}{e.to_string()}</div>},
     }
   }
 }

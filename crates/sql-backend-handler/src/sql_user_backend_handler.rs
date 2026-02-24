@@ -1,4 +1,3 @@
-// crates/sql-backend-handler/src/sql_user_backend_handler.rs
 use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
@@ -340,8 +339,20 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Default kerberossync to Integer 0 if not provided (matches AttributeType::Integer in crates/schema)
-        if !request.attributes.iter().any(|attr| attr.name.as_str() == "kerberossync") {
+        // Always ensure kerberossync exists and is valid Integer 0 or 1.
+        // Protects LDAP, old scripts, future Keycloak paths. Respects GraphQL/frontend when they send 1.
+        let kerb_index = request.attributes.iter().position(|attr| attr.name.as_str() == "kerberossync");
+        if let Some(idx) = kerb_index {
+            if let AttributeValue::Integer(Cardinality::Singleton(v)) = &request.attributes[idx].value {
+                if *v != 0 && *v != 1 {
+                    request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
+                }
+            } else {
+                // Wrong type → force 0
+                request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
+            }
+        } else {
+            // Missing → default to 0 (no sync)
             request.attributes.push(Attribute {
                 name: "kerberossync".into(),
                                     value: AttributeValue::Integer(Cardinality::Singleton(0)),
