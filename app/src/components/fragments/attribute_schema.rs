@@ -1,6 +1,3 @@
-// Single source of truth: renders attribute names from crates/schema/public_schema.rs
-// Friendly display names added for POSIX/Kerberos fields so the web UI looks polished
-// and user-friendly for home/lab KDE/Gnome SSO + Keycloak federation on ZimaBlade.
 use crate::infra::attributes::AttributeDescription;
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use yew::{Html, html};
