@@ -744,8 +744,13 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
     ) -> FieldResult<bool> {
         let span = debug_span!("[GraphQL mutation] sync_kerberos_password");
         let _guard = span.enter();
+
+        let target_user_id = UserId::new(&user_id);
+
+        // Allow regular users to sync their OWN Kerberos principal after password change
+        // (exactly like set_user_password). Admins can do any user.
         let handler = context
-        .get_admin_handler()
+        .get_writeable_handler(target_user_id.clone())
         .ok_or_else(field_error_callback(&span, "Unauthorized Kerberos sync"))?;
 
         let plain_password = decrypt_password(&encrypted_password)
@@ -754,8 +759,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        let user_id_typed = UserId::new(&user_id);
-        let user = handler.get_user_details(&user_id_typed).await
+        let user = handler.get_user_details(&target_user_id).await
         .map_err(|e| FieldError::new(
             "Failed to fetch user for Kerberos sync check",
             graphql_value!({ "details": (e.to_string()) })
@@ -770,7 +774,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 "Kerberos sync failed",
                 graphql_value!({ "details": (e.to_string()) })
             ))?;
-            info!("Kerberos sync succeeded for user {}", user_id);
+            info!("Kerberos principal synced for user {} (password change by self or admin)", user_id);
         } else {
             info!("Kerberos sync disabled for user {} (kerberossync != '1'), skipping", user_id);
         }

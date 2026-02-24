@@ -51,6 +51,7 @@ pub struct UserDetailsForm {
     user: User,
     form_ref: NodeRef,
         kerberossync_enabled: bool,
+        show_kerberos_banner: bool,
 }
 
 pub enum Msg {
@@ -79,6 +80,7 @@ impl CommonComponent<UserDetailsForm> for UserDetailsForm {
             Msg::SubmitClicked => Ok(self.submit_user_update_form(ctx)),
             Msg::UserUpdated(response) => {
                 if response.is_ok() {
+                    self.show_kerberos_banner = false;
                     self.just_updated = true;
                 }
                 Ok(true)
@@ -108,6 +110,7 @@ impl Component for UserDetailsForm {
             user: ctx.props().user.clone(),
             form_ref: NodeRef::default(),
                 kerberossync_enabled,
+                show_kerberos_banner: false,
         }
     }
 
@@ -119,11 +122,13 @@ impl Component for UserDetailsForm {
             Msg::UserUpdated(response) => {
                 if response.is_ok() {
                     self.just_updated = true;
+                    self.show_kerberos_banner = false;   // hide banner after successful save
                 }
                 true
             }
             Msg::ToggleKerberosSync(value) => {
                 self.kerberossync_enabled = value;
+                self.show_kerberos_banner = value;   // banner appears ONLY when turned ON
                 true
             }
         }
@@ -162,8 +167,8 @@ impl Component for UserDetailsForm {
                 html! {
                     <div class="mb-3 row">
                     <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
-                    {"Kerberos Sync :"}
-                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
+                    {"Kerberos Sync"}
+                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
                     <i aria-label="Info" class="bi bi-info-circle"></i>
                     </button>
                     </label>
@@ -177,9 +182,18 @@ impl Component for UserDetailsForm {
                     </button>
                     </div>
                     <div class="form-text text-muted ms-3">
-                    {"Important: Change to ON requires password change to sync. Change to OFF removes Kerberos principal immediately."}
+                    {"ON = sync principal on next password change. OFF = delete principal immediately."}
                     </div>
                     </div>
+
+                    // Flash banner — appears only when toggled to ON
+                    { if self.show_kerberos_banner {
+                        html! {
+                            <div class="alert alert-info mt-2">
+                            {"After Save Changes "}{&self.user.id}{" password must be changed by admin or self to finish the sync."}
+                            </div>
+                        }
+                    } else { html! {} }}
                     </div>
                 }
             } else { html! {} }}
