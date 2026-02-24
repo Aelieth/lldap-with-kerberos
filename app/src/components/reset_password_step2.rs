@@ -10,19 +10,14 @@ use crate::{
     },
 };
 use anyhow::{Result, bail};
-use gloo_console::log;
 use graphql_client::GraphQLQuery;
-use lldap_auth::{
-    opaque::client::registration as opaque_registration,
-    opaque::client::registration::ClientRegistrationFinishParameters,
-    password_reset::ServerPasswordResetResponse,
-    registration,
-};
+use lldap_auth::{opaque, registration};
 use validator_derive::Validate;
 use yew::prelude::*;
 use yew_form::Form;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
+use lldap_auth::password_reset::ServerPasswordResetResponse;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -54,7 +49,7 @@ pub struct ResetPasswordStep2Form {
     common: CommonComponentParts<Self>,
     form: Form<FormModel>,
         username: Option<String>,
-        opaque_data: Option<opaque_registration::ClientRegistration>,
+        opaque_data: Option<opaque::client::registration::ClientRegistration>,
         kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
         fetched_kerberos: bool,
         encrypted_password: Option<String>,
@@ -78,7 +73,7 @@ pub enum Msg {
 impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
     fn handle_msg(
         &mut self,
-        ctx: &yew::html::Context<Self>,
+        ctx: &Context<Self>,
         msg: <Self as Component>::Message,
     ) -> Result<bool> {
         use anyhow::Context;
@@ -100,81 +95,67 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                     bail!("Username not available");
                 }
 
-                let mut rng = rand::rngs::OsRng;
                 let new_password = self.form.model().password.clone();
 
-                let registration_start_request = opaque_registration::start_registration(new_password.as_bytes(), &mut rng)
-                .context("Could not initiate registration")?;
+                // Kerberos encryption FIRST (strict, same as create_user.rs)
+                self.encrypted_password = None;
+                if let Some(info) = &self.kerberos_info {
+                    if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
+                        match encrypt_password(pub_key_der_base64, &new_password) {
+                            Ok(encrypted) => self.encrypted_password = Some(encrypted),
+                            Err(e) => bail!("Failed to encrypt password for Kerberos sync: {}", e),
+                        }
+                    } else {
+                        bail!("Kerberos enabled but no public key available—check backend startup/logs");
+                    }
+                }
 
+                if self.encrypted_password.is_none() {
+                    bail!("Kerberos password encryption failed");
+                }
+
+                // OPAQUE registration
+                let mut rng = rand::rngs::OsRng;
+                let registration_start_request = opaque::client::registration::start_registration(
+                    new_password.as_bytes(),
+                                                                                                  &mut rng,
+                )?;
                 let req = registration::ClientRegistrationStartRequest {
                     username: self.username.as_ref().unwrap().clone().into(),
                     registration_start_request: registration_start_request.message,
                 };
-
                 self.opaque_data = Some(registration_start_request.state);
-
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
                                          Msg::RegistrationStartResponse,
                 );
-
-                // Kerberos encryption + sync (fire-and-forget)
-                self.encrypted_password = None;
-                let plain_password = self.form.model().password.clone();
-
-                if let Some(info) = &self.kerberos_info {
-                    if let Some(ref pub_key_der_base64) = info.public_key_der_base64 {
-                        match encrypt_password(pub_key_der_base64, &plain_password) {
-                            Ok(encrypted) => {
-                                self.encrypted_password = Some(encrypted);
-                            }
-                            Err(e) => {
-                                bail!("Kerberos password encryption failed: {}", e);
-                            }
-                        }
-                    }
-                }
-
-                if let Some(encrypted) = &self.encrypted_password {
-                    let variables = sync_kerberos_password::Variables {
-                        user_id: self.username.as_ref().unwrap().clone(),
-                        encrypted_password: encrypted.clone(),
-                    };
-
-                    self.common.call_graphql::<SyncKerberosPassword, _>(
-                        ctx,
-                        variables,
-                        Msg::SyncKerberosResponse,
-                        "Error syncing Kerberos password",
-                    );
-                }
-
                 Ok(false)
             }
             Msg::RegistrationStartResponse(res) => {
-                let server_response = res?;
-                let mut rng = rand::rngs::OsRng;
-                let opaque_finish = self
-                .opaque_data
-                .take()
-                .unwrap()
-                .finish(&mut rng, server_response.registration_response, ClientRegistrationFinishParameters::default())
-                .context("Could not finish registration")?;
-
+                let res = res.context("Could not initiate registration")?;
+                let registration = match self.opaque_data.take() {
+                    Some(r) => r,
+                    None => bail!("Invalid state"),
+                };
+                let registration_finish = opaque::client::registration::finish_registration(
+                    registration,
+                    res.registration_response,
+                    &mut rand::rngs::OsRng,
+                )?;
+                let req = registration::ClientRegistrationFinishRequest {
+                    server_data: res.server_data,
+                    registration_upload: registration_finish.message,
+                };
                 self.common.call_backend(
                     ctx,
-                    HostService::register_finish(registration::ClientRegistrationFinishRequest {
-                        server_data: server_response.server_data.clone(),  // Needed for final request
-                                                 registration_upload: opaque_finish.message,
-                    }),
-                    Msg::RegistrationFinishResponse,
+                    HostService::register_finish(req),
+                                         Msg::RegistrationFinishResponse,
                 );
-
                 Ok(false)
             }
-            Msg::RegistrationFinishResponse(_response) => {
-                // Sync Kerberos if we have an encrypted password
+            Msg::RegistrationFinishResponse(response) => {
+                response.context("Failed to set new password")?;
                 if let Some(enc_pw) = &self.encrypted_password {
                     let variables = sync_kerberos_password::Variables {
                         user_id: self.username.clone().unwrap(),
@@ -209,7 +190,7 @@ impl Component for ResetPasswordStep2Form {
     type Message = Msg;
     type Properties = Props;
 
-    fn create(ctx: &yew::html::Context<Self>) -> Self {
+    fn create(ctx: &Context<Self>) -> Self {
         let mut form = ResetPasswordStep2Form {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<FormModel>::new(FormModel::default()),
@@ -228,74 +209,61 @@ impl Component for ResetPasswordStep2Form {
         form
     }
 
-    fn update(&mut self, ctx: &yew::html::Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         CommonComponentParts::<Self>::update(self, ctx, msg)
     }
 
-    fn view(&self, ctx: &yew::html::Context<Self>) -> Html {
+    fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
+
         match (&self.username, &self.common.error) {
-            (None, None) => {
-                return html! { {"Validating token"} };
-            }
-            (None, Some(e)) => {
-                return html! {
-                    <>
-                    <div class="alert alert-danger">
-                    {e.to_string()}
-                    </div>
-                    <Link
-                    classes="btn-link btn"
-                    disabled={self.common.is_task_running()}
-                    to={AppRoute::Login}>
-                    {"Back"}
-                    </Link>
-                    </>
-                };
-            }
-            _ => (),
-        };
-        if self.kerberos_info.is_none() {
-            return html! { <div>{"Loading Kerberos info..."}</div> };
-        }
-        html! {
-            <>
-            <h2>{"Reset your password"}</h2>
-            <form class="form">
-            <Field<FormModel>
-            label="New password"
-            required=true
-            form={&self.form}
-            field_name="password"
-            autocomplete="new-password"
-            input_type="password"
-            oninput={link.callback(|_| Msg::FormUpdate)} />
-            <Field<FormModel>
-            label="Confirm password"
-            required=true
-            form={&self.form}
-            field_name="confirm_password"
-            autocomplete="new-password"
-            input_type="password"
-            oninput={link.callback(|_| Msg::FormUpdate)} />
-            <Submit
-            disabled={self.common.is_task_running()}
-            onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::Submit})} />
-            </form>
-            { if let Some(e) = &self.common.error {
-                html! {
-                    <div class="alert alert-danger">
-                    {e.to_string()}
-                    </div>
+            (None, None) => html! { <div>{"Validating reset token..."}</div> },
+            (None, Some(e)) => html! {
+                <>
+                <div class="alert alert-danger">{e.to_string()}</div>
+                <Link classes="btn-link btn" to={AppRoute::Login}>{"Back to Login"}</Link>
+                </>
+            },
+            _ => {
+                if self.kerberos_info.is_none() {
+                    html! { <div>{"Loading Kerberos configuration..."}</div> }
+                } else {
+                    html! {
+                        <>
+                        <h2>{"Reset your password"}</h2>
+                        <form class="form">
+                        <Field<FormModel>
+                        label="New password"
+                        required=true
+                        form={&self.form}
+                        field_name="password"
+                        autocomplete="new-password"
+                        input_type="password"
+                        oninput={link.callback(|_| Msg::FormUpdate)} />
+                        <Field<FormModel>
+                        label="Confirm password"
+                        required=true
+                        form={&self.form}
+                        field_name="confirm_password"
+                        autocomplete="new-password"
+                        input_type="password"
+                        oninput={link.callback(|_| Msg::FormUpdate)} />
+                        <Submit
+                        disabled={self.common.is_task_running()}
+                        onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::Submit})} />
+                        </form>
+                        { if let Some(e) = &self.common.error {
+                            html! { <div class="alert alert-danger">{e.to_string()}</div> }
+                        } else { html! {} }}
+                        </>
+                    }
                 }
-            } else { html! {} } }
-            </>
+            }
         }
     }
 
-    fn rendered(&mut self, ctx: &yew::html::Context<Self>, first_render: bool) {
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
         if first_render && !self.fetched_kerberos {
-            log!("Fetching Kerberos info for password reset");
             self.common.call_graphql::<GetKerberosInfo, _>(
                 ctx,
                 get_kerberos_info::Variables {},
