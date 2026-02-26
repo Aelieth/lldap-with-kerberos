@@ -30,8 +30,8 @@ pub enum AppRoute {
     ListGroupSchema,
     #[at("/group-attributes/create")]
     CreateGroupAttribute,
-    #[at("/kerberos")]
-    Kerberos,
+    #[at("/federation")]
+    Federation,
     #[at("/")]
     Index,
 }

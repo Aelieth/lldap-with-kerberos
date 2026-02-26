@@ -58,12 +58,12 @@ pub fn banner(props: &Props) -> Html {
                       {"Group schema"}
                     </Link>
                   </li>
-                  <li>  // NEW: Kerberos tab link
+                  <li>  // NEW: Federation tab link
                   <Link
                     classes="nav-link px-2 h6"
-                      to={AppRoute::Kerberos}>
-                      <i class="bi-shield-lock me-2"></i>  // Optional icon (shield-lock for Kerberos security)
-                      {"Kerberos"}
+                      to={AppRoute::Federation}>
+                      <i class="bi-shield-lock me-2"></i>
+                      {"Federation"}
                     </Link>
                   </li>
                 </>

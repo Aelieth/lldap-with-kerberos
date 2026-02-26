@@ -16,7 +16,7 @@ use crate::{
         user_details::UserDetails,
         user_schema_table::ListUserSchema,
         user_table::UserTable,
-        kerberos::Kerberos,
+        federation::Federation,
     },
     infra::{api::HostService, cookies::get_cookie},
 };
@@ -246,8 +246,8 @@ impl App {
             AppRoute::ListGroupSchema => html! {
                 <ListGroupSchema />
             },
-            AppRoute::Kerberos => html! {  // NEW
-                <Kerberos />
+            AppRoute::Federation => html! {  // NEW
+                <Federation />
             },
             AppRoute::GroupDetails { group_id } => html! {
                 <GroupDetails group_id={*group_id} is_admin={is_admin} />

@@ -29,4 +29,4 @@ pub mod user_details;
 pub mod user_details_form;
 pub mod user_schema_table;
 pub mod user_table;
-pub mod kerberos;
+pub mod federation;
