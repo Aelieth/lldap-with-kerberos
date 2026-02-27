@@ -51,6 +51,13 @@ struct CreateServicePrincipalResponse {
     error_msg: String,  // For API errors (empty on success)
 }
 
+#[derive(juniper::GraphQLObject)]
+struct ExportKeytabForKeycloakResponse {
+    ok: bool,
+    path: String,
+    error_msg: String,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
 pub struct Mutation<Handler: BackendHandler + OpaqueHandler> {
@@ -780,6 +787,30 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         }
 
         Ok(true)
+    }
+
+    async fn export_keytab_for_keycloak(
+        _context: &Context<Handler>,
+        hostname: String,
+    ) -> FieldResult<ExportKeytabForKeycloakResponse> {
+        let span = debug_span!("[GraphQL mutation] export_keytab_for_keycloak");
+        span.in_scope(|| debug!("Hostname input: {}", &hostname));
+
+        match lldap_kerberos::export_keytab_for_keycloak(&hostname) {
+            Ok(path) => Ok(ExportKeytabForKeycloakResponse {
+                ok: true,
+                path,
+                error_msg: "".to_string(),
+            }),
+            Err(e) => {
+                warn!("Keytab export failed: {}", e);
+                Ok(ExportKeytabForKeycloakResponse {
+                    ok: false,
+                    path: "".to_string(),
+                   error_msg: e.to_string(),
+                })
+            }
+        }
     }
 }
 

@@ -11,6 +11,8 @@ use std::ffi::{CString, CStr};
 use std::os::raw::{c_int, c_void, c_long, c_char};
 use std::mem;
 use std::{env, ptr};
+use std::fs;
+use std::process::Command;
 
 // Generated FFI bindings — created at compile time by build.rs
 #[allow(non_camel_case_types)]
@@ -39,6 +41,18 @@ pub fn derive_realm_from_base_dn() -> String {
     .filter(|s| !s.is_empty())
     .unwrap_or_else(|| domain.to_uppercase())
     .to_uppercase()
+}
+
+// NEW: Used by UI default + keytab export (auto "keycloak.yourdomain")
+pub fn derive_domain_from_base_dn() -> String {
+    let base_dn = env::var("LLDAP_LDAP_BASE_DN")
+    .unwrap_or_else(|_| "dc=example,dc=com".to_string());
+    base_dn
+    .split(',')
+    .filter_map(|part| part.strip_prefix("dc="))
+    .collect::<Vec<_>>()
+    .join(".")
+    .to_lowercase()
 }
 
 lazy_static! {
@@ -125,6 +139,55 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
 pub fn get_public_key_der_base64() -> String {
     let der = KEYPAIR.1.to_pkcs1_der().ok();
     der.map(|d| STANDARD.encode(d.as_bytes())).unwrap_or_default()
+}
+
+pub fn export_keytab_for_keycloak(hostname_input: &str) -> Result<String> {
+    let realm = derive_realm_from_base_dn();
+    let domain = derive_domain_from_base_dn();
+
+    let hostname = if hostname_input.trim().is_empty() || hostname_input.trim() == "keycloak" {
+        format!("keycloak.{}", domain)
+    } else {
+        hostname_input.trim().to_string()
+    };
+
+    let principal = format!("HTTP/{}@{}", hostname, realm);
+    info!("Generating Keycloak keytab for principal: {}", principal);
+
+    let admin_principal = format!("admin/admin@{}", realm);
+
+    let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal, &realm)
+    .context("Failed to init Kadm5Handle for keytab export")?;
+
+    handle.set_random_key_for_service(&principal)
+    .context("Failed to set random key for Keycloak service principal")?;
+
+    let keytab_path = "/data/keycloak-http.keytab";
+    let _ = fs::remove_file(keytab_path);
+
+    let query = format!("ktadd -k {} {}", keytab_path, principal);
+    let output = Command::new("sudo")
+    .arg("-n")
+    .arg("/usr/sbin/kadmin.local")
+    .env("KRB5_CONFIG", "/etc/krb5.conf")
+    .arg("-q")
+    .arg(&query)
+    .output()
+    .context("Failed to run kadmin.local for keytab export")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    info!("kadmin.local stdout: {}", stdout.trim());
+    if !stderr.is_empty() {
+        info!("kadmin.local stderr: {}", stderr.trim());
+    }
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("kadmin.local ktadd failed"));
+    }
+
+    info!("Keytab saved to {} for {}", keytab_path, principal);
+    Ok(keytab_path.to_string())
 }
 
 pub struct Kadm5Handle {

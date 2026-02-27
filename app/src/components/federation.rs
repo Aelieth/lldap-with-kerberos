@@ -8,12 +8,23 @@ use yew::events::InputEvent;
 use web_sys::window;
 use wasm_bindgen::JsCast;
 use serde_json::json;
+use graphql_client::GraphQLQuery;
+use anyhow::Result;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/export_keytab.graphql",
+response_derives = "Debug"
+)]
+pub struct ExportKeytabForKeycloak;
 
 pub struct Federation {
     common: CommonComponentParts<Self>,
     keycloak_url: String,
     realm: String,
     admin_username: String,
+    keycloak_hostname: String,
     connection_status: String,
 }
 
@@ -22,11 +33,14 @@ pub enum Msg {
     UpdateUrl(String),
     UpdateRealm(String),
     UpdateUsername(String),
+    UpdateHostname(String),
     GenerateRealmJson,
+    ExportKeytab,
+        ExportKeytabResponse(Result<export_keytab_for_keycloak::ResponseData>),
 }
 
 impl CommonComponent<Federation> for Federation {
-    fn handle_msg(&mut self, _: &Context<Self>, msg: <Self as Component>::Message) -> anyhow::Result<bool> {
+    fn handle_msg(&mut self, ctx: &Context<Self>, msg: <Self as Component>::Message) -> anyhow::Result<bool> {
         match msg {
             Msg::TestConnection => {
                 self.connection_status = "✅ Connection test passed (placeholder — real API next)".to_string();
@@ -42,6 +56,10 @@ impl CommonComponent<Federation> for Federation {
             }
             Msg::UpdateUsername(username) => {
                 self.admin_username = username;
+                Ok(true)
+            }
+            Msg::UpdateHostname(hostname) => {
+                self.keycloak_hostname = hostname;
                 Ok(true)
             }
             Msg::GenerateRealmJson => {
@@ -111,6 +129,37 @@ impl CommonComponent<Federation> for Federation {
                 self.connection_status = format!("✅ Downloaded {}-realm.json — ready to import!", derived_realm);
                 Ok(true)
             }
+            Msg::ExportKeytab => {
+                let variables = export_keytab_for_keycloak::Variables {
+                    hostname: self.keycloak_hostname.clone(),
+                };
+
+                self.common.call_graphql::<ExportKeytabForKeycloak, _>(
+                    ctx,
+                    variables,
+                    Msg::ExportKeytabResponse,
+                    "Error trying to export keytab",
+                );
+                self.connection_status = "Exporting keytab...".to_string();
+                Ok(true)
+            }
+            Msg::ExportKeytabResponse(Ok(data)) => {
+                let resp = data.export_keytab_for_keycloak;
+                if resp.ok {
+                    let path = resp.path;
+                    self.connection_status = format!(
+                        "✅ Keytab saved to {} on the server!\n\nCopy with:\ndocker cp lldap-kerb:{} ./keycloak-http.keytab",
+                        path, path
+                    );
+                } else {
+                    self.connection_status = format!("❌ {}", resp.error_msg);
+                }
+                Ok(true)
+            }
+            Msg::ExportKeytabResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
+                Ok(true)
+            }
         }
     }
 
@@ -127,8 +176,9 @@ impl Component for Federation {
         Federation {
             common: CommonComponentParts::<Self>::create(),
             keycloak_url: "http://keycloak:8080".to_string(),
-            realm: "llldap".to_string(),
+            realm: "lldap".to_string(),
             admin_username: "admin".to_string(),
+            keycloak_hostname: "keycloak".to_string(),  // backend auto-completes to full hostname
             connection_status: "Ready — fill settings and export".to_string(),
         }
     }
@@ -140,18 +190,11 @@ impl Component for Federation {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let on_test = ctx.link().callback(|_| Msg::TestConnection);
         let on_generate = ctx.link().callback(|_| Msg::GenerateRealmJson);
-        let on_url = ctx.link().callback(|e: InputEvent| {
-            let value = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value();
-            Msg::UpdateUrl(value)
-        });
-        let on_realm = ctx.link().callback(|e: InputEvent| {
-            let value = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value();
-            Msg::UpdateRealm(value)
-        });
-        let on_username = ctx.link().callback(|e: InputEvent| {
-            let value = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value();
-            Msg::UpdateUsername(value)
-        });
+        let on_export = ctx.link().callback(|_| Msg::ExportKeytab);
+        let on_url = ctx.link().callback(|e: InputEvent| Msg::UpdateUrl(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
+        let on_realm = ctx.link().callback(|e: InputEvent| Msg::UpdateRealm(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
+        let on_username = ctx.link().callback(|e: InputEvent| Msg::UpdateUsername(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
+        let on_hostname = ctx.link().callback(|e: InputEvent| Msg::UpdateHostname(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
 
         html! {
             <div class="container">
@@ -191,23 +234,29 @@ impl Component for Federation {
             <h5>{ "Realm Management" }</h5>
             </div>
             <div class="card-body">
-            <p>{ "One-click export of a fully configured realm.json (auto-filled from your LLDAP base DN + Kerberos realm)" }</p>
+            <p>{ "One-click export of a fully configured realm.json" }</p>
             <button onclick={on_generate} class="btn btn-success w-100 mb-3">{ "Generate & Download realm.json" }</button>
             <div class="alert alert-info small">
-            <strong>{"After import:"}</strong>{" Open Keycloak to User Federation to lldap-federation and set Bind Credential to your LLDAP admin password."}
+            <strong>{"After import:"}</strong>{" Open Keycloak → User Federation → lldap-federation and set Bind Credential."}
             </div>
             </div>
             </div>
 
-            <div class="card">
+            <div class="card mb-4">
             <div class="card-header">
-            <h5>{ "Kerberos + Keycloak Integration" }</h5>
+            <h5>{ "Keytab for Keycloak (HTTP Service Principal)" }</h5>
             </div>
             <div class="card-body">
-            <div class="alert alert-info">
-            <strong>{"Status: "}</strong>{"Kerberos sync is fully working. Keycloak API push will be added next."}
+            <p>{ "One-click export of keycloak-http.keytab (auto-generated from live Kerberos realm)" }</p>
+            <div class="mb-3">
+            <label class="form-label">{ "Keycloak Hostname" }</label>
+            <input type="text" class="form-control" value={self.keycloak_hostname.clone()} oninput={on_hostname.clone()} placeholder="keycloak (auto → keycloak.yourdomain)" />
+            <small class="text-muted">{ "Default \"keycloak\" auto-completes from your base DN. Edit only if needed." }</small>
             </div>
-            <p>{"Future: Auto-generate HTTP service principal keytab for SPNEGO (KDE/Gnome to browser SSO)"}</p>
+            <button onclick={on_export} class="btn btn-success w-100 mb-3">{ "Export keycloak-http.keytab" }</button>
+            <div class="alert alert-info small">
+            <strong>{"After export:"}</strong>{" Run: docker cp lldap-kerb:/data/keycloak-http.keytab ./keycloak-http.keytab"}
+            </div>
             </div>
             </div>
             </div>

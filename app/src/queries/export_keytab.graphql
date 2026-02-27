@@ -1,0 +1,7 @@
+mutation ExportKeytabForKeycloak($hostname: String!) {
+  exportKeytabForKeycloak(hostname: $hostname) {
+    ok
+    path
+    errorMsg
+  }
+}
