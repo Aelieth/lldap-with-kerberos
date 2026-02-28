@@ -47,9 +47,21 @@ pub fn load_keycloak_config() -> Result<KeycloakConfig> {
 
 pub fn save_keycloak_config(config: &KeycloakConfig) -> Result<()> {
     let config_path = "/data/keycloak_config.toml";
+
+    let header = r#"
+# LLDAP + Kerberos + Keycloak federation settings
+# Generated / updated via "Save Settings" button in the UI
+# Password not saved here, set via env var LLDAP_KEYCLOAK_ADMIN_PASS
+# Edit via "Federation" settings in UI.
+
+"#.trim_start_matches('\n');
+
     let toml_str = toml::to_string_pretty(config)
     .context("Failed to serialize keycloak config")?;
-    std::fs::write(config_path, toml_str)
+
+    let full_content = format!("{}{}", header, toml_str);
+
+    std::fs::write(config_path, full_content)
     .context("Failed to write keycloak_config.toml")
 }
 

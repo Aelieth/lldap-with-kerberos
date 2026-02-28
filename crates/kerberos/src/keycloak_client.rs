@@ -25,6 +25,29 @@ impl KeycloakClient {
         Ok(Self::new(config, admin_pass))
     }
 
+    pub fn from_test_input(
+        url: String,
+        realm: String,
+        admin_user: String,
+        admin_pass: String,
+    ) -> Self {
+        let pass = if admin_pass.trim().is_empty() {
+            crate::keycloak_config::get_keycloak_admin_password()
+        } else {
+            admin_pass
+        };
+
+        Self {
+            config: KeycloakConfig {
+                url,
+                realm,
+                admin_user,
+            },
+            admin_pass: pass,
+            http_client: HttpClient::new(),
+        }
+    }
+
     pub fn with_test_overrides(
         mut self,
         url: String,

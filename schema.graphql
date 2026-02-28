@@ -4,6 +4,12 @@ type AttributeValue {
   schema: AttributeSchema!
 }
 
+type KeycloakConfigResponse {
+  url: String!
+  realm: String!
+  adminUser: String!
+}
+
 type Mutation {
   createUser(user: CreateUserInput!): User!
   setUserPassword(userId: String!, password: String!): Success!
@@ -26,6 +32,13 @@ type Mutation {
   syncKerberosPassword(userId: String!, encryptedPassword: String!): Boolean!
   exportKeytabForKeycloak(hostname: String!): ExportKeytabForKeycloakResponse!
   testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
+  saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
+}
+
+input SaveKeycloakConfigInput {
+  url: String!
+  realm: String!
+  adminUser: String!
 }
 
 type Group {
@@ -68,6 +81,7 @@ type Query {
   schema: Schema!
   kerberosInfo: KerberosInfo!
   keycloakSuggestedConfig: KeycloakSuggestedConfig!
+  keycloakConfig: KeycloakConfigResponse!
 }
 
 "The details required to create a user."
@@ -223,6 +237,11 @@ type AttributeList {
   attributes: [AttributeSchema!]!
   extraLdapObjectClasses: [String!]!
   ldapObjectClasses: [ObjectClassInfo!]!
+}
+
+type SaveKeycloakConfigResponse {
+  ok: Boolean!
+  message: String!
 }
 
 type TestKeycloakConnectionResponse {

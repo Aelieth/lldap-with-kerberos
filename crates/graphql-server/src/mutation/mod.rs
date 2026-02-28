@@ -28,9 +28,6 @@ use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
-
-// Single source of truth for the entire schema (user + group + POSIX + Kerberos)
-// Used by delete_attribute checks, future UI visibility, Keycloak federation, etc.
 use lldap_schema::PublicSchema;
 
 #[derive(juniper::GraphQLObject)]
@@ -50,6 +47,19 @@ struct TestKeycloakConnectionInput {
 
 #[derive(juniper::GraphQLObject)]
 struct TestKeycloakConnectionResponse {
+    ok: bool,
+    message: String,
+}
+
+#[derive(juniper::GraphQLInputObject)]
+struct SaveKeycloakConfigInput {
+    url: String,
+    realm: String,
+    admin_user: String,
+}
+
+#[derive(juniper::GraphQLObject)]
+struct SaveKeycloakConfigResponse {
     ok: bool,
     message: String,
 }
@@ -756,12 +766,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         _context: &Context<Handler>,
         input: TestKeycloakConnectionInput,
     ) -> FieldResult<TestKeycloakConnectionResponse> {
-        let client = lldap_kerberos::KeycloakClient::from_env()
-        .map_err(|e| FieldError::new(
-            "Failed to load Keycloak config from environment",
-            graphql_value!({ "details": (e.to_string()) }),
-        ))?
-        .with_test_overrides(
+        let client = lldap_kerberos::KeycloakClient::from_test_input(
             input.url,
             input.realm,
             input.admin_user,
@@ -776,6 +781,28 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             Err(e) => Ok(TestKeycloakConnectionResponse {
                 ok: false,
                 message: format!("❌ {}", e),
+            }),
+        }
+    }
+
+    async fn save_keycloak_config(
+        _context: &Context<Handler>,
+        input: SaveKeycloakConfigInput,
+    ) -> FieldResult<SaveKeycloakConfigResponse> {
+        let config = lldap_kerberos::KeycloakConfig {
+            url: input.url,
+            realm: input.realm,
+            admin_user: input.admin_user,
+        };
+
+        match lldap_kerberos::save_keycloak_config(&config) {
+            Ok(_) => Ok(SaveKeycloakConfigResponse {
+                ok: true,
+                message: "✅ Keycloak settings saved to /data/keycloak_config.toml (password remains in-memory/env only)".to_string(),
+            }),
+            Err(e) => Ok(SaveKeycloakConfigResponse {
+                ok: false,
+                message: format!("❌ Failed to save config: {}", e),
             }),
         }
     }

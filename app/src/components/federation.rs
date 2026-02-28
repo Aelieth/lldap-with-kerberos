@@ -30,24 +30,45 @@ pub struct KeycloakSuggestedConfig;
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
+query_path = "src/queries/keycloak_config.graphql",
+response_derives = "Debug"
+)]
+pub struct KeycloakConfig;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
 query_path = "src/queries/test_keycloak_connection.graphql",
 response_derives = "Debug"
 )]
 pub struct TestKeycloakConnection;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/save_keycloak_config.graphql",
+response_derives = "Debug"
+)]
+pub struct SaveKeycloakConfig;
 
 pub struct Federation {
     common: CommonComponentParts<Self>,
     keycloak_url: String,
     realm: String,
     admin_username: String,
-    admin_password: String,  // in-memory only — never saved to disk
+    admin_password: String,
     keycloak_hostname: String,
+    suggested_url: String,
+    suggested_realm: String,
+    suggested_admin_username: String,
     connection_status: String,
+    loaded_from_toml: bool,
 }
 
 pub enum Msg {
-    LoadSuggestedConfig,
+    LoadConfigs,
     TestConnection,
+    SaveSettings,
     UpdateUrl(String),
     UpdateRealm(String),
     UpdateUsername(String),
@@ -55,23 +76,32 @@ pub enum Msg {
     UpdateHostname(String),
     GenerateRealmJson,
     ExportKeytab,
-    SuggestedConfigResponse(Result<keycloak_suggested_config::ResponseData>),
-    TestConnectionResponse(Result<test_keycloak_connection::ResponseData>),
-    ExportKeytabResponse(Result<export_keytab_for_keycloak::ResponseData>),
+    ConfigResponse(Result<keycloak_config::ResponseData>),
+    SuggestedResponse(Result<keycloak_suggested_config::ResponseData>),
+    TestResponse(Result<test_keycloak_connection::ResponseData>),
+    SaveResponse(Result<save_keycloak_config::ResponseData>),
+    ExportResponse(Result<export_keytab_for_keycloak::ResponseData>),
 }
 
 impl CommonComponent<Federation> for Federation {
     fn handle_msg(&mut self, ctx: &Context<Self>, msg: <Self as Component>::Message) -> anyhow::Result<bool> {
         match msg {
-            Msg::LoadSuggestedConfig => {
-                let variables = keycloak_suggested_config::Variables {};
+            Msg::LoadConfigs => {
+                let vars = keycloak_config::Variables {};
+                self.common.call_graphql::<KeycloakConfig, _>(
+                    ctx,
+                    vars,
+                    Msg::ConfigResponse,
+                    "Failed to load saved config",
+                );
+                let vars2 = keycloak_suggested_config::Variables {};
                 self.common.call_graphql::<KeycloakSuggestedConfig, _>(
                     ctx,
-                    variables,
-                    Msg::SuggestedConfigResponse,
+                    vars2,
+                    Msg::SuggestedResponse,
                     "Failed to load suggested config",
                 );
-                self.connection_status = "Loading suggested config from live Kerberos...".to_string();
+                self.connection_status = "Loading configuration...".to_string();
                 Ok(true)
             }
             Msg::TestConnection => {
@@ -86,30 +116,92 @@ impl CommonComponent<Federation> for Federation {
                 self.common.call_graphql::<TestKeycloakConnection, _>(
                     ctx,
                     variables,
-                    Msg::TestConnectionResponse,
-                    "Error trying to test Keycloak connection",
+                    Msg::TestResponse,
+                    "Error testing connection",
                 );
                 self.connection_status = "Testing connection...".to_string();
                 Ok(true)
             }
-            Msg::UpdateUrl(url) => {
-                self.keycloak_url = url;
+            Msg::SaveSettings => {
+                let variables = save_keycloak_config::Variables {
+                    input: save_keycloak_config::SaveKeycloakConfigInput {
+                        url: self.keycloak_url.clone(),
+                        realm: self.realm.clone(),
+                        adminUser: self.admin_username.clone(),
+                    },
+                };
+                self.common.call_graphql::<SaveKeycloakConfig, _>(
+                    ctx,
+                    variables,
+                    Msg::SaveResponse,
+                    "Error saving config",
+                );
+                self.connection_status = "Saving settings...".to_string();
                 Ok(true)
             }
-            Msg::UpdateRealm(realm) => {
-                self.realm = realm;
+            Msg::UpdateUrl(s) => {
+                self.keycloak_url = s;
+                self.loaded_from_toml = true;   // protect user changes
                 Ok(true)
             }
-            Msg::UpdateUsername(username) => {
-                self.admin_username = username;
+            Msg::UpdateRealm(s) => {
+                self.realm = s;
+                self.loaded_from_toml = true;
                 Ok(true)
             }
-            Msg::UpdatePassword(password) => {
-                self.admin_password = password;
+            Msg::UpdateUsername(s) => {
+                self.admin_username = s;
+                self.loaded_from_toml = true;
                 Ok(true)
             }
-            Msg::UpdateHostname(hostname) => {
-                self.keycloak_hostname = hostname;
+            Msg::UpdatePassword(s) => {
+                self.admin_password = s;
+                Ok(true)   // password is ephemeral, no need to mark loaded
+            }
+            Msg::UpdateHostname(s) => {
+                self.keycloak_hostname = s;
+                Ok(true)
+            }
+            Msg::ConfigResponse(Ok(data)) => {
+                let cfg = data.keycloak_config;
+                if !self.loaded_from_toml {
+                    self.keycloak_url = cfg.url;
+                    self.realm = cfg.realm;
+                    self.admin_username = cfg.admin_user;
+                    self.loaded_from_toml = true;
+                }
+                Ok(true)
+            }
+            Msg::SuggestedResponse(Ok(data)) => {
+                let s = data.keycloak_suggested_config;
+                self.suggested_url = s.url;
+                self.suggested_realm = s.realm;
+                self.suggested_admin_username = s.admin_username;
+                self.keycloak_hostname = s.keycloak_hostname;
+                Ok(true)
+            }
+            Msg::TestResponse(Ok(data)) => {
+                self.connection_status = data.test_keycloak_connection.message;
+                Ok(true)
+            }
+            Msg::SaveResponse(Ok(data)) => {
+                self.connection_status = data.save_keycloak_config.message;
+                Ok(true)
+            }
+            Msg::TestResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
+                Ok(true)
+            }
+            Msg::SaveResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
+                Ok(true)
+            }
+            Msg::SuggestedResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
+                Ok(true)
+            }
+            Msg::ConfigResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
                 Ok(true)
             }
             Msg::GenerateRealmJson => {
@@ -187,35 +279,13 @@ impl CommonComponent<Federation> for Federation {
                 self.common.call_graphql::<ExportKeytabForKeycloak, _>(
                     ctx,
                     variables,
-                    Msg::ExportKeytabResponse,
+                    Msg::ExportResponse,
                     "Error trying to export keytab",
                 );
                 self.connection_status = "Exporting keytab...".to_string();
                 Ok(true)
             }
-            Msg::SuggestedConfigResponse(Ok(data)) => {
-                let cfg = data.keycloak_suggested_config;
-                self.keycloak_url = cfg.url;
-                self.realm = cfg.realm;
-                self.admin_username = cfg.admin_username;
-                self.keycloak_hostname = cfg.keycloak_hostname;
-                self.connection_status = "✅ Auto-filled from live Kerberos config".to_string();
-                Ok(true)
-            }
-            Msg::SuggestedConfigResponse(Err(e)) => {
-                self.connection_status = format!("❌ Failed to load suggested config: {}", e);
-                Ok(true)
-            }
-            Msg::TestConnectionResponse(Ok(data)) => {
-                let resp = data.test_keycloak_connection;
-                self.connection_status = resp.message;
-                Ok(true)
-            }
-            Msg::TestConnectionResponse(Err(e)) => {
-                self.connection_status = format!("❌ {}", e);
-                Ok(true)
-            }
-            Msg::ExportKeytabResponse(Ok(data)) => {
+            Msg::ExportResponse(Ok(data)) => {
                 let resp = data.export_keytab_for_keycloak;
                 if resp.ok {
                     let path = resp.path;
@@ -228,7 +298,7 @@ impl CommonComponent<Federation> for Federation {
                 }
                 Ok(true)
             }
-            Msg::ExportKeytabResponse(Err(e)) => {
+            Msg::ExportResponse(Err(e)) => {
                 self.connection_status = format!("❌ {}", e);
                 Ok(true)
             }
@@ -245,17 +315,20 @@ impl Component for Federation {
     type Properties = ();
 
     fn create(ctx: &Context<Self>) -> Self {
-        let link = ctx.link().clone();
-        link.send_message(Msg::LoadSuggestedConfig);
+        ctx.link().send_message(Msg::LoadConfigs);
 
         Federation {
             common: CommonComponentParts::<Self>::create(),
-            keycloak_url: "http://keycloak:8080".to_string(),
+            keycloak_url: "".to_string(),
             realm: "".to_string(),
             admin_username: "admin".to_string(),
             admin_password: "".to_string(),
             keycloak_hostname: "keycloak".to_string(),
-            connection_status: "Loading suggested config from Kerberos...".to_string(),
+            suggested_url: "".to_string(),
+            suggested_realm: "".to_string(),
+            suggested_admin_username: "".to_string(),
+            connection_status: "Loading configuration...".to_string(),
+            loaded_from_toml: false,   // ← added
         }
     }
 
@@ -265,6 +338,7 @@ impl Component for Federation {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let on_test = ctx.link().callback(|_| Msg::TestConnection);
+        let on_save = ctx.link().callback(|_| Msg::SaveSettings);
         let on_generate = ctx.link().callback(|_| Msg::GenerateRealmJson);
         let on_export = ctx.link().callback(|_| Msg::ExportKeytab);
         let on_url = ctx.link().callback(|e: InputEvent| Msg::UpdateUrl(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
@@ -287,22 +361,24 @@ impl Component for Federation {
             <div class="mb-3">
             <label class="form-label">{ "Keycloak URL" }</label>
             <input type="url" class="form-control" value={self.keycloak_url.clone()} oninput={on_url.clone()} />
-            <small class="text-muted">{ "Auto-filled from your base DN — edit only if needed" }</small>
+            <small class="text-muted">{ format!("Suggested: {}:8080", self.suggested_url) }</small>
             </div>
             <div class="mb-3">
             <label class="form-label">{ "Realm" }</label>
             <input type="text" class="form-control" value={self.realm.clone()} oninput={on_realm.clone()} />
+            <small class="text-muted">{ format!("Suggested: {}", self.suggested_realm) }</small>
             </div>
             <div class="mb-3">
             <label class="form-label">{ "Admin Username" }</label>
             <input type="text" class="form-control" value={self.admin_username.clone()} oninput={on_username.clone()} />
+            <small class="text-muted">{ format!("Suggested: {}", self.suggested_admin_username) }</small>
             </div>
             <div class="mb-3">
             <label class="form-label">{ "Admin Password (in-memory only)" }</label>
-            <input type="password" class="form-control" value={self.admin_password.clone()} oninput={on_password.clone()} placeholder="Enter Keycloak admin password for test" />
-            <small class="text-muted">{ "Never saved — used only for this test button" }</small>
+            <input type="password" class="form-control" value={self.admin_password.clone()} oninput={on_password.clone()} placeholder="Leave empty to use LLDAP_KEYCLOAK_ADMIN_PASS env var" />
             </div>
-            <button onclick={on_test} class="btn btn-primary">{ "Test Connection" }</button>
+            <button onclick={on_test} class="btn btn-primary me-2">{ "Test Connection" }</button>
+            <button onclick={on_save} class="btn btn-success">{ "Save Settings" }</button>
             <div class="mt-3 alert alert-info">
             { &self.connection_status }
             </div>

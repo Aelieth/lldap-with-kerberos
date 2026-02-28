@@ -1,0 +1,7 @@
+query KeycloakConfig {
+  keycloakConfig {
+    url
+    realm
+    adminUser
+  }
+}

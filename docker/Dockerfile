@@ -90,6 +90,7 @@ COPY --chown=lldap:lldap kerberos/kerberos_config.template.toml /app/kerberos_co
 COPY --chown=lldap:lldap kerberos/krb5.template.conf /app/krb5.template.conf
 COPY --chown=lldap:lldap kerberos/kdc.template.conf /app/kdc.template.conf
 COPY --chown=lldap:lldap kerberos/kadm5.template.acl /app/kadm5.template.acl
+COPY --chown=lldap:lldap kerberos/keycloak_config.template.toml /app/keycloak_config.template.toml
 
 RUN chmod +x ./docker-entrypoint.sh
 

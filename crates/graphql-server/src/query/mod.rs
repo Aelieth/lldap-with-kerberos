@@ -45,6 +45,14 @@ pub struct KeycloakSuggestedConfig {
     pub keycloak_hostname: String,
 }
 
+#[derive(GraphQLObject)]
+pub struct KeycloakConfigResponse {
+    pub url: String,
+    pub realm: String,
+    #[graphql(name = "adminUser")]
+    pub admin_user: String,
+}
+
 impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
     fn default() -> Self {
         Self::new()
@@ -170,6 +178,23 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             realm: cfg.realm,
             admin_username: cfg.admin_username,
             keycloak_hostname: cfg.keycloak_hostname,
+        })
+    }
+
+    async fn keycloak_config(
+        _context: &Context<Handler>,
+    ) -> FieldResult<KeycloakConfigResponse> {
+        let cfg = lldap_kerberos::load_keycloak_config()
+        .unwrap_or_else(|_| lldap_kerberos::KeycloakConfig {
+            url: "http://keycloak:8080".to_string(),
+                        realm: "master".to_string(),
+                        admin_user: "admin".to_string(),
+        });
+
+        Ok(KeycloakConfigResponse {
+            url: cfg.url,
+            realm: cfg.realm,
+            admin_user: cfg.admin_user,
         })
     }
 }

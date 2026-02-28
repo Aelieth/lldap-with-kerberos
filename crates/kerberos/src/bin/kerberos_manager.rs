@@ -94,6 +94,24 @@ fn main() -> Result<()> {
     render_template("/app/krb5.template.conf", "/etc/krb5.conf", &config, &domain)?;
     render_template("/app/kdc.template.conf", "/var/kerberos/krb5kdc/kdc.conf", &config, &domain)?;
     render_template("/app/kadm5.template.acl", "/var/kerberos/krb5kdc/kadm5.acl", &config, &domain)?;
+    // Render Keycloak config template to persistent /data/ (only on first run)
+    let keycloak_config_path = "/data/keycloak_config.toml";
+    let keycloak_template_path = "/app/keycloak_config.template.toml";
+
+    if !Path::new(keycloak_config_path).exists() {
+        println!("Keycloak config not found. Copying template...");
+        fs::copy(keycloak_template_path, keycloak_config_path)
+        .context("Failed to copy keycloak_config.template.toml")?;
+        Command::new("sudo")
+        .arg("chown")
+        .arg("lldap:lldap")
+        .arg(keycloak_config_path)
+        .status()
+        .context("Failed to chown keycloak_config.toml")?;
+        println!("Created default keycloak_config.toml in /data");
+    } else {
+        println!("Existing keycloak_config.toml found — skipping template copy.");
+    }
 
     // --- Part 1: Kerberos Bootstrap (password-less) ---
     let db_path = Path::new("/var/kerberos/krb5kdc/principal");

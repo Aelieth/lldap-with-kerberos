@@ -1,0 +1,6 @@
+mutation SaveKeycloakConfig($input: SaveKeycloakConfigInput!) {
+  saveKeycloakConfig(input: $input) {
+    ok
+    message
+  }
+}
