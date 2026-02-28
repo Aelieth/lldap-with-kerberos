@@ -22,40 +22,37 @@ use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal};
+use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal,
+    KeycloakClient,
+};
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
     unpack_attributes,
 };
-use keycloak::{KeycloakAdmin, types::UserRepresentation};
-use keycloak::KeycloakAdminToken;
-use reqwest::Client as HttpClient;
-use std::env;
-use std::collections::HashMap;
 
 // Single source of truth for the entire schema (user + group + POSIX + Kerberos)
 // Used by delete_attribute checks, future UI visibility, Keycloak federation, etc.
 use lldap_schema::PublicSchema;
-
-#[derive(juniper::GraphQLInputObject)]
-struct CreateServicePrincipalInput {
-    service_name: String,  // e.g., "HTTP" or "host"
-    hostname: String,      // e.g., "keycloak.example.com"
-}
-
-#[derive(juniper::GraphQLObject)]
-struct CreateServicePrincipalResponse {
-    ok: bool,
-    principal: String,
-    realm: String,
-    error_msg: String,  // For API errors (empty on success)
-}
 
 #[derive(juniper::GraphQLObject)]
 struct ExportKeytabForKeycloakResponse {
     ok: bool,
     path: String,
     error_msg: String,
+}
+
+#[derive(juniper::GraphQLInputObject)]
+struct TestKeycloakConnectionInput {
+    url: String,
+    realm: String,
+    admin_user: String,
+    admin_pass: String,
+}
+
+#[derive(juniper::GraphQLObject)]
+struct TestKeycloakConnectionResponse {
+    ok: bool,
+    message: String,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -687,63 +684,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(Success::new())
     }
 
-    async fn create_service_principal(
-        _context: &Context<Handler>,
-        input: CreateServicePrincipalInput,
-    ) -> FieldResult<CreateServicePrincipalResponse> {
-        let keycloak_url = env::var("KEYCLOAK_URL").unwrap_or("http://keycloak:8080".to_string());
-        let realm = env::var("KEYCLOAK_REALM").unwrap_or("master".to_string());
-        let admin_user = env::var("KEYCLOAK_ADMIN_USER").unwrap_or("admin".to_string());
-        let admin_pass = env::var("KEYCLOAK_ADMIN_PASS").unwrap_or("admin".to_string());
-
-        let http_client = HttpClient::new();
-
-        let admin_token = match KeycloakAdminToken::acquire(&keycloak_url, &admin_user, &admin_pass, &http_client).await {
-            Ok(token) => token,
-            Err(e) => {
-                warn!("Failed to acquire Keycloak admin token: {}", e);
-                return Ok(CreateServicePrincipalResponse {
-                    ok: false,
-                    principal: "".to_string(),
-                          realm: realm.clone(),
-                          error_msg: e.to_string(),
-                });
-            }
-        };
-
-        let keycloak = KeycloakAdmin::new(&keycloak_url, admin_token, http_client);
-
-        let full_principal = format!("{}/{}@{}", input.service_name, input.hostname, realm.to_uppercase());
-
-        let service_user = UserRepresentation {
-            username: Some(full_principal.clone()),
-            enabled: Some(true),
-            attributes: Some(HashMap::from([
-                ("kerberos_principal".to_string(), vec![full_principal.clone()]),
-            ])),
-            ..Default::default()
-        };
-
-        if let Err(e) = keycloak.realm_users_post(&realm, service_user).await {
-            warn!("Keycloak API create user failed: {}", e);
-            return Ok(CreateServicePrincipalResponse {
-                ok: false,
-                principal: full_principal,
-                realm,
-                error_msg: e.to_string(),
-            });
-        }
-
-        info!("Created Keycloak service user for principal {}", full_principal);
-
-        Ok(CreateServicePrincipalResponse {
-            ok: true,
-            principal: full_principal,
-            realm,
-            error_msg: "".to_string(),
-        })
-    }
-
     async fn sync_kerberos_password(
         context: &Context<Handler>,
         user_id: String,
@@ -810,6 +750,29 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                    error_msg: e.to_string(),
                 })
             }
+        }
+    }
+
+    async fn test_keycloak_connection(
+        _context: &Context<Handler>,
+        input: TestKeycloakConnectionInput,
+    ) -> FieldResult<TestKeycloakConnectionResponse> {
+        let client = KeycloakClient::new(
+            input.url,
+            input.realm,
+            input.admin_user,
+            input.admin_pass,
+        );
+
+        match client.test_connection().await {
+            Ok(message) => Ok(TestKeycloakConnectionResponse {
+                ok: true,
+                message,
+            }),
+            Err(e) => Ok(TestKeycloakConnectionResponse {
+                ok: false,
+                message: format!("❌ {}", e),
+            }),
         }
     }
 }

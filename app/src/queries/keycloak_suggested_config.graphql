@@ -1,0 +1,8 @@
+query KeycloakSuggestedConfig {
+  keycloakSuggestedConfig {
+    url
+    realm
+    adminUsername
+    keycloakHostname
+  }
+}

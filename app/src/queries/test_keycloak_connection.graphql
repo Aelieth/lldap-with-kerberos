@@ -1,0 +1,6 @@
+mutation TestKeycloakConnection($input: TestKeycloakConnectionInput!) {
+  testKeycloakConnection(input: $input) {
+    ok
+    message
+  }
+}

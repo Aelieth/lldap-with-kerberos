@@ -24,6 +24,17 @@ mod bindings {
 }
 
 pub use bindings::*; // Re-export so kerberos_manager can see them too
+pub mod keycloak_client;
+pub mod keycloak_config;
+
+pub use keycloak_client::KeycloakClient;
+pub use keycloak_config::{
+    KeycloakSuggestedConfig,
+    KeycloakConfig,
+    get_keycloak_suggested_config,
+    load_keycloak_config,
+    save_keycloak_config,
+};
 
 // Shared helper — eliminates duplication between lib.rs and kerberos_manager.rs
 // Uses exact same logic as before (LLDAP_LDAP_BASE_DN → domain → realm)

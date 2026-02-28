@@ -23,9 +23,9 @@ type Mutation {
   addGroupObjectClass(name: String!): Success!
   deleteUserObjectClass(name: String!): Success!
   deleteGroupObjectClass(name: String!): Success!
-  createServicePrincipal(input: CreateServicePrincipalInput!): CreateServicePrincipalResponse!
   syncKerberosPassword(userId: String!, encryptedPassword: String!): Boolean!
   exportKeytabForKeycloak(hostname: String!): ExportKeytabForKeycloakResponse!
+  testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
 }
 
 type Group {
@@ -59,18 +59,6 @@ type KerberosInfo {
   publicKeyDerBase64: String
 }
 
-input CreateServicePrincipalInput {
-  serviceName: String!
-  hostname: String!
-}
-
-type CreateServicePrincipalResponse {
-  ok: Boolean!
-  principal: String!
-  realm: String!
-  errorMsg: String!
-}
-
 type Query {
   apiVersion: String!
   user(userId: String!): User!
@@ -79,6 +67,7 @@ type Query {
   group(groupId: Int!): Group!
   schema: Schema!
   kerberosInfo: KerberosInfo!
+  keycloakSuggestedConfig: KeycloakSuggestedConfig!
 }
 
 "The details required to create a user."
@@ -160,6 +149,20 @@ type Schema {
   groupSchema: AttributeList!
 }
 
+input TestKeycloakConnectionInput {
+  url: String!
+  realm: String!
+  adminUser: String!
+  adminPass: String!
+}
+
+type KeycloakSuggestedConfig {
+  url: String!
+  realm: String!
+  adminUsername: String!
+  keycloakHostname: String!
+}
+
 "The fields that can be updated for a group."
 input UpdateGroupInput {
   "The group ID." id: Int!
@@ -220,6 +223,11 @@ type AttributeList {
   attributes: [AttributeSchema!]!
   extraLdapObjectClasses: [String!]!
   ldapObjectClasses: [ObjectClassInfo!]!
+}
+
+type TestKeycloakConnectionResponse {
+  ok: Boolean!
+  message: String!
 }
 
 type Success {

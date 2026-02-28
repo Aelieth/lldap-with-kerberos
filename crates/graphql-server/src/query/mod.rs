@@ -21,6 +21,7 @@ use lldap_opaque_handler::OpaqueHandler;
 use crate::api::{Context, field_error_callback};
 use lldap_kerberos;
 use juniper::GraphQLObject;
+use lldap_kerberos::get_keycloak_suggested_config;
 use lldap_schema::PublicSchema;
 
 #[derive(PartialEq, Eq, Debug)]
@@ -32,6 +33,16 @@ pub struct Query<Handler: BackendHandler + OpaqueHandler> {
 #[derive(GraphQLObject)]
 pub struct KerberosInfo {
     pub public_key_der_base64: Option<String>,  // Base64 DER public key for RSA encryption (null if disabled or gen fails)
+}
+
+#[derive(GraphQLObject)]
+pub struct KeycloakSuggestedConfig {
+    pub url: String,
+    pub realm: String,
+    #[graphql(name = "adminUsername")]
+    pub admin_username: String,
+    #[graphql(name = "keycloakHostname")]
+    pub keycloak_hostname: String,
 }
 
 impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
@@ -147,6 +158,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let public_key_der_base64 = lldap_kerberos::get_public_key_der_base64();
         Ok(KerberosInfo {
             public_key_der_base64: Some(public_key_der_base64)
+        })
+    }
+
+    async fn keycloak_suggested_config(
+        _context: &Context<Handler>,
+    ) -> FieldResult<KeycloakSuggestedConfig> {
+        let cfg = get_keycloak_suggested_config();
+        Ok(KeycloakSuggestedConfig {
+            url: cfg.url,
+            realm: cfg.realm,
+            admin_username: cfg.admin_username,
+            keycloak_hostname: cfg.keycloak_hostname,
         })
     }
 }

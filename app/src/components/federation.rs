@@ -19,31 +19,77 @@ response_derives = "Debug"
 )]
 pub struct ExportKeytabForKeycloak;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/keycloak_suggested_config.graphql",
+response_derives = "Debug"
+)]
+pub struct KeycloakSuggestedConfig;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "src/queries/test_keycloak_connection.graphql",
+response_derives = "Debug"
+)]
+pub struct TestKeycloakConnection;
+
 pub struct Federation {
     common: CommonComponentParts<Self>,
     keycloak_url: String,
     realm: String,
     admin_username: String,
+    admin_password: String,  // in-memory only — never saved to disk
     keycloak_hostname: String,
     connection_status: String,
 }
 
 pub enum Msg {
+    LoadSuggestedConfig,
     TestConnection,
     UpdateUrl(String),
     UpdateRealm(String),
     UpdateUsername(String),
+    UpdatePassword(String),
     UpdateHostname(String),
     GenerateRealmJson,
     ExportKeytab,
-        ExportKeytabResponse(Result<export_keytab_for_keycloak::ResponseData>),
+    SuggestedConfigResponse(Result<keycloak_suggested_config::ResponseData>),
+    TestConnectionResponse(Result<test_keycloak_connection::ResponseData>),
+    ExportKeytabResponse(Result<export_keytab_for_keycloak::ResponseData>),
 }
 
 impl CommonComponent<Federation> for Federation {
     fn handle_msg(&mut self, ctx: &Context<Self>, msg: <Self as Component>::Message) -> anyhow::Result<bool> {
         match msg {
+            Msg::LoadSuggestedConfig => {
+                let variables = keycloak_suggested_config::Variables {};
+                self.common.call_graphql::<KeycloakSuggestedConfig, _>(
+                    ctx,
+                    variables,
+                    Msg::SuggestedConfigResponse,
+                    "Failed to load suggested config",
+                );
+                self.connection_status = "Loading suggested config from live Kerberos...".to_string();
+                Ok(true)
+            }
             Msg::TestConnection => {
-                self.connection_status = "✅ Connection test passed (placeholder — real API next)".to_string();
+                let variables = test_keycloak_connection::Variables {
+                    input: test_keycloak_connection::TestKeycloakConnectionInput {
+                        url: self.keycloak_url.clone(),
+                        realm: self.realm.clone(),
+                        adminUser: self.admin_username.clone(),
+                        adminPass: self.admin_password.clone(),
+                    },
+                };
+                self.common.call_graphql::<TestKeycloakConnection, _>(
+                    ctx,
+                    variables,
+                    Msg::TestConnectionResponse,
+                    "Error trying to test Keycloak connection",
+                );
+                self.connection_status = "Testing connection...".to_string();
                 Ok(true)
             }
             Msg::UpdateUrl(url) => {
@@ -56,6 +102,10 @@ impl CommonComponent<Federation> for Federation {
             }
             Msg::UpdateUsername(username) => {
                 self.admin_username = username;
+                Ok(true)
+            }
+            Msg::UpdatePassword(password) => {
+                self.admin_password = password;
                 Ok(true)
             }
             Msg::UpdateHostname(hostname) => {
@@ -143,6 +193,28 @@ impl CommonComponent<Federation> for Federation {
                 self.connection_status = "Exporting keytab...".to_string();
                 Ok(true)
             }
+            Msg::SuggestedConfigResponse(Ok(data)) => {
+                let cfg = data.keycloak_suggested_config;
+                self.keycloak_url = cfg.url;
+                self.realm = cfg.realm;
+                self.admin_username = cfg.admin_username;
+                self.keycloak_hostname = cfg.keycloak_hostname;
+                self.connection_status = "✅ Auto-filled from live Kerberos config".to_string();
+                Ok(true)
+            }
+            Msg::SuggestedConfigResponse(Err(e)) => {
+                self.connection_status = format!("❌ Failed to load suggested config: {}", e);
+                Ok(true)
+            }
+            Msg::TestConnectionResponse(Ok(data)) => {
+                let resp = data.test_keycloak_connection;
+                self.connection_status = resp.message;
+                Ok(true)
+            }
+            Msg::TestConnectionResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
+                Ok(true)
+            }
             Msg::ExportKeytabResponse(Ok(data)) => {
                 let resp = data.export_keytab_for_keycloak;
                 if resp.ok {
@@ -172,14 +244,18 @@ impl Component for Federation {
     type Message = Msg;
     type Properties = ();
 
-    fn create(_: &Context<Self>) -> Self {
+    fn create(ctx: &Context<Self>) -> Self {
+        let link = ctx.link().clone();
+        link.send_message(Msg::LoadSuggestedConfig);
+
         Federation {
             common: CommonComponentParts::<Self>::create(),
             keycloak_url: "http://keycloak:8080".to_string(),
-            realm: "lldap".to_string(),
+            realm: "".to_string(),
             admin_username: "admin".to_string(),
-            keycloak_hostname: "keycloak".to_string(),  // backend auto-completes to full hostname
-            connection_status: "Ready — fill settings and export".to_string(),
+            admin_password: "".to_string(),
+            keycloak_hostname: "keycloak".to_string(),
+            connection_status: "Loading suggested config from Kerberos...".to_string(),
         }
     }
 
@@ -194,6 +270,7 @@ impl Component for Federation {
         let on_url = ctx.link().callback(|e: InputEvent| Msg::UpdateUrl(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_realm = ctx.link().callback(|e: InputEvent| Msg::UpdateRealm(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_username = ctx.link().callback(|e: InputEvent| Msg::UpdateUsername(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
+        let on_password = ctx.link().callback(|e: InputEvent| Msg::UpdatePassword(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_hostname = ctx.link().callback(|e: InputEvent| Msg::UpdateHostname(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
 
         html! {
@@ -210,7 +287,7 @@ impl Component for Federation {
             <div class="mb-3">
             <label class="form-label">{ "Keycloak URL" }</label>
             <input type="url" class="form-control" value={self.keycloak_url.clone()} oninput={on_url.clone()} />
-            <small class="text-muted">{ "e.g. http://keycloak:8080 (Docker) or https://keycloak.example.com" }</small>
+            <small class="text-muted">{ "Auto-filled from your base DN — edit only if needed" }</small>
             </div>
             <div class="mb-3">
             <label class="form-label">{ "Realm" }</label>
@@ -219,6 +296,11 @@ impl Component for Federation {
             <div class="mb-3">
             <label class="form-label">{ "Admin Username" }</label>
             <input type="text" class="form-control" value={self.admin_username.clone()} oninput={on_username.clone()} />
+            </div>
+            <div class="mb-3">
+            <label class="form-label">{ "Admin Password (in-memory only)" }</label>
+            <input type="password" class="form-control" value={self.admin_password.clone()} oninput={on_password.clone()} placeholder="Enter Keycloak admin password for test" />
+            <small class="text-muted">{ "Never saved — used only for this test button" }</small>
             </div>
             <button onclick={on_test} class="btn btn-primary">{ "Test Connection" }</button>
             <div class="mt-3 alert alert-info">
@@ -251,7 +333,7 @@ impl Component for Federation {
             <div class="mb-3">
             <label class="form-label">{ "Keycloak Hostname" }</label>
             <input type="text" class="form-control" value={self.keycloak_hostname.clone()} oninput={on_hostname.clone()} placeholder="keycloak (auto → keycloak.yourdomain)" />
-            <small class="text-muted">{ "Default \"keycloak\" auto-completes from your base DN. Edit only if needed." }</small>
+            <small class="text-muted">{ "Default \"keycloak\" auto-completes from your base DN" }</small>
             </div>
             <button onclick={on_export} class="btn btn-success w-100 mb-3">{ "Export keycloak-http.keytab" }</button>
             <div class="alert alert-info small">
