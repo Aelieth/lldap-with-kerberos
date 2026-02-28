@@ -23,7 +23,6 @@ use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attr
 use std::sync::Arc;
 use lldap_opaque_handler::OpaqueHandler;
 use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal,
-    KeycloakClient,
 };
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
@@ -757,7 +756,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         _context: &Context<Handler>,
         input: TestKeycloakConnectionInput,
     ) -> FieldResult<TestKeycloakConnectionResponse> {
-        let client = KeycloakClient::new(
+        let client = lldap_kerberos::KeycloakClient::from_env()
+        .map_err(|e| FieldError::new(
+            "Failed to load Keycloak config from environment",
+            graphql_value!({ "details": (e.to_string()) }),
+        ))?
+        .with_test_overrides(
             input.url,
             input.realm,
             input.admin_user,

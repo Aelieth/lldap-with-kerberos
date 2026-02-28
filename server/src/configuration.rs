@@ -77,6 +77,25 @@ pub struct LdapsOptions {
     pub key_file: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, derive_builder::Builder)]
+#[builder(pattern = "owned")]
+pub struct KeycloakOptions {
+    #[builder(default = r#"String::from("http://keycloak:8080")"#)]
+    pub url: String,
+    #[builder(default = r#"String::from("master")"#)]
+    pub realm: String,
+    #[builder(default = r#"String::from("admin")"#)]
+    pub admin_user: String,
+    #[builder(default = r#"SecUtf8::from("")"#)]
+    pub admin_pass: SecUtf8,
+}
+
+impl std::default::Default for KeycloakOptions {
+    fn default() -> Self {
+        KeycloakOptionsBuilder::default().build().unwrap()
+    }
+}
+
 impl std::default::Default for LdapsOptions {
     fn default() -> Self {
         LdapsOptionsBuilder::default().build().unwrap()
@@ -102,7 +121,7 @@ impl std::default::Default for HealthcheckOptions {
 #[debug(r#""{_0}""#)]
 pub struct HttpUrl(pub Url);
 
-#[derive(Clone, Deserialize, Serialize, derive_builder::Builder, derive_more::Debug)]
+#[derive(Clone, derive_more::Debug, Deserialize, Serialize, derive_builder::Builder)]
 #[builder(pattern = "owned", build_fn(name = "private_build"))]
 pub struct Configuration {
     #[builder(default = r#"String::from("0.0.0.0")"#)]
@@ -137,8 +156,6 @@ pub struct Configuration {
     pub verbose: bool,
     #[builder(default = r#"String::from("server_key")"#)]
     pub key_file: String,
-    // We want an Option to see whether there is a value or not, since the value is printed as
-    // "***SECRET***".
     #[builder(default)]
     pub key_seed: Option<SecUtf8>,
     #[builder(default = r#"PathBuf::from("./app")"#)]
@@ -147,6 +164,8 @@ pub struct Configuration {
     pub smtp_options: MailOptions,
     #[builder(default)]
     pub ldaps_options: LdapsOptions,
+    #[builder(default)]
+    pub keycloak_options: KeycloakOptions,
     #[builder(default = r#"HttpUrl(Url::parse("http://localhost").unwrap())"#)]
     pub http_url: HttpUrl,
     #[debug(skip)]
@@ -434,34 +453,34 @@ impl ConfigOverrider for RunOpts {
         self.general_config.override_config(config);
 
         self.server_key_file
-            .as_ref()
-            .inspect(|path| config.key_file = path.to_string());
+        .as_ref()
+        .inspect(|path| config.key_file = path.to_string());
 
         self.server_key_seed
-            .as_ref()
-            .inspect(|seed| config.key_seed = Some(SecUtf8::from(seed.as_str())));
+        .as_ref()
+        .inspect(|seed| config.key_seed = Some(SecUtf8::from(seed.as_str())));
 
         self.ldap_port.inspect(|&port| config.ldap_port = port);
 
         self.http_port.inspect(|&port| config.http_port = port);
 
         self.http_url
-            .as_ref()
-            .inspect(|&url| config.http_url = HttpUrl(url.clone()));
+        .as_ref()
+        .inspect(|&url| config.http_url = HttpUrl(url.clone()));
 
         self.database_url
-            .as_ref()
-            .inspect(|&database_url| config.database_url = database_url.clone());
+        .as_ref()
+        .inspect(|&database_url| config.database_url = database_url.clone());
 
         self.force_ldap_user_pass_reset
-            .inspect(|&force_ldap_user_pass_reset| {
-                config.force_ldap_user_pass_reset = force_ldap_user_pass_reset;
-            });
+        .inspect(|&force_ldap_user_pass_reset| {
+            config.force_ldap_user_pass_reset = force_ldap_user_pass_reset;
+        });
 
         self.force_update_private_key
-            .inspect(|&force_update_private_key| {
-                config.force_update_private_key = force_update_private_key;
-            });
+        .inspect(|&force_update_private_key| {
+            config.force_update_private_key = force_update_private_key;
+        });
 
         self.smtp_opts.override_config(config);
         self.ldaps_opts.override_config(config);
@@ -549,6 +568,15 @@ impl ConfigOverrider for HealthcheckOpts {
         self.healthcheck_ldap_host
             .as_ref()
             .inspect(|host| config.healthcheck_options.ldap_host.clone_from(host));
+    }
+}
+
+impl ConfigOverrider for KeycloakOptions {
+    fn override_config(&self, config: &mut Configuration) {
+        config.keycloak_options.url = self.url.clone();
+        config.keycloak_options.realm = self.realm.clone();
+        config.keycloak_options.admin_user = self.admin_user.clone();
+        config.keycloak_options.admin_pass = self.admin_pass.clone();
     }
 }
 

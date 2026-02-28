@@ -34,6 +34,8 @@ pub use keycloak_config::{
     get_keycloak_suggested_config,
     load_keycloak_config,
     save_keycloak_config,
+    get_keycloak_admin_password,
+    load_full_keycloak_config,
 };
 
 // Shared helper — eliminates duplication between lib.rs and kerberos_manager.rs

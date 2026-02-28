@@ -2,6 +2,13 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct KeycloakConfig {
+    pub url: String,
+    pub realm: String,
+    pub admin_user: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct KeycloakSuggestedConfig {
     pub url: String,
     pub realm: String,
@@ -19,13 +26,6 @@ pub fn get_keycloak_suggested_config() -> KeycloakSuggestedConfig {
         admin_username: "admin".to_string(),
         keycloak_hostname: "keycloak".to_string(),
     }
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct KeycloakConfig {
-    pub url: String,
-    pub realm: String,
-    pub admin_user: String,
 }
 
 pub fn load_keycloak_config() -> Result<KeycloakConfig> {
@@ -51,4 +51,15 @@ pub fn save_keycloak_config(config: &KeycloakConfig) -> Result<()> {
     .context("Failed to serialize keycloak config")?;
     std::fs::write(config_path, toml_str)
     .context("Failed to write keycloak_config.toml")
+}
+
+pub fn get_keycloak_admin_password() -> String {
+    std::env::var("LLDAP_KEYCLOAK_ADMIN_PASS")
+    .unwrap_or_else(|_| "admin".to_string())
+}
+
+pub fn load_full_keycloak_config() -> Result<(KeycloakConfig, String)> {
+    let config = load_keycloak_config()?;
+    let password = get_keycloak_admin_password();
+    Ok((config, password))
 }
