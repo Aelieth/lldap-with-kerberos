@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 use base64::engine::general_purpose::STANDARD;
@@ -13,6 +15,8 @@ use std::mem;
 use std::{env, ptr};
 use std::fs;
 use std::process::Command;
+pub use keycloak_config::generate_keycloak_realm_json;
+pub use keycloak_config::KeycloakRealmGenerationOptions;
 
 // Generated FFI bindings — created at compile time by build.rs
 #[allow(non_camel_case_types)]
