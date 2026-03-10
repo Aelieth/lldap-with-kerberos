@@ -1,0 +1,6 @@
+mutation PushRealmToKeycloak($url: String!, $realm: String!, $adminUser: String!, $adminPass: String!, $json: String!) {
+  pushRealmToKeycloak(url: $url, realm: $realm, adminUser: $adminUser, adminPass: $adminPass, json: $json) {
+    ok
+    message
+  }
+}

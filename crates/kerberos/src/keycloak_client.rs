@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use keycloak::{KeycloakAdmin, KeycloakAdminToken};
+use keycloak::{KeycloakAdmin, KeycloakAdminToken, KeycloakTokenSupplier};
 use reqwest::Client as HttpClient;
-use tracing::info;
+use tracing::{info, error};
 use crate::keycloak_config::{KeycloakConfig, load_full_keycloak_config};
 
 #[derive(Clone)]
@@ -59,7 +59,6 @@ impl KeycloakClient {
         self.config.realm = realm;
         self.config.admin_user = admin_user;
 
-        // If UI password box is left empty → keep the one from LLDAP_KEYCLOAK_ADMIN_PASS env var
         if !admin_pass.trim().is_empty() {
             self.admin_pass = admin_pass;
             tracing::info!("Using password provided from UI for one-time test");
@@ -78,19 +77,65 @@ impl KeycloakClient {
             &self.http_client,
         )
         .await
-        .context("Failed to acquire Keycloak admin token — check URL, credentials, or Keycloak health")?;
+        .context("Failed to acquire Keycloak admin token")?;
 
         let admin = KeycloakAdmin::new(&self.config.url, token, self.http_client.clone());
 
         let _realm_info = admin
         .realm_get(&self.config.realm)
         .await
-        .context("Failed to fetch realm — does the realm exist in Keycloak?")?;
+        .context("Failed to fetch realm")?;
 
         info!("Keycloak connection test successful for realm {}", self.config.realm);
         Ok(format!(
             "✅ Connected to Keycloak at {} — realm '{}' is ready",
             self.config.url, self.config.realm
         ))
+    }
+
+    pub async fn create_realm(&self, realm_json: String) -> Result<String> {
+        info!("🔄 PushRealm starting - URL: '{}', AdminUser: '{}', PassLen: {}",
+              self.config.url,
+              self.config.admin_user,
+              self.admin_pass.len());
+
+        let admin_token = match KeycloakAdminToken::acquire(
+            &self.config.url,
+            &self.config.admin_user,
+            &self.admin_pass,
+            &self.http_client,
+        ).await {
+            Ok(token) => token,
+            Err(e) => {
+                error!("❌ KeycloakAdminToken::acquire FAILED: {:?}", e);
+                return Err(anyhow::anyhow!("Failed to acquire admin token for realm creation: {}", e));
+            }
+        };
+
+        let token_str = admin_token
+        .get(&self.config.url)
+        .await
+        .context("Failed to extract token string")?;
+
+        let url = format!("{}/admin/realms", self.config.url);
+
+        let resp = self.http_client
+        .post(&url)
+        .bearer_auth(token_str)
+        .header("Content-Type", "application/json")
+        .body(realm_json)
+        .send()
+        .await
+        .context("Failed to send realm creation request to Keycloak")?;
+
+        if resp.status().is_success() {
+            info!("✅ Realm '{}' created successfully via API", self.config.realm);
+            Ok(format!("✅ Realm '{}' created in Keycloak!", self.config.realm))
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            error!("❌ Keycloak rejected realm creation: {} - {}", status, body);
+            Err(anyhow::anyhow!("Keycloak returned {}: {}", status, body))
+        }
     }
 }

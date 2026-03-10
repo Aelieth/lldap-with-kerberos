@@ -33,6 +33,7 @@ type Mutation {
   exportKeytabForKeycloak(hostname: String!): ExportKeytabForKeycloakResponse!
   testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
   saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
+  pushRealmToKeycloak(json: String!): PushRealmResponse!
 }
 
 input SaveKeycloakConfigInput {
@@ -113,6 +114,11 @@ type ExportKeytabForKeycloakResponse {
   ok: Boolean!
   path: String!
   errorMsg: String!
+}
+
+type PushRealmResponse {
+  ok: Boolean!
+  message: String!
 }
 
 type AttributeSchema {

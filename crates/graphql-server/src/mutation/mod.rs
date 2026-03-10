@@ -64,6 +64,12 @@ struct SaveKeycloakConfigResponse {
     message: String,
 }
 
+#[derive(juniper::GraphQLObject)]
+struct PushRealmResponse {
+    ok: bool,
+    message: String,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
 pub struct Mutation<Handler: BackendHandler + OpaqueHandler> {
@@ -805,6 +811,31 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 message: format!("❌ Failed to save config: {}", e),
             }),
         }
+    }
+
+    async fn push_realm_to_keycloak(
+        _context: &Context<Handler>,
+        url: String,
+        realm: String,
+        admin_user: String,
+        admin_pass: String,
+        json: String,
+    ) -> FieldResult<PushRealmResponse> {
+        let client = lldap_kerberos::KeycloakClient::from_test_input(
+            url,
+            realm,
+            admin_user,
+            admin_pass,
+        );
+
+        let message = client.create_realm(json)
+        .await
+        .map_err(|e| juniper::FieldError::new(e.to_string(), juniper::Value::null()))?;
+
+        Ok(PushRealmResponse {
+            ok: true,
+            message,
+        })
     }
 }
 

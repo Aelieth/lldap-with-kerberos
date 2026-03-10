@@ -13,43 +13,51 @@ use anyhow::Result;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "src/queries/export_keytab.graphql",
-response_derives = "Debug"
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/export_keytab.graphql",
+    response_derives = "Debug"
 )]
 pub struct ExportKeytabForKeycloak;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "src/queries/keycloak_suggested_config.graphql",
-response_derives = "Debug"
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/keycloak_suggested_config.graphql",
+    response_derives = "Debug"
 )]
 pub struct KeycloakSuggestedConfig;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "src/queries/keycloak_config.graphql",
-response_derives = "Debug"
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/keycloak_config.graphql",
+    response_derives = "Debug"
 )]
 pub struct KeycloakConfig;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "src/queries/test_keycloak_connection.graphql",
-response_derives = "Debug"
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/test_keycloak_connection.graphql",
+    response_derives = "Debug"
 )]
 pub struct TestKeycloakConnection;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "src/queries/save_keycloak_config.graphql",
-response_derives = "Debug"
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/save_keycloak_config.graphql",
+    response_derives = "Debug"
 )]
 pub struct SaveKeycloakConfig;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "../schema.graphql",
+    query_path = "src/queries/push_realm_to_keycloak.graphql",
+    response_derives = "Debug"
+)]
+pub struct PushRealmToKeycloak;
 
 pub struct Federation {
     common: CommonComponentParts<Self>,
@@ -68,12 +76,12 @@ pub struct Federation {
     ticket_lifetime: String,
     renew_lifetime: String,
     forwardable: bool,
-        rdns: bool,
-        new_realm_mode: bool,
-        new_realm_name: String,
-        sync_username: String,
-        sync_password: String,
-        connection_tested_successfully: bool,
+    rdns: bool,
+    new_realm_mode: bool,
+    new_realm_name: String,
+    sync_username: String,
+    sync_password: String,
+    connection_tested_successfully: bool,
 }
 
 pub enum Msg {
@@ -103,6 +111,7 @@ pub enum Msg {
     TestResponse(Result<test_keycloak_connection::ResponseData>),
     SaveResponse(Result<save_keycloak_config::ResponseData>),
     ExportResponse(Result<export_keytab_for_keycloak::ResponseData>),
+    PushResponse(Result<push_realm_to_keycloak::ResponseData>),
 }
 
 impl CommonComponent<Federation> for Federation {
@@ -155,10 +164,10 @@ impl CommonComponent<Federation> for Federation {
             Msg::ToggleNewRealm => {
                 self.new_realm_mode = !self.new_realm_mode;
                 if self.new_realm_mode && self.new_realm_name.trim().is_empty() {
-                    self.new_realm_name = if self.suggested_realm.trim().is_empty() {
-                        self.realm.clone()
-                    } else {
+                    self.new_realm_name = if self.realm.trim().is_empty() {
                         self.suggested_realm.clone()
+                    } else {
+                        self.realm.clone()
                     };
                 }
                 Ok(true)
@@ -205,12 +214,17 @@ impl CommonComponent<Federation> for Federation {
                 let base_dn = format!("dc={}", realm_lower.replace('.', ",dc="));
                 let connection_url = if self.use_ldaps { "ldaps://lldap:636".to_string() } else { "ldap://lldap:389".to_string() };
                 let ssl_required = if self.use_ldaps { "external" } else { "none" };
-                let bind_dn = if self.new_realm_mode && !self.sync_username.trim().is_empty() {
-                    format!("uid={},ou=people,{}", self.sync_username, base_dn)
+                let (bind_dn, bind_cred) = if self.new_realm_mode && !self.sync_username.trim().is_empty() {
+                    let dn = format!("uid={},ou=people,{}", self.sync_username, base_dn);
+                    let cred = if !self.sync_password.trim().is_empty() {
+                        self.sync_password.clone()
+                    } else {
+                        "<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>".to_string()
+                    };
+                    (dn, cred)
                 } else {
-                    format!("uid=keycloak,ou=people,{}", base_dn)
+                    (format!("uid=keycloak,ou=people,{}", base_dn), "<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>".to_string())
                 };
-
                 let realm_json = json!({
                     "realm": realm_lower,
                     "enabled": true,
@@ -246,7 +260,124 @@ impl CommonComponent<Federation> for Federation {
                                 "vendor": ["other"],
                                 "connectionUrl": [connection_url],
                                 "bindDn": [bind_dn],
-                                "bindCredential": ["<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>"],
+                                "bindCredential": [bind_cred],
+                                "usersDn": [format!("ou=people,{}", base_dn)],
+                                "groupsDn": [format!("ou=groups,{}", base_dn)],
+                                "userObjectClasses": ["inetOrgPerson", "organizationalPerson"],
+                                "rdnLDAPAttribute": ["uid"],
+                                "uuidLDAPAttribute": ["entryUUID"],
+                                "usernameLDAPAttribute": ["uid"],
+                                "searchScope": ["subtree"],
+                                "validatePasswordPolicy": ["false"],
+                                "trustEmail": ["true"],
+                                "syncRegistrations": ["true"],
+                                "editMode": ["READ_ONLY"],
+                                "importEnabled": ["true"],
+                                "pagination": ["true"],
+                                "allowKerberosAuthentication": ["true"],
+                                "kerberosRealm": [realm_upper],
+                                "serverPrincipal": [format!("HTTP/keycloak.{}@{}", base_dn.replace("dc=", "").replace(',', "."), realm_upper)],
+                                "keyTab": ["/keytabs/keycloak-http.keytab"],
+                                "krbPrincipalAttribute": ["krbPrincipalName"],
+                                "useKerberosForPasswordAuthentication": ["false"],
+                                "useTruststoreSpi": ["always"],
+                                "connectionPooling": ["true"],
+                                "cachePolicy": ["DEFAULT"],
+                                "usePasswordModifyExtendedOp": ["false"],
+                                "connectionTrace": ["false"]
+                            }
+                        }]
+                    },
+                    "browserSecurityHeaders": {
+                        "strictTransportSecurity": if self.enable_hsts { "max-age=31536000; includeSubDomains" } else { "" },
+                        "xFrameOptions": "SAMEORIGIN",
+                        "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+                        "contentSecurityPolicyReportOnly": "",
+                        "xContentTypeOptions": "nosniff",
+                        "xRobotsTag": "none",
+                        "referrerPolicy": "no-referrer"
+                    },
+                    "bruteForceProtected": self.enable_brute_force,
+                    "_comment": "Generated by LLDAP+Kerberos Federation page"
+                });
+                let json_str = serde_json::to_string_pretty(&realm_json).unwrap();
+                let data_url = format!("data:application/json;charset=utf-8,{}", json_str);
+                if let Some(window) = window() {
+                    let document = window.document().unwrap();
+                    let a = document.create_element("a").unwrap();
+                    let a: web_sys::HtmlElement = a.dyn_into().unwrap();
+                    a.set_attribute("href", &data_url).unwrap();
+                    a.set_attribute("download", &format!("{}-realm.json", realm_lower)).unwrap();
+                    a.click();
+                }
+                self.connection_status = format!("✅ Downloaded {}-realm.json", realm_lower);
+                Ok(true)
+            }
+            Msg::ExportKeytab => {
+                let variables = export_keytab_for_keycloak::Variables { hostname: "keycloak".to_string() };
+                self.common.call_graphql::<ExportKeytabForKeycloak, _>(ctx, variables, Msg::ExportResponse, "Error exporting keytab");
+                self.connection_status = "Exporting keytab...".to_string();
+                Ok(true)
+            }
+            Msg::PushRealmToKeycloak => {
+                let realm_lower = if self.new_realm_mode && !self.new_realm_name.trim().is_empty() {
+                    self.new_realm_name.to_lowercase()
+                } else if self.realm.trim().is_empty() {
+                    self.suggested_realm.clone()
+                } else {
+                    self.realm.to_lowercase()
+                };
+                let realm_upper = realm_lower.to_uppercase();
+                let base_dn = format!("dc={}", realm_lower.replace('.', ",dc="));
+                let connection_url = if self.use_ldaps { "ldaps://lldap:636".to_string() } else { "ldap://lldap:389".to_string() };
+                let ssl_required = if self.use_ldaps { "external" } else { "none" };
+                let (bind_dn, bind_cred) = if self.new_realm_mode && !self.sync_username.trim().is_empty() {
+                    let dn = format!("uid={},ou=people,{}", self.sync_username, base_dn);
+                    let cred = if !self.sync_password.trim().is_empty() {
+                        self.sync_password.clone()
+                    } else {
+                        "<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>".to_string()
+                    };
+                    (dn, cred)
+                } else {
+                    (format!("uid=keycloak,ou=people,{}", base_dn), "<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>".to_string())
+                };
+                let realm_json = json!({
+                    "realm": realm_lower,
+                    "enabled": true,
+                    "sslRequired": ssl_required,
+                    "registrationAllowed": false,
+                    "resetPasswordAllowed": false,
+                    "rememberMe": true,
+                    "editUsernameAllowed": false,
+                    "verifyEmail": false,
+                    "loginWithEmailAllowed": false,
+                    "duplicateEmailsAllowed": false,
+                    "registrationEmailAsUsername": false,
+                    "ssoSessionMaxLifespan": 43200,
+                    "accessTokenLifespan": 900,
+                    "clients": [{
+                        "clientId": "lldap-web",
+                        "name": "LLDAP Web Apps",
+                        "enabled": true,
+                        "protocol": "openid-connect",
+                        "publicClient": true,
+                        "standardFlowEnabled": true,
+                        "implicitFlowEnabled": true,
+                        "directAccessGrantsEnabled": true,
+                        "redirectUris": ["*"],
+                        "webOrigins": ["+"]
+                    }],
+                    "components": {
+                        "org.keycloak.storage.UserStorageProvider": [{
+                            "name": "lldap-with-kerberos",
+                            "providerId": "ldap",
+                            "providerType": "org.keycloak.storage.UserStorageProvider",
+                            "config": {
+                                "vendor": ["other"],
+                                "connectionUrl": [connection_url],
+                                "bindDn": [bind_dn],
+                                "bindCredential": [bind_cred],
                                 "usersDn": [format!("ou=people,{}", base_dn)],
                                        "groupsDn": [format!("ou=groups,{}", base_dn)],
                                        "userObjectClasses": ["inetOrgPerson", "organizationalPerson"],
@@ -286,30 +417,29 @@ impl CommonComponent<Federation> for Federation {
                     "bruteForceProtected": self.enable_brute_force,
                     "_comment": "Generated by LLDAP+Kerberos Federation page"
                 });
-
                 let json_str = serde_json::to_string_pretty(&realm_json).unwrap();
-                let data_url = format!("data:application/json;charset=utf-8,{}", json_str);
-
-                if let Some(window) = window() {
-                    let document = window.document().unwrap();
-                    let a = document.create_element("a").unwrap();
-                    let a: web_sys::HtmlElement = a.dyn_into().unwrap();
-                    a.set_attribute("href", &data_url).unwrap();
-                    a.set_attribute("download", &format!("{}-realm.json", realm_lower)).unwrap();
-                    a.click();
-                }
-
-                self.connection_status = format!("✅ Downloaded {}-realm.json", realm_lower);
+                let variables = push_realm_to_keycloak::Variables {
+                    url: self.keycloak_url.clone(),
+                    realm: realm_lower.clone(),
+                    admin_user: self.admin_username.clone(),
+                    admin_pass: self.admin_password.clone(),   // ← now uses the real Admin Password from Connection Options
+                    json: json_str,
+                };
+                self.common.call_graphql::<PushRealmToKeycloak, _>(
+                    ctx,
+                    variables,
+                    Msg::PushResponse,
+                    "Error pushing realm",
+                );
+                self.connection_status = "Pushing realm to Keycloak...".to_string();
                 Ok(true)
             }
-            Msg::ExportKeytab => {
-                let variables = export_keytab_for_keycloak::Variables { hostname: "keycloak".to_string() };
-                self.common.call_graphql::<ExportKeytabForKeycloak, _>(ctx, variables, Msg::ExportResponse, "Error exporting keytab");
-                self.connection_status = "Exporting keytab...".to_string();
+            Msg::PushResponse(Ok(data)) => {
+                self.connection_status = data.push_realm_to_keycloak.message;
                 Ok(true)
             }
-            Msg::PushRealmToKeycloak => {
-                self.connection_status = "🔄 Keycloak API Realm Push coming in next turtle step (will use saved URL + generated JSON)".to_string();
+            Msg::PushResponse(Err(e)) => {
+                self.connection_status = format!("❌ {}", e);
                 Ok(true)
             }
             Msg::ExportResponse(Ok(data)) => {
@@ -318,16 +448,6 @@ impl CommonComponent<Federation> for Federation {
                 Ok(true)
             }
             Msg::ExportResponse(Err(e)) => {
-                self.connection_status = format!("❌ {}", e);
-                Ok(true)
-            }
-            Msg::TestResponse(Ok(data)) => {
-                self.connection_status = data.test_keycloak_connection.message;
-                self.connection_tested_successfully = true;
-                Ok(true)
-            }
-            Msg::SaveResponse(Ok(data)) => { self.connection_status = data.save_keycloak_config.message; Ok(true) }
-            Msg::TestResponse(Err(e)) | Msg::SaveResponse(Err(e)) | Msg::SuggestedResponse(Err(e)) | Msg::ConfigResponse(Err(e)) => {
                 self.connection_status = format!("❌ {}", e);
                 Ok(true)
             }
@@ -363,12 +483,12 @@ impl Component for Federation {
             ticket_lifetime: "24h".to_string(),
             renew_lifetime: "7d".to_string(),
             forwardable: true,
-                rdns: false,
-                new_realm_mode: false,
-                new_realm_name: "".to_string(),
-                sync_username: "keycloak".to_string(),
-                sync_password: "".to_string(),
-                connection_tested_successfully: false,
+            rdns: false,
+            new_realm_mode: false,
+            new_realm_name: "".to_string(),
+            sync_username: "keycloak".to_string(),
+            sync_password: "".to_string(),
+            connection_tested_successfully: false,
         }
     }
 
