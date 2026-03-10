@@ -819,23 +819,17 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         realm: String,
         admin_user: String,
         admin_pass: String,
-        json: String,
+        lldap_url: String,
+        sync_username: String,
+        sync_password: String,
     ) -> FieldResult<PushRealmResponse> {
-        let client = lldap_kerberos::KeycloakClient::from_test_input(
-            url,
-            realm,
-            admin_user,
-            admin_pass,
-        );
+        let client = lldap_kerberos::KeycloakClient::from_test_input(url, realm, admin_user, admin_pass);
 
-        let message = client.create_realm(json)
+        let message = client.setup_realm(lldap_url, sync_username, sync_password)
         .await
         .map_err(|e| juniper::FieldError::new(e.to_string(), juniper::Value::null()))?;
 
-        Ok(PushRealmResponse {
-            ok: true,
-            message,
-        })
+        Ok(PushRealmResponse { ok: true, message })
     }
 }
 

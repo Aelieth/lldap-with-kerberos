@@ -33,7 +33,7 @@ type Mutation {
   exportKeytabForKeycloak(hostname: String!): ExportKeytabForKeycloakResponse!
   testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
   saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
-  pushRealmToKeycloak(json: String!): PushRealmResponse!
+  pushRealmToKeycloak(url: String!, realm: String!, adminUser: String!, adminPass: String!, lldapUrl: String!, syncUsername: String!, syncPassword: String!): PushRealmResponse!
 }
 
 input SaveKeycloakConfigInput {
