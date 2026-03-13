@@ -1,11 +1,33 @@
 #!/bin/bash
 set -euo pipefail
 
-# === Create all required directories (LLDAP + Kerberos) ===
-mkdir -p /data /data/cert /var/lib/krb5kdc /var/kerberos/krb5kdc /var/log/krb5
-chown -R lldap:lldap /data /var/lib/krb5kdc /var/kerberos /var/log/krb5
+CONFIG_FILE=/data/lldap_config.toml
 
-# === Required environment variable checks ===
+# === Official LLDAP writable check (exact upstream) ===
+if [[ ( ! -w "/data" ) ]] || [[ ( ! -d "/data" ) ]]; then
+  echo "[entrypoint] The /data folder doesn't exist or cannot be written to. Make sure to mount
+  a volume or folder to /data to persist data across restarts, and that the current user can
+  write to it."
+  exit 1
+fi
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "[entrypoint] Copying the default config to $CONFIG_FILE"
+  echo "[entrypoint] Edit this file to configure LLDAP."
+  cp /app/lldap_config.docker_template.toml "$CONFIG_FILE"
+fi
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+  echo "[entrypoint] Config file is not readable. Check the permissions"
+  exit 1
+fi
+
+# === Official permission setup (exact upstream) ===
+echo "> Setup permissions.."
+find /app \! -user lldap -exec chown lldap:lldap '{}' +
+find /data \! -user lldap -exec chown lldap:lldap '{}' +
+
+# === Required environment variable checks (safe, upstream-style) ===
 if [ -z "${LLDAP_JWT_SECRET:-}" ]; then
     echo "ERROR: LLDAP_JWT_SECRET is required."
     echo "Please set a strong random secret (32+ characters) via environment variable."
@@ -19,37 +41,11 @@ if [ -z "${LLDAP_LDAP_BASE_DN:-}" ]; then
     exit 1
 fi
 
-# === Early Kerberos realm setup (needed before LLDAP starts for sync) ===
-BASE_DN="${LLDAP_LDAP_BASE_DN:-dc=testlab,dc=com}"
-REALM_NAME="${LLDAP_KERB_REALM_NAME:-}"
-if [ -z "$REALM_NAME" ]; then
-    REALM_NAME=$(echo "${BASE_DN}" | sed 's/dc=//g; s/,/\./g' | tr '[:lower:]' '[:upper:]')
-fi
-REALM_NAME="${REALM_NAME:-TESTLAB.COM}"
-export REALM_NAME
-echo "Early REALM_NAME set to ${REALM_NAME} (for LLDAP sync)"
+# === Change to /data so LLDAP creates server_key (and everything else) inside the persistent volume naturally ===
+echo "> Switching to /data so LLDAP creates server_key inside the volume (no manual handling needed)"
+cd /data
 
-# === Config file handling (exact same as original inner entrypoint) ===
-CONFIG_FILE=/data/lldap_config.toml
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "[entrypoint] Copying the default config to $CONFIG_FILE"
-    echo "[entrypoint] Edit this file to configure LLDAP."
-    cp /app/lldap_config.docker_template.toml "$CONFIG_FILE"
-    chown lldap:lldap "$CONFIG_FILE"
-fi
-
-if [[ ! -r "$CONFIG_FILE" ]]; then
-    echo "[entrypoint] Config file is not readable. Check the permissions"
-    exit 1
-fi
-
-echo "> Fixing ownership on /app assets (binaries, static, pkg).."
-find /app \! -user lldap -exec chown lldap:lldap '{}' +
-
-echo "> Forcing DB path via env override (reliable even if config parse issues)"
-export LLDAP_DATABASE_URL="sqlite:////data/users.db?mode=rwc"
-
-# === Start LLDAP with gosu (in background so we can start kerberos_manager too) ===
+# === Start LLDAP with gosu (background so we can start kerberos_manager) ===
 echo "Starting LLDAP..."
 gosu lldap:lldap /app/lldap "$@" &
 LLDAP_PID=$!
