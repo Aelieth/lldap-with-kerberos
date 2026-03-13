@@ -70,11 +70,10 @@ RUN microdnf install -y --assumeyes \
     && microdnf clean all
 
 # Pre-create persistent directories with correct ownership
-RUN mkdir -p /data /data/cert /var/kerberos/krb5kdc /var/log/krb5 && \
+RUN mkdir -p /data/cert /var/kerberos/krb5kdc /var/log/krb5 && \
     chown -R lldap:lldap /data /var/kerberos /var/log/krb5
 
-# Set default working directory to persistent volume (LLDAP will create files here)
-WORKDIR /data
+WORKDIR /app
 
 # Copy binaries and frontend assets
 COPY --from=builder --chown=lldap:lldap /app/target/release/lldap /app/target/release/lldap_migration_tool /app/target/release/lldap_set_password /app/
@@ -83,7 +82,7 @@ COPY --from=builder --chown=lldap:lldap /app/app/pkg /app/app/pkg
 COPY --from=builder --chown=lldap:lldap /app/app/index.html /app/app/index.html
 COPY --from=builder --chown=lldap:lldap /app/target/release/kerberos_manager /app/
 
-# Copy configs and templates (all at root in source → placed in /app)
+# Copy configs and templates
 COPY --chown=lldap:lldap lldap_config.docker_template.toml /app/
 COPY --chown=lldap:lldap scripts/bootstrap.sh /app/
 COPY --chown=lldap:lldap kerberos/kerberos_config.template.toml /app/kerberos_config.template.toml
@@ -100,7 +99,7 @@ RUN chmod +x /entrypoint.sh
 COPY sudoers-lldap /etc/sudoers.d/lldap
 RUN chmod 0440 /etc/sudoers.d/lldap
 
-# Volumes
+# Volumes for persistence
 VOLUME /data /var/kerberos/krb5kdc
 
 # Ports
@@ -111,7 +110,6 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["run"]
 HEALTHCHECK CMD ["/app/lldap", "healthcheck"]
 
-# Metadata labels for easier identification
 LABEL maintainer="Aelieth <https://github.com/Aelieth>" \
       version="0.5.6-kerberos" \
-      description="LLDAP fork with MIT Kerberos and Keycloak integration for ZimaBlade"
+      description="LLDAP fork with MIT Kerberos and Keycloak integration"

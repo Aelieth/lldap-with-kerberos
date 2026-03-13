@@ -1,2 +1,1 @@
 admin/admin@{{ REALM_NAME }}    *
-*/admin@{{ REALM_NAME }}    *
