@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 CONFIG_FILE=/data/lldap_config.toml
 
@@ -22,7 +22,7 @@ echo "Starting LLDAP..."
 LLDAP_PID=$!
 
 echo "Waiting for LLDAP to become ready..."
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
     if /app/lldap healthcheck >/dev/null 2>&1; then
         echo "LLDAP is ready!"
         break
