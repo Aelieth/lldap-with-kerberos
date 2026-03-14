@@ -611,6 +611,7 @@ fn expected_keys(dict: &figment::value::Dict) -> HashSet<String> {
     // CLI-only values.
     keys.insert("LLDAP_CONFIG_FILE".to_string());
     keys.insert("LLDAP_TEST_EMAIL_TO".to_string());
+    keys.insert("LLDAP_KEYCLOAK_ADMIN_PASS".to_string());
     // Alternate spellings from clap.
     keys.insert("LLDAP_SERVER_KEY_FILE".to_string());
     keys.insert("LLDAP_SERVER_KEY_SEED".to_string());
