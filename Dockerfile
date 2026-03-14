@@ -93,7 +93,9 @@ COPY --chown=lldap:lldap kerberos/keycloak_config.template.toml /app/keycloak_co
 
 # Combined entrypoint
 COPY --chown=lldap:lldap entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chown=lldap:lldap start-lldap.sh /start-lldap.sh
+RUN chmod +x /entrypoint.sh && chown lldap:lldap /entrypoint.sh
+RUN chmod +x /start-lldap.sh && chown lldap:lldap /start-lldap.sh
 
 # Setup sudo for kadmin.local
 COPY sudoers-lldap /etc/sudoers.d/lldap
