@@ -1177,19 +1177,12 @@ async fn migrate_to_v11(transaction: DatabaseTransaction) -> Result<DatabaseTran
 async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTransaction, DbErr> {
     let backend = transaction.get_database_backend();
 
-    info!("=== v12 Migration: Full re-seed of POSIX + Kerberos attributes from single source of truth ===");
-
     // 1. Clear both schema tables completely (guarantees fresh enum strings on every fresh DB)
-    info!("Clearing old schema tables for clean re-seed...");
     transaction
-    .execute(backend.build(
-        Query::delete().from_table(UserAttributeSchema::Table),
-    ))
+    .execute(backend.build(Query::delete().from_table(UserAttributeSchema::Table)))
     .await?;
     transaction
-    .execute(backend.build(
-        Query::delete().from_table(GroupAttributeSchema::Table),
-    ))
+    .execute(backend.build(Query::delete().from_table(GroupAttributeSchema::Table)))
     .await?;
 
     // 2. Ensure aliases + is_readonly columns exist (safe idempotent add for SQLite)
@@ -1244,7 +1237,8 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     let public_schema = lldap_schema::PublicSchema::get();
     let schema = public_schema.get_schema();
 
-    // 3. Re-seed ALL hardcoded USER attributes from crates/schema (POSIX + Kerberos included)
+    // 3. Re-seed ALL hardcoded attributes from single source of truth (one summary line)
+    let mut user_count = 0;
     for attr in &schema.user_attributes.attributes {
         if !attr.is_hardcoded {
             continue;
@@ -1252,7 +1246,6 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         let name = attr.name.as_str();
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
-        info!("Seeding user attribute: {}", name);
         transaction
         .execute(backend.build(
             Query::insert()
@@ -1264,7 +1257,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                 UserAttributeSchema::UserAttributeSchemaIsUserVisible,
                 UserAttributeSchema::UserAttributeSchemaIsUserEditable,
                 UserAttributeSchema::UserAttributeSchemaIsHardcoded,
-                UserAttributeSchema::UserAttributeSchemaIsReadonly,   // ← NEW
+                UserAttributeSchema::UserAttributeSchemaIsReadonly,
                 UserAttributeSchema::Aliases,
             ])
             .values_panic([
@@ -1274,14 +1267,15 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                           attr.is_visible.into(),
                           attr.is_editable.into(),
                           true.into(),
-                          attr.is_readonly.into(),   // ← now uses real value from PublicSchema
+                          attr.is_readonly.into(),
                           aliases_json.into(),
             ]),
         ))
         .await?;
+        user_count += 1;
     }
 
-    // 4. Re-seed ALL hardcoded GROUP attributes (future-proof)
+    let mut group_count = 0;
     for attr in &schema.group_attributes.attributes {
         if !attr.is_hardcoded {
             continue;
@@ -1289,7 +1283,6 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         let name = attr.name.as_str();
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
-        info!("Seeding group attribute: {}", name);
         transaction
         .execute(backend.build(
             Query::insert()
@@ -1301,7 +1294,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                 GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
                 GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
                 GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
-                GroupAttributeSchema::GroupAttributeSchemaIsReadonly,   // ← NEW
+                GroupAttributeSchema::GroupAttributeSchemaIsReadonly,
                 GroupAttributeSchema::Aliases,
             ])
             .values_panic([
@@ -1311,15 +1304,17 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
                           attr.is_visible.into(),
                           attr.is_editable.into(),
                           true.into(),
-                          attr.is_readonly.into(),   // ← now uses real value from PublicSchema
+                          attr.is_readonly.into(),
                           aliases_json.into(),
             ]),
         ))
         .await?;
+        group_count += 1;
     }
 
-    // 5. Default kerberossync = 0 for any existing users (idempotent)
-    info!("Setting default kerberossync = 0 for existing users");
+    info!("Seeded {} user attributes + {} group attributes from PublicSchema", user_count, group_count);
+
+    // 4. Default kerberossync = 0 for any existing users (idempotent)
     let insert_sync_sql = format!(
         "INSERT INTO {} ({}, {}, {})
     SELECT u.{}, 'kerberossync', '0'
@@ -1345,7 +1340,6 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
     .await;
 
-    info!("v12 migration completed successfully — schema tables now match single source of truth");
     Ok(transaction)
 }
 
