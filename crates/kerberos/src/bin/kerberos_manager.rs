@@ -10,8 +10,6 @@ use std::time::Duration;
 use std::net::TcpStream;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-
-// Import the shared helper from our own lib crate
 use lldap_kerberos::derive_realm_from_base_dn;
 
 #[derive(Deserialize, Debug)]
@@ -21,7 +19,7 @@ struct KerberosConfig {
     ticket_lifetime: String,
     renew_lifetime: String,
     forwardable: bool,
-        rdns: bool,
+    rdns: bool,
 }
 
 /// Run kadmin.local — only show output on error
@@ -167,7 +165,7 @@ fn main() -> Result<()> {
         }
         println!("Keytab created.");
 
-        // Ownership (once only)
+        // Ownership
         Command::new("sudo")
         .arg("chown")
         .arg("lldap:lldap")
