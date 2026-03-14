@@ -179,7 +179,7 @@ pub fn export_keytab_for_keycloak(hostname_input: &str) -> Result<String> {
     handle.set_random_key_for_service(&principal)
     .context("Failed to set random key for Keycloak service principal")?;
 
-    let keytab_path = "/data/keycloak-http.keytab";
+    let keytab_path = "/data/keytab/keycloak-http.keytab";
     let _ = fs::remove_file(keytab_path);
 
     let query = format!("ktadd -k {} {}", keytab_path, principal);

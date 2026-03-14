@@ -157,7 +157,7 @@ impl KeycloakClient {
                                    "allowKerberosAuthentication": ["true"],
                                    "kerberosRealm": [self.config.realm.to_uppercase()],
                                    "serverPrincipal": [format!("HTTP/keycloak.{}.{}@{}", self.config.realm, self.config.realm, self.config.realm.to_uppercase())],
-                                   "keyTab": ["/keytabs/keycloak-http.keytab"],
+                                   "keyTab": ["/keytab/keycloak-http.keytab"],
                                    "krbPrincipalAttribute": ["krbPrincipalName"],
                                    "useKerberosForPasswordAuthentication": ["false"],
                                    "useTruststoreSpi": ["always"],

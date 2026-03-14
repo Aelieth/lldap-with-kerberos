@@ -119,7 +119,7 @@ pub fn generate_keycloak_realm_json(options: &KeycloakRealmGenerationOptions) ->
                            "allowKerberosAuthentication": ["true"],
                            "kerberosRealm": [realm_upper],
                            "serverPrincipal": [format!("HTTP/{}@{}", hostname, realm_upper)],
-                           "keyTab": ["/keytabs/keycloak-http.keytab"],
+                           "keyTab": ["/keytab/keycloak-http.keytab"],
                            "krbPrincipalAttribute": ["krbPrincipalName"],
                            "useKerberosForPasswordAuthentication": ["false"],
                            "useTruststoreSpi": ["always"],

@@ -4,12 +4,8 @@ use yew::{Html, html};
 
 fn get_friendly_name(name: &str) -> String {
   match name {
-    "kerberossync" => "Kerberos Sync Enabled".to_string(),
-    "krbprincipalname" => "Kerberos Principal Name".to_string(),
-    "uidnumber" => "POSIX UID Number".to_string(),
-    "gidnumber" => "POSIX GID Number".to_string(),
-    "homedirectory" => "Home Directory".to_string(),
-    "loginshell" => "Login Shell".to_string(),
+    "uidnumber" => "uidnumber - POSIX UID".to_string(),
+    "gidnumber" => "gidnumber - POSIX GID".to_string(),
     _ => name.to_string(),
   }
 }

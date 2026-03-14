@@ -4,7 +4,7 @@ set -euo pipefail
 CONFIG_FILE=/data/lldap_config.toml
 
 # Create required persistent directories (kerberos_manager now owns its own dirs)
-mkdir -p /data /data/keycloak /data/cert
+mkdir -p /data /data/keytab /data/cert
 
 # Only set ownership on FIRST run (protects persistent keytabs, keycloak files, etc.)
 if [ ! -f /data/.lldap_initialized ]; then
