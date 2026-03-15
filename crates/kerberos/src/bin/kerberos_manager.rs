@@ -9,7 +9,6 @@ use std::thread;
 use std::time::Duration;
 use std::net::TcpStream;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use lldap_kerberos::derive_realm_from_base_dn;
 
 #[derive(Deserialize, Debug)]

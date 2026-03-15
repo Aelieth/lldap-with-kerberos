@@ -122,12 +122,12 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
 }
 
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-    // Uses new shared helper — single source of truth for realm derivation
-    // (LLDAP_LDAP_BASE_DN → domain → realm, with LLDAP_KERB_REALM_NAME override)
-    let realm_upper = derive_realm_from_base_dn();
-
-    let full_principal = format!("{}@{}", username, realm_upper);
+    // NEW: Use the canonical helper — single source of truth for every principal!
+    // This is what will be called on every password change / user creation.
+    let full_principal = get_kerberos_principal_name(username);
     info!("Kerberos sync started for principal: {}", full_principal);
+
+    let realm_upper = derive_realm_from_base_dn();
 
     let admin_principal = format!("admin/admin@{}", realm_upper);
     let keytab_path = "/data/kadm5.keytab";
@@ -517,7 +517,13 @@ impl Drop for Kadm5Handle {
     }
 }
 
-/// Central call for Kerberos sync—callers pass if sync is enabled (from attr check).
+// Returns the full Kerberos principal name for any user (e.g. "testuser1@TESTLABBY.LOCAL") Used by Keycloak LDAP provider
+pub fn get_kerberos_principal_name(username: &str) -> String {
+    let realm_upper = derive_realm_from_base_dn();
+    format!("{}@{}", username, realm_upper)
+}
+
+// Central call for Kerberos sync—callers pass if sync is enabled (from attr check).
 pub fn sync_kerberos_if_enabled(
     sync_enabled: bool,
     user_id: &str,

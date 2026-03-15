@@ -41,9 +41,8 @@ pub fn get_keycloak_suggested_config() -> KeycloakSuggestedConfig {
 }
 
 pub fn generate_keycloak_realm_json(options: &KeycloakRealmGenerationOptions) -> Result<String> {
-    let base_dn = crate::derive_realm_from_base_dn();
     let realm_lower = options.realm.to_lowercase();
-    let realm_upper = base_dn.to_uppercase();
+    let realm_upper = crate::derive_realm_from_base_dn();
     let domain = crate::derive_domain_from_base_dn();
 
     let hostname = if options.external_keycloak && !options.external_keycloak_url.trim().is_empty() {
@@ -101,15 +100,15 @@ pub fn generate_keycloak_realm_json(options: &KeycloakRealmGenerationOptions) ->
                 "config": {
                     "vendor": ["other"],
                     "connectionUrl": [connection_url],
-                    "bindDn": [format!("uid=keycloak,ou=people,{}", base_dn)],
+                    "bindDn": [format!("uid=keycloak,ou=people,{}", realm_upper.to_lowercase().replace('.', ",dc="))],
                            "bindCredential": ["<ENTER YOUR KEYCLOAK BIND PASSWORD HERE AFTER IMPORT>"],
-                           "usersDn": [format!("ou=people,{}", base_dn)],
-                           "groupsDn": [format!("ou=groups,{}", base_dn)],
+                           "usersDn": [format!("ou=people,{}", realm_upper.to_lowercase().replace('.', ",dc="))],
+                           "groupsDn": [format!("ou=groups,{}", realm_upper.to_lowercase().replace('.', ",dc="))],
                            "userObjectClasses": ["inetOrgPerson", "organizationalPerson"],
                            "rdnLDAPAttribute": ["uid"],
                            "uuidLDAPAttribute": ["entryUUID"],
                            "usernameLDAPAttribute": ["uid"],
-                           "searchScope": ["subtree"],
+                           "searchScope": ["2"],
                            "validatePasswordPolicy": ["false"],
                            "trustEmail": ["true"],
                            "syncRegistrations": ["true"],
