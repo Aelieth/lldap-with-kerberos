@@ -165,10 +165,9 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
                                     info!("Kerberos principal synced for user {} (LDAP password change)", uid);
                                 }
 
-                                // ←←← CALL ON THE FULL backend_handler (already authorized + has the method)
-                                let _ = backend_handler
-                                .ensure_kerberos_principal_consistency(&uid, true)
-                                .await;
+                                // ←←← Use unsafe_get_handler to reach the concrete BackendHandler (same pattern as GraphQL)
+                                let inner = backend_handler.unsafe_get_handler();
+                                let _ = inner.ensure_kerberos_principal_consistency(&uid, true).await;
                             }
 
                             Ok(vec![make_extended_response(
