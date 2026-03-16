@@ -3346,6 +3346,7 @@ dependencies = [
  "chrono",
  "itertools",
  "ldap3_proto",
+ "lldap-kerberos",
  "lldap_access_control",
  "lldap_auth",
  "lldap_domain",

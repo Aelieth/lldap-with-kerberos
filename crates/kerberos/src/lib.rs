@@ -105,10 +105,7 @@ pub fn decrypt_password(encrypted: &str) -> Result<String> {
 }
 
 pub fn delete_kerberos_principal(username: &str) -> Result<()> {
-    // Uses new shared helper — no more duplicated realm logic!
-    // Matches exactly what kerberos_manager.rs and GraphQL mutations use.
     let realm_upper = derive_realm_from_base_dn();
-
     let full_principal = format!("{}@{}", username, realm_upper);
     info!("Attempting to delete Kerberos principal via FFI: {}", full_principal);
 
@@ -122,8 +119,6 @@ pub fn delete_kerberos_principal(username: &str) -> Result<()> {
 }
 
 pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<()> {
-    // NEW: Use the canonical helper — single source of truth for every principal!
-    // This is what will be called on every password change / user creation.
     let full_principal = get_kerberos_principal_name(username);
     info!("Kerberos sync started for principal: {}", full_principal);
 
@@ -139,7 +134,7 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
 
     // Try change password first (most common case after user already exists)
     if handle.chpass_principal(username, plain_password, &realm_upper).is_ok() {
-        info!("Kerberos password updated successfully for {}", full_principal);
+        info!("✅ Kerberos password updated successfully for {}", full_principal);
         return Ok(());
     }
 
@@ -148,8 +143,7 @@ pub fn sync_kerberos_principal(username: &str, plain_password: &str) -> Result<(
     handle.create_principal(username, plain_password, &realm_upper)
     .context("Failed to create new Kerberos principal")?;
 
-    info!("Kerberos principal created and password set for {}", full_principal);
-
+    info!("✅ Kerberos principal created and password set for {}", full_principal);
     Ok(())
 }
 

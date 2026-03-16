@@ -1,7 +1,12 @@
 use crate::sql_tables::DbConnection;
 use async_trait::async_trait;
 use lldap_auth::opaque::server::ServerSetup;
+use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::BackendHandler;
+use lldap_domain_model::error::Result;
+use lldap_domain_model::model;          // public model
+use sea_orm::{ActiveModelTrait, ActiveValue};   // ← added ActiveModelTrait for .update()
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct SqlBackendHandler {
@@ -23,7 +28,42 @@ impl SqlBackendHandler {
 }
 
 #[async_trait]
-impl BackendHandler for SqlBackendHandler {}
+impl BackendHandler for SqlBackendHandler {
+    #[instrument(skip(self), level = "debug", err)]
+    async fn ensure_kerberos_principal_consistency(
+        &self,
+        user_id: &UserId,
+        enabled: bool,
+    ) -> Result<()> {
+        use chrono::Utc;
+
+        let now = Utc::now().naive_utc();
+
+        if enabled {
+            let principal = lldap_kerberos::get_kerberos_principal_name(user_id.as_str());
+            tracing::info!("Kerberos sync succeeded → injecting protected krbPrincipalName = {} for user {}", principal, user_id);
+
+            let update = model::users::ActiveModel {
+                user_id: ActiveValue::Set(user_id.clone()),
+                krb_principal_name: ActiveValue::Set(Some(principal)),
+                modified_date: ActiveValue::Set(now),
+                ..Default::default()
+            };
+            update.update(&self.sql_pool).await.map_err(|e| lldap_domain_model::error::DomainError::DatabaseError(e))?;
+        } else {
+            tracing::info!("Kerberos sync disabled → clearing krbPrincipalName for user {}", user_id);
+
+            let update = model::users::ActiveModel {
+                user_id: ActiveValue::Set(user_id.clone()),
+                krb_principal_name: ActiveValue::Set(None),
+                modified_date: ActiveValue::Set(now),
+                ..Default::default()
+            };
+            update.update(&self.sql_pool).await.map_err(|e| lldap_domain_model::error::DomainError::DatabaseError(e))?;
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 pub mod tests {

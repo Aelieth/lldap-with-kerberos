@@ -6,7 +6,7 @@ use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
     sea_query::{
-        BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query,
+        Alias, BinOper, ColumnDef, Expr, ForeignKey, ForeignKeyAction, Func, Index, Query,
         SimpleExpr, Table, Value, all,
     },
 };
@@ -1339,6 +1339,33 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     let _ = transaction
     .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
     .await;
+
+    // 5. Add krbPrincipalName column to main users table (protected like creation_date)
+    let _ = transaction
+    .execute(backend.build(
+        Table::alter()
+        .table(Users::Table)
+        .add_column_if_not_exists(
+            ColumnDef::new(Alias::new("krb_principal_name"))
+            .string_len(255)
+            .null(),
+        ),
+    ))
+    .await;
+
+    // 6. Default empty krbPrincipalName for existing users (idempotent)
+    let insert_krb_sql = format!(
+        "UPDATE {} u
+        SET krb_principal_name = ''
+    WHERE krb_principal_name IS NULL",
+    Users::Table.to_string()
+    );
+
+    let _ = transaction
+    .execute(sea_orm::Statement::from_string(backend, insert_krb_sql))
+    .await;
+
+    info!("Added protected krbPrincipalName column to main users table + defaulted existing users (v12 migration)");
 
     Ok(transaction)
 }

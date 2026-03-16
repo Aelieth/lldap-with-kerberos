@@ -1,5 +1,6 @@
 use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
+use itertools::Itertools;
 use lldap_domain::{
     requests::{CreateUserRequest, UpdateUserRequest},
     types::{
@@ -7,7 +8,7 @@ use lldap_domain::{
         Uuid,
     },
 };
-use lldap_schema::PublicSchema;   // ← live single source of truth (POSIX + Kerberos + custom)
+use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
     ReadSchemaBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
 };
@@ -23,17 +24,16 @@ use sea_orm::{
     },
 };
 use std::collections::HashSet;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 // Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
-// This replaces old bincode/Serialized and works perfectly with POSIX (Integer) + Kerberos fields
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
         AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
-        _ => vec![], // lists are rare in equality filters
+        _ => vec![],
     }
 }
 
@@ -129,11 +129,7 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
 fn to_value(opt_name: &Option<String>) -> ActiveValue<Option<String>> {
     match opt_name {
         None => ActiveValue::NotSet,
-        Some(name) => ActiveValue::Set(if name.is_empty() {
-            None
-        } else {
-            Some(name.to_owned())
-        }),
+        Some(name) => ActiveValue::Set(if name.is_empty() { None } else { Some(name.to_owned()) }),
     }
 }
 
@@ -143,12 +139,12 @@ impl UserListerBackendHandler for SqlBackendHandler {
     async fn list_users(
         &self,
         filters: Option<UserRequestFilter>,
-        // To simplify the query, we always fetch groups. TODO: cleanup.
         _get_groups: bool,
     ) -> Result<Vec<UserAndGroups>> {
         let filters = filters
         .map(get_user_filter_expr)
         .unwrap_or_else(|| SimpleExpr::Value(true.into()).into_condition());
+
         let mut users: Vec<_> = model::User::find()
         .filter(filters.clone())
         .order_by_asc(UserColumn::UserId)
@@ -165,7 +161,6 @@ impl UserListerBackendHandler for SqlBackendHandler {
         })
         .collect();
 
-        // At this point, the users don't have attributes, we need to populate it with another query.
         let attributes = model::UserAttributes::find()
         .filter(
             model::UserAttributesColumn::UserId.in_subquery(
@@ -180,9 +175,8 @@ impl UserListerBackendHandler for SqlBackendHandler {
         .order_by_asc(model::UserAttributesColumn::AttributeName)
         .all(&self.sql_pool)
         .await?;
+
         let mut attributes_iter = attributes.into_iter().peekable();
-        // TODO: should be wrapped in a transaction
-        use itertools::Itertools; // For take_while_ref
         let schema = self.get_schema().await?;
         for user in users.iter_mut() {
             user.user.attributes = attributes_iter
@@ -195,6 +189,8 @@ impl UserListerBackendHandler for SqlBackendHandler {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+
+            user.user.materialize_protected_fields();
         }
         Ok(users)
     }
@@ -206,11 +202,22 @@ impl SqlBackendHandler {
         insert_attributes: Vec<Attribute>,
         delete_attributes: Vec<AttributeName>,
         schema: &PublicSchema,
-    ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>)> {
+    ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
         let mut update_user_attributes = Vec::new();
         let mut remove_user_attributes = Vec::new();
+        let mut kerb_sync_enabled: Option<bool> = None;
 
         for attribute in insert_attributes {
+            if attribute.name.as_str() == "kerberossync" {
+                // Integer only — frontend now sends proper Integer (no string fallback)
+                kerb_sync_enabled = match &attribute.value {
+                    AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
+                    AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
+                    _ => Some(false),
+                };
+                info!("Detected kerberossync change → enabled = {:?}", kerb_sync_enabled);
+            }
+
             if schema
                 .user_attributes()
                 .get_attribute_type(attribute.name.as_str())
@@ -224,13 +231,17 @@ impl SqlBackendHandler {
                     });
                 } else {
                     return Err(DomainError::InternalError(format!(
-                        "User attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                        "User attribute name {} doesn't exist in the schema",
                         &attribute.name
                     )));
                 }
         }
 
         for attribute in delete_attributes {
+            if attribute.as_str() == "kerberossync" {
+                kerb_sync_enabled = Some(false);
+            }
+
             if schema
                 .user_attributes()
                 .get_attribute_type(attribute.as_str())
@@ -239,11 +250,12 @@ impl SqlBackendHandler {
                     remove_user_attributes.push(attribute);
                 } else {
                     return Err(DomainError::InternalError(format!(
-                        "User attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                        "User attribute name {attribute} doesn't exist in the schema"
                     )));
                 }
         }
-        Ok((update_user_attributes, remove_user_attributes))
+
+        Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
     }
 
     async fn update_user_with_transaction(
@@ -251,15 +263,17 @@ impl SqlBackendHandler {
         request: UpdateUserRequest,
     ) -> Result<()> {
         let schema = Self::get_schema_with_transaction(transaction).await?;
-        let (update_user_attributes, remove_user_attributes) =
+        let (update_user_attributes, remove_user_attributes, kerb_sync_enabled) =
         Self::compute_user_attribute_changes(
             &request.user_id,
             request.insert_attributes,
             request.delete_attributes,
             &schema,
         )?;
+
         let lower_email = request.email.as_ref().map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
+
         let update_user = model::users::ActiveModel {
             user_id: ActiveValue::Set(request.user_id.clone()),
             email: request.email.map(ActiveValue::Set).unwrap_or_default(),
@@ -269,6 +283,7 @@ impl SqlBackendHandler {
             ..Default::default()
         };
         update_user.update(transaction).await?;
+
         if !remove_user_attributes.is_empty() {
             model::UserAttributes::delete_many()
             .filter(model::UserAttributesColumn::UserId.eq(&request.user_id))
@@ -289,13 +304,30 @@ impl SqlBackendHandler {
             .exec(transaction)
             .await?;
         }
+
+        // Only clear krbPrincipalName when toggling OFF.
+        if let Some(false) = kerb_sync_enabled {
+            info!("kerberossync toggled OFF for user {} — clearing krbPrincipalName", request.user_id);
+
+            let update = model::users::ActiveModel {
+                user_id: ActiveValue::Set(request.user_id.clone()),
+                krb_principal_name: ActiveValue::Set(None),
+                modified_date: ActiveValue::Set(now),
+                ..Default::default()
+            };
+            update.update(transaction).await?;
+        } else if let Some(true) = kerb_sync_enabled {
+            info!("kerberossync toggled ON for user {} — waiting for next password change to inject krbPrincipalName", request.user_id);
+            // Do nothing here — field stays None until password change triggers ensure(true)
+        }
+
         Ok(())
     }
 }
 
 #[async_trait]
 impl UserBackendHandler for SqlBackendHandler {
-    #[instrument(skip_all, level = "debug", ret, fields(user_id = ?user_id.as_str()))]
+    #[instrument(skip_all, level = "debug", ret, err, fields(user_id = ?user_id.as_str()))]
     async fn get_user_details(&self, user_id: &UserId) -> Result<User> {
         let mut user = User::from(
             model::User::find_by_id(user_id.to_owned())
@@ -303,11 +335,13 @@ impl UserBackendHandler for SqlBackendHandler {
             .await?
             .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?,
         );
+
         let attributes = model::UserAttributes::find()
         .filter(model::UserAttributesColumn::UserId.eq(user_id))
         .order_by_asc(model::UserAttributesColumn::AttributeName)
         .all(&self.sql_pool)
         .await?;
+
         let schema = self.get_schema().await?;
         user.attributes = attributes
         .into_iter()
@@ -319,17 +353,20 @@ impl UserBackendHandler for SqlBackendHandler {
             )
         })
         .collect::<Result<Vec<_>>>()?;
+
+        user.materialize_protected_fields();
         Ok(user)
     }
 
-    #[instrument(skip_all, level = "debug", ret, err, fields(user_id = ?user_id.as_str()))]
+    #[instrument(skip_all, level = "debug", err, fields(user_id = ?user_id.as_str()))]
     async fn get_user_groups(&self, user_id: &UserId) -> Result<HashSet<GroupDetails>> {
         let user = model::User::find_by_id(user_id.to_owned())
         .one(&self.sql_pool)
         .await?
         .ok_or_else(|| DomainError::EntityNotFound(user_id.to_string()))?;
 
-        Ok(user.find_linked(model::memberships::UserToGroup)
+        Ok(user
+        .find_linked(model::memberships::UserToGroup)
         .all(&self.sql_pool)
         .await?
         .into_iter()
@@ -339,20 +376,20 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Always ensure kerberossync exists and is valid Integer 0 or 1.
-        // Protects LDAP, old scripts, future Keycloak paths. Respects GraphQL/frontend when they send 1.
-        let kerb_index = request.attributes.iter().position(|attr| attr.name.as_str() == "kerberossync");
+        // Enforce Integer only for kerberossync (frontend now sends Integer)
+        let kerb_index = request
+        .attributes
+        .iter()
+        .position(|attr| attr.name.as_str() == "kerberossync");
         if let Some(idx) = kerb_index {
             if let AttributeValue::Integer(Cardinality::Singleton(v)) = &request.attributes[idx].value {
                 if *v != 0 && *v != 1 {
                     request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
                 }
             } else {
-                // Wrong type → force 0
                 request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
             }
         } else {
-            // Missing → default to 0 (no sync)
             request.attributes.push(Attribute {
                 name: "kerberossync".into(),
                                     value: AttributeValue::Integer(Cardinality::Singleton(0)),
@@ -371,8 +408,10 @@ impl UserBackendHandler for SqlBackendHandler {
             uuid: ActiveValue::Set(uuid),
             modified_date: ActiveValue::Set(now),
             password_modified_date: ActiveValue::Set(now),
+            krb_principal_name: ActiveValue::Set(None),
             ..Default::default()
         };
+
         let mut new_user_attributes = Vec::new();
         self.sql_pool
         .transaction::<_, (), DomainError>(|transaction| {
@@ -392,8 +431,7 @@ impl UserBackendHandler for SqlBackendHandler {
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
-                                "Attribute name {} doesn't exist in the user schema,
-                                yet was attempted to be inserted in the database",
+                                "Attribute name {} doesn't exist in the user schema",
                                 &attribute.name
                             )));
                         }
@@ -415,9 +453,7 @@ impl UserBackendHandler for SqlBackendHandler {
     async fn update_user(&self, request: UpdateUserRequest) -> Result<()> {
         self.sql_pool
         .transaction::<_, (), DomainError>(|transaction| {
-            Box::pin(
-                async move { Self::update_user_with_transaction(transaction, request).await },
-            )
+            Box::pin(async move { Self::update_user_with_transaction(transaction, request).await })
         })
         .await?;
         Ok(())
@@ -429,9 +465,7 @@ impl UserBackendHandler for SqlBackendHandler {
         .exec(&self.sql_pool)
         .await?;
         if res.rows_affected == 0 {
-            return Err(DomainError::EntityNotFound(format!(
-                "No such user: '{user_id}'"
-            )));
+            return Err(DomainError::EntityNotFound(format!("No such user: '{user_id}'")));
         }
         Ok(())
     }
@@ -448,7 +482,6 @@ impl UserBackendHandler for SqlBackendHandler {
                 };
                 new_membership.insert(transaction).await?;
 
-                // Update group modification time
                 let now = chrono::Utc::now().naive_utc();
                 let update_group = model::groups::ActiveModel {
                     group_id: Set(group_id),
@@ -456,7 +489,6 @@ impl UserBackendHandler for SqlBackendHandler {
                      ..Default::default()
                 };
                 update_group.update(transaction).await?;
-
                 Ok(())
             })
         })
@@ -479,7 +511,6 @@ impl UserBackendHandler for SqlBackendHandler {
                     )));
                 }
 
-                // Update group modification time
                 let now = chrono::Utc::now().naive_utc();
                 let update_group = model::groups::ActiveModel {
                     group_id: Set(group_id),
@@ -487,7 +518,6 @@ impl UserBackendHandler for SqlBackendHandler {
                      ..Default::default()
                 };
                 update_group.update(transaction).await?;
-
                 Ok(())
             })
         })

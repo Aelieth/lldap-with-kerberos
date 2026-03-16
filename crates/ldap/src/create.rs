@@ -66,79 +66,78 @@ async fn create_user(
     }
 
     let mut attributes: HashMap<String, Vec<u8>> = attributes
-        .into_iter()
-        .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
-        .map(parse_attribute)
-        .collect::<LdapResult<_>>()?;
+    .into_iter()
+    .filter(|a| !a.atype.eq_ignore_ascii_case("objectclass"))
+    .map(parse_attribute)
+    .collect::<LdapResult<_>>()?;
 
-    // Default kerberossync = 0 (do not sync to Kerberos yet) if not provided
-    // This matches our PublicSchema single source of truth
+    // Default kerberossync = 0 if not provided (matches PublicSchema)
     if !attributes.contains_key("kerberossync") {
         attributes.insert("kerberossync".to_string(), b"0".to_vec());
     }
 
     let get_attribute = |name: &str| {
         attributes
-            .get(name)
-            .map(Vec::as_slice)
-            .map(|v| {
-                std::str::from_utf8(v)
-                    .map(str::to_owned)
-                    .map_err(|e| LdapError {
-                        code: LdapResultCode::ConstraintViolation,
-                        message: format!("Attribute value is invalid UTF-8: {e:#?}"),
-                    })
+        .get(name)
+        .map(Vec::as_slice)
+        .map(|v| {
+            std::str::from_utf8(v)
+            .map(str::to_owned)
+            .map_err(|e| LdapError {
+                code: LdapResultCode::ConstraintViolation,
+                message: format!("Attribute value is invalid UTF-8: {e:#?}"),
             })
+        })
     };
 
     let mut new_user_attributes: Vec<Attribute> = Vec::new();
 
-    // Map standard LDAP POSIX attributes to our internal schema
+    // Map standard POSIX attributes
     if let Some(first_name) = get_attribute("givenname").transpose()? {
         new_user_attributes.push(Attribute {
             name: "first_name".into(),
-            value: deserialize::deserialize_attribute_value(&[first_name], AttributeType::String, false)
-                .map_err(|e| LdapError {
-                    code: LdapResultCode::ConstraintViolation,
-                    message: format!("Invalid first_name value: {e}"),
-                })?,
+                                 value: deserialize::deserialize_attribute_value(&[first_name], AttributeType::String, false)
+                                 .map_err(|e| LdapError {
+                                     code: LdapResultCode::ConstraintViolation,
+                                     message: format!("Invalid first_name value: {e}"),
+                                 })?,
         });
     }
     if let Some(last_name) = get_attribute("sn").transpose()? {
         new_user_attributes.push(Attribute {
             name: "last_name".into(),
-            value: deserialize::deserialize_attribute_value(&[last_name], AttributeType::String, false)
-                .map_err(|e| LdapError {
-                    code: LdapResultCode::ConstraintViolation,
-                    message: format!("Invalid last_name value: {e}"),
-                })?,
+                                 value: deserialize::deserialize_attribute_value(&[last_name], AttributeType::String, false)
+                                 .map_err(|e| LdapError {
+                                     code: LdapResultCode::ConstraintViolation,
+                                     message: format!("Invalid last_name value: {e}"),
+                                 })?,
         });
     }
     if let Some(avatar) = get_attribute("avatar")
         .or_else(|| get_attribute("jpegphoto"))
         .transpose()?
-    {
-        new_user_attributes.push(Attribute {
-            name: "avatar".into(),
-            value: deserialize::deserialize_attribute_value(&[avatar], AttributeType::JpegPhoto, false)
-                .map_err(|e| LdapError {
-                    code: LdapResultCode::ConstraintViolation,
-                    message: format!("Invalid avatar value: {e}"),
-                })?,
-        });
-    }
+        {
+            new_user_attributes.push(Attribute {
+                name: "avatar".into(),
+                                     value: deserialize::deserialize_attribute_value(&[avatar], AttributeType::JpegPhoto, false)
+                                     .map_err(|e| LdapError {
+                                         code: LdapResultCode::ConstraintViolation,
+                                         message: format!("Invalid avatar value: {e}"),
+                                     })?,
+            });
+        }
 
-    backend_handler
+        backend_handler
         .create_user(CreateUserRequest {
             user_id,
             email: Email::from(
                 get_attribute("mail")
-                    .or_else(|| get_attribute("email"))
-                    .transpose()?
-                    .unwrap_or_default(),
+                .or_else(|| get_attribute("email"))
+                .transpose()?
+                .unwrap_or_default(),
             ),
             display_name: get_attribute("cn").transpose()?,
-            attributes: new_user_attributes,
+                     attributes: new_user_attributes,
         })
         .await
         .map_err(|e| LdapError {
@@ -146,10 +145,10 @@ async fn create_user(
             message: format!("Could not create user: {e:#?}"),
         })?;
 
-    Ok(vec![make_add_response(
-        LdapResultCode::Success,
-        String::new(),
-    )])
+        Ok(vec![make_add_response(
+            LdapResultCode::Success,
+            String::new(),
+        )])
 }
 
 #[instrument(skip_all, level = "debug")]

@@ -23,6 +23,9 @@ pub struct Model {
     pub uuid: Uuid,
     pub modified_date: chrono::NaiveDateTime,
     pub password_modified_date: chrono::NaiveDateTime,
+    // NEW: Protected krbPrincipalName in main table (exactly like creation_date / modified_date)
+    // Only backend code ever sets it — tied strictly to kerberossync = 1
+    pub krb_principal_name: Option<String>,
 }
 
 impl EntityName for Entity {
@@ -44,6 +47,8 @@ pub enum Column {
     Uuid,
     ModifiedDate,
     PasswordModifiedDate,
+    // NEW: Protected krbPrincipalName column
+    KrbPrincipalName,
 }
 
 impl ColumnTrait for Column {
@@ -62,6 +67,8 @@ impl ColumnTrait for Column {
             Column::Uuid => ColumnType::String(StringLen::N(36)),
             Column::ModifiedDate => ColumnType::DateTime,
             Column::PasswordModifiedDate => ColumnType::DateTime,
+            // NEW: Protected krbPrincipalName column
+            Column::KrbPrincipalName => ColumnType::String(StringLen::N(255)),
         }
         .def()
     }
@@ -129,6 +136,8 @@ impl From<Model> for lldap_domain::types::User {
             attributes: Vec::new(),
             modified_date: user.modified_date,
             password_modified_date: user.password_modified_date,
+            // NEW: Protected krbPrincipalName in domain model (for consistency)
+            krb_principal_name: user.krb_principal_name,
         }
     }
 }

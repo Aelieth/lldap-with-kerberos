@@ -195,6 +195,7 @@ Send
 + ReadSchemaBackendHandler
 + SchemaBackendHandler
 {
+    async fn ensure_kerberos_principal_consistency(&self, user_id: &UserId, enabled: bool) -> Result<()>;
 }
 
 #[cfg(test)]

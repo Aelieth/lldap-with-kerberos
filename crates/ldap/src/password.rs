@@ -5,7 +5,7 @@ use crate::{
     },
     handler::make_extended_response,
 };
-use anyhow::{Result};
+use anyhow::Result;
 use ldap3_proto::proto::{
     LdapBindCred, LdapBindRequest, LdapOp, LdapPasswordModifyRequest, LdapResultCode,
 };
@@ -14,6 +14,8 @@ use lldap_auth::access_control::ValidationResults;
 use lldap_domain::types::UserId;
 use lldap_domain_handlers::handler::{BackendHandler, BindRequest, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
+use lldap_kerberos::sync_kerberos_principal;
+use tracing::{info, warn};
 
 pub(crate) async fn do_bind(
     ldap_info: &LdapInfo,
@@ -106,7 +108,7 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
             ) {
                 Ok(uid) => {
                     let user_is_admin = backend_handler
-                    .get_readable_handler(credentials, uid.clone())   // owned UserId, no &
+                    .get_readable_handler(credentials, uid.clone())
                     .expect("Unexpected permission error")
                     .get_user_groups(&uid)
                     .await
@@ -127,13 +129,48 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
                             ),
                         })
                     } else if let Err(e) =
-                        change_password(opaque_handler, uid, password.as_bytes()).await
+                        change_password(opaque_handler, uid.clone(), password.as_bytes()).await
                         {
                             Err(LdapError {
                                 code: LdapResultCode::Other,
                                 message: format!("Error while changing the password: {e:#?}"),
                             })
                         } else {
+                            // Kerberos sync for LDAP-native password changes (OS/PAM/ldapmodify support)
+                            let readable = backend_handler
+                            .get_readable_handler(credentials, uid.clone())
+                            .expect("Unexpected permission error");
+                            let user_details = readable
+                            .get_user_details(&uid)
+                            .await
+                            .map_err(|e| LdapError {
+                                code: LdapResultCode::OperationsError,
+                                message: format!("Failed to fetch user for Kerberos sync: {e}"),
+                            })?;
+
+                            let sync_enabled = user_details.attributes.iter().any(|a| {
+                                a.name.as_str() == "kerberossync"
+                                && matches!(
+                                    &a.value,
+                                    lldap_domain::types::AttributeValue::Integer(
+                                        lldap_domain::types::Cardinality::Singleton(1)
+                                    )
+                                )
+                            });
+
+                            if sync_enabled {
+                                if let Err(e) = sync_kerberos_principal(uid.as_str(), password.as_str()) {
+                                    warn!("Kerberos principal sync failed after LDAP password change: {}", e);
+                                } else {
+                                    info!("Kerberos principal synced for user {} (LDAP password change)", uid);
+                                }
+
+                                // ←←← CALL ON THE FULL backend_handler (already authorized + has the method)
+                                let _ = backend_handler
+                                .ensure_kerberos_principal_consistency(&uid, true)
+                                .await;
+                            }
+
                             Ok(vec![make_extended_response(
                                 LdapResultCode::Success,
                                 "".to_string(),

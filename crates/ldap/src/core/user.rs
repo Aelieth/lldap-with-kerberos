@@ -54,10 +54,10 @@ pub fn get_user_attribute(
 
             classes.extend(
                 schema
-                    .get_schema()
-                    .extra_user_object_classes
-                    .iter()
-                    .map(|c| c.as_str().as_bytes().to_vec()),
+                .get_schema()
+                .extra_user_object_classes
+                .iter()
+                .map(|c| c.as_str().as_bytes().to_vec()),
             );
             classes
         }
@@ -67,12 +67,12 @@ pub fn get_user_attribute(
             vec![format!("uid={},ou=people,{}", &user.user_id, base_dn_str).into_bytes()]
         }
         UserFieldType::MemberOf => groups
-            .into_iter()
-            .flatten()
-            .map(|id_and_name| {
-                format!("cn={},ou=groups,{}", &id_and_name.display_name, base_dn_str).into_bytes()
-            })
-            .collect(),
+        .into_iter()
+        .flatten()
+        .map(|id_and_name| {
+            format!("cn={},ou=groups,{}", &id_and_name.display_name, base_dn_str).into_bytes()
+        })
+        .collect(),
         UserFieldType::PrimaryField(UserColumn::UserId) => {
             vec![user.user_id.to_string().into_bytes()]
         }
@@ -95,6 +95,10 @@ pub fn get_user_attribute(
         }
         UserFieldType::PrimaryField(UserColumn::PasswordModifiedDate) => {
             vec![to_generalized_time(&user.password_modified_date)]
+        }
+        // NEW: Protected krbPrincipalName from main table (exactly like CreationDate)
+        UserFieldType::PrimaryField(UserColumn::KrbPrincipalName) => {
+            vec![user.krb_principal_name.clone()?.into_bytes()]
         }
         UserFieldType::Attribute(attr, _, _) => get_custom_attribute(&user.attributes, &attr)?,
         UserFieldType::NoMatch => match attribute.as_str() {

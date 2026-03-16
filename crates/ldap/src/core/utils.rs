@@ -236,18 +236,18 @@ pub fn map_user_field(field: &AttributeName, schema: &PublicSchema) -> UserField
         }
         "givenname" | "first_name" | "firstname" => UserFieldType::Attribute(
             AttributeName::from("first_name"),
-            AttributeType::String,
-            false,
+                                                                             AttributeType::String,
+                                                                             false,
         ),
         "sn" | "last_name" | "lastname" => UserFieldType::Attribute(
             AttributeName::from("last_name"),
-            AttributeType::String,
-            false,
+                                                                    AttributeType::String,
+                                                                    false,
         ),
         "avatar" | "jpegphoto" => UserFieldType::Attribute(
             AttributeName::from("avatar"),
-            AttributeType::JpegPhoto,
-            false,
+                                                           AttributeType::JpegPhoto,
+                                                           false,
         ),
         "creationdate" | "createtimestamp" | "creation_date" => {
             UserFieldType::PrimaryField(UserColumn::CreationDate)
@@ -259,12 +259,16 @@ pub fn map_user_field(field: &AttributeName, schema: &PublicSchema) -> UserField
             UserFieldType::PrimaryField(UserColumn::PasswordModifiedDate)
         }
         "entryuuid" | "uuid" => UserFieldType::PrimaryField(UserColumn::Uuid),
+        // NEW: Protected krbPrincipalName from main table (exactly like CreationDate)
+        "krbprincipalname" | "krb_principal_name" | "krbPrincipalName" => {
+            UserFieldType::PrimaryField(UserColumn::KrbPrincipalName)
+        }
         _ => schema
-            .get_schema()
-            .user_attributes
-            .get_attribute_type(field.as_str())
-            .map(|(t, is_list)| UserFieldType::Attribute(field.clone(), t, is_list))
-            .unwrap_or(UserFieldType::NoMatch),
+        .get_schema()
+        .user_attributes
+        .get_attribute_type(field.as_str())
+        .map(|(t, is_list)| UserFieldType::Attribute(field.clone(), t, is_list))
+        .unwrap_or(UserFieldType::NoMatch),
     }
 }
 

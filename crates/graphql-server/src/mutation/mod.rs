@@ -97,6 +97,9 @@ fn extract_kerberos_sync(schema: &PublicSchema, attrs: &[lldap_domain::types::At
         lldap_domain::types::AttributeValue::Integer(
             lldap_domain::types::Cardinality::Singleton(i),
         ) if *i == 1 => Some(true),
+              lldap_domain::types::AttributeValue::String(
+                  lldap_domain::types::Cardinality::Singleton(s),
+              ) if s == "1" || s.to_lowercase() == "true" => Some(true),
               _ => None,
     })
     .unwrap_or(false)
@@ -116,7 +119,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .get_admin_handler()
         .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
 
-        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
+        let schema = handler.get_schema().await?;
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
@@ -159,11 +162,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let target_user_id = UserId::new(&user_id);
 
-        // Simplified: get_writeable_handler already allows self OR admin (cleaner, no match, no type issues)
         let handler = context.get_writeable_handler(target_user_id.clone())
         .ok_or_else(field_error_callback(&span, "Unauthorized password set"))?;
 
-        // OPAQUE registration – core LLDAP password handling (unchanged)
+        // OPAQUE registration
         use lldap_auth::{opaque, registration};
         use anyhow::Context as AnyhowContext;
         use rand::rngs::OsRng;
@@ -189,17 +191,21 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         handler.registration_finish(req).await
         .context("Registration finish failed")?;
 
+        // Fetch for sync check
         let user = handler.get_user_details(&target_user_id).await
         .context("Failed to fetch user for Kerberos sync check")?;
-
         let schema = handler.get_schema().await?;
         let sync_enabled = extract_kerberos_sync(&schema, &user.attributes);
 
+        // Real Kerberos sync
         if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, &user_id, &password) {
             warn!("Kerberos sync failed after password set: {}", e);
         } else if sync_enabled {
             info!("Kerberos principal synced for user {} (password change)", user_id);
         }
+
+        let inner = UserWriteableBackendHandler::unsafe_get_handler(handler);
+        let _ = inner.ensure_kerberos_principal_consistency(&target_user_id, sync_enabled).await;
 
         Ok(Success::new())
     }
@@ -239,7 +245,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
 
         let is_admin = context.validation_result.is_admin();
-        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
+        let schema = handler.get_schema().await?;
 
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
@@ -284,10 +290,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                      .collect(),
                      insert_attributes: insert_attributes.clone(),
         })
-        .instrument(span)
+        .instrument(span.clone())
         .await?;
 
-        let new_user = handler.get_user_details(&user_id).await
+        let new_user = handler
+        .get_user_details(&user_id)
+        .await
         .map_err(|e| FieldError::new(
             "Failed to fetch updated user for Kerberos actions",
             graphql_value!({ "details": (e.to_string()) })
@@ -306,6 +314,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             debug!("Kerberos sync enabled for user {} — waiting for password change to trigger sync", user_id);
         }
 
+        // No ensure call here on re-enable — only on password changes
         Ok(Success::new())
     }
 
@@ -426,7 +435,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot delete current user".into());
         }
 
-        // Delete from LLDAP (EAV tables seeded from PublicSchema::get() in v12 migration)
+        // Delete from LLDAP
         handler
         .delete_user(&user_id_typed)
         .instrument(span.clone())
@@ -436,12 +445,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        // Delete Kerberos principal (non-fatal with warn)
+        // Delete Kerberos principal
         if let Err(e) = delete_kerberos_principal(&user_id) {
             warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
         } else {
             info!("Deleted Kerberos principal for user {}", user_id);
         }
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+        let _ = inner.ensure_kerberos_principal_consistency(&user_id_typed, false).await;
 
         Ok(Success::new())
     }
@@ -740,6 +752,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         } else {
             info!("Kerberos sync disabled for user {} (kerberossync != '1'), skipping", user_id);
         }
+
+        let inner = UserWriteableBackendHandler::unsafe_get_handler(handler);
+        let _ = inner.ensure_kerberos_principal_consistency(&target_user_id, sync_enabled).await;
 
         Ok(true)
     }

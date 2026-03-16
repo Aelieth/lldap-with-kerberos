@@ -13,7 +13,6 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 pub use lldap_auth::types::UserId;
-// Use the single source of truth from schema crate
 pub use lldap_schema::AttributeType;
 
 #[derive(
@@ -103,7 +102,7 @@ impl Serialized {
         bincode::deserialize(&self.0)
     }
 
-    /// Safe unwrap for our unified schema (new POSIX/Kerberos attributes default gracefully).
+    /// Safe unwrap for unified schema (new POSIX/Kerberos attributes default gracefully).
     /// Prevents panic on fresh DB / migration while keeping everything type-safe.
     pub fn unwrap<'a, T: Deserialize<'a> + Default>(&'a self) -> T {
         self.convert_to().unwrap_or_default()
@@ -543,6 +542,22 @@ pub struct User {
     pub attributes: Vec<Attribute>,
     pub modified_date: NaiveDateTime,
     pub password_modified_date: NaiveDateTime,
+    pub krb_principal_name: Option<String>,
+}
+
+impl User {
+    /// Materializes all protected main-table fields into .attributes
+    /// Called automatically after every fetch (exactly like creationdate/uuid/etc.)
+    pub fn materialize_protected_fields(&mut self) {
+        if let Some(principal) = &self.krb_principal_name {
+            if !principal.is_empty() {
+                self.attributes.push(Attribute {
+                    name: AttributeName::from("krbprincipalname"),
+                                     value: AttributeValue::String(Cardinality::Singleton(principal.clone())),
+                });
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
