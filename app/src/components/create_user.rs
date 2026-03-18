@@ -200,17 +200,51 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                                           EmailIsRequired(true),
                 )?;
 
-                let mut attributes = all_values
-                .into_iter()
-                .filter(|a| !a.values.is_empty())
-                .map(|a| GraphQLAttributeValue {
-                    name: a.name,
-                    value: a.values,
-                })
-                .collect::<Vec<_>>();
+                let mut attributes = vec![];
+                let mut email = None;
+                let mut display_name = None;
+                let mut first_name = None;
+                let mut last_name = None;
+                let mut avatar = None;
 
-                // Always set kerberossync from the UI toggle (Integer in schema, sent as String for GraphQL)
-                // This guarantees the backend sees "1" when the toggle is On and the SyncKerberosPassword mutation runs.
+                for attr in all_values {
+                    match attr.name.as_str() {
+                        "mail" => {
+                            if let Some(v) = attr.values.first() {
+                                email = Some(v.clone());
+                            }
+                        }
+                        "displayname" => {
+                            if let Some(v) = attr.values.first() {
+                                display_name = Some(v.clone());
+                            }
+                        }
+                        "firstname" => {
+                            if let Some(v) = attr.values.first() {
+                                first_name = Some(v.clone());
+                            }
+                        }
+                        "lastname" => {
+                            if let Some(v) = attr.values.first() {
+                                last_name = Some(v.clone());
+                            }
+                        }
+                        "avatar" => {
+                            if let Some(v) = attr.values.first() {
+                                avatar = Some(v.clone());
+                            }
+                        }
+                        _ => {
+                            if !attr.values.is_empty() && attr.name != "kerberossync" {
+                                attributes.push(GraphQLAttributeValue {
+                                    name: attr.name,
+                                    value: attr.values,
+                                });
+                            }
+                        }
+                    }
+                }
+
                 let kerb_value = if self.kerberossync_enabled { "1" } else { "0" };
                 attributes.push(GraphQLAttributeValue {
                     name: "kerberossync".to_string(),
@@ -219,11 +253,11 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 let user = create_user::CreateUserInput {
                     id: model.username,
-                    displayName: None,
-                    firstName: None,
-                    lastName: None,
-                    avatar: None,
-                    email: None,
+                    displayName: display_name,
+                    firstName: first_name,
+                    lastName: last_name,
+                    avatar,
+                    email,
                     attributes: Some(attributes),
                 };
                 let variables = create_user::Variables { user };
@@ -347,29 +381,10 @@ impl Component for CreateUserForm {
         } else {
             let attrs = self.attributes_schema.as_ref().unwrap();
 
-            // ==================== DEBUG LOGS (TURTLE STEP 6.5) ====================
-            // Open browser DevTools → Console tab after loading the Create User page.
-            // You will see exactly what the frontend receives from PublicSchema.
-            gloo_console::log!("=== CREATE USER SCHEMA DEBUG (from PublicSchema) ===");
-            for a in attrs.iter() {
-                gloo_console::log!(format!(
-                    "Attr: '{}' | is_readonly: {} | is_editable: {} | is_visible: {} | is_hardcoded: {} | type: {:?} | aliases: {:?}",
-                    a.name,
-                    a.is_readonly,
-                    a.is_editable,
-                    a.is_visible,
-                    a.is_hardcoded,
-                    a.attribute_type,
-                    a.aliases
-                ));
-            }
-            gloo_console::log!("=== END SCHEMA DEBUG ===");
-
-            // STRICT FILTER: Hide EVERY readonly field (backend generates them)
+            // STRICT FILTER: Hide readonly fields (backend generates them)
             // Only show fields where is_readonly == false AND not kerberossync
             let should_show = |a: &Attribute| !a.is_readonly && a.name != "kerberossync";
 
-            // Sort the fields that pass the filter (your original priority logic)
             let mut visible_attrs: Vec<&Attribute> = attrs.iter().filter(|a| should_show(a)).collect();
             visible_attrs.sort_by_key(|a| attribute_priority(&a.name));
 
@@ -391,7 +406,7 @@ impl Component for CreateUserForm {
                     <div class="mb-3 row">
                     <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
                     {"Kerberos Sync :"}
-                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
+                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
                     <i aria-label="Info" class="bi bi-info-circle"></i>
                     </button>
                     </label>

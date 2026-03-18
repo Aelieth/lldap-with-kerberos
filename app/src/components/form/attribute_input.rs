@@ -2,10 +2,10 @@ use crate::{
     components::form::{date_input::DateTimeInput, file_input::JpegFileInput},
     infra::{schema::AttributeType, tooltip::Tooltip},
 };
-use web_sys::Element;
+use web_sys::{HtmlInputElement, Element};
 use yew::{
-    Component, Context, Html, Properties, function_component, html, use_effect_with_deps,
-    use_node_ref, virtual_dom::AttrValue,
+    Component, Callback, Context, Event, Html, Properties, function_component, html, TargetCast,
+    use_effect_with_deps, use_node_ref, use_state, virtual_dom::AttrValue,
 };
 
 #[derive(Properties, PartialEq)]
@@ -18,6 +18,8 @@ struct AttributeInputProps {
 
 #[function_component(AttributeInput)]
 fn attribute_input(props: &AttributeInputProps) -> Html {
+    let current_value = use_state(|| props.value.clone().unwrap_or_default());
+
     let input_type = match props.attribute_type {
         AttributeType::String => "text",
         AttributeType::Integer => "number",
@@ -33,12 +35,21 @@ fn attribute_input(props: &AttributeInputProps) -> Html {
         }
     };
 
+    let onchange = {
+        let current_value = current_value.clone();
+        Callback::from(move |e: Event| {
+            let input: HtmlInputElement = e.target_unchecked_into();
+            current_value.set(input.value());
+        })
+    };
+
     html! {
         <input
-            type={input_type}
-            name={props.name.clone()}
-            class="form-control"
-            value={props.value.clone()} />
+        type={input_type}
+        name={props.name.clone()}
+        class="form-control"
+        value={(*current_value).clone()}
+        onchange={onchange} />
     }
 }
 

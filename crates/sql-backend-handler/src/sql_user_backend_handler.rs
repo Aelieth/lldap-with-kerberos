@@ -24,12 +24,13 @@ use sea_orm::{
     },
 };
 use std::collections::HashSet;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 // Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
+        AttributeValue::String(Cardinality::Unbounded(_)) => vec![],
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
         AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
@@ -200,22 +201,26 @@ impl SqlBackendHandler {
     fn compute_user_attribute_changes(
         user_id: &UserId,
         insert_attributes: Vec<Attribute>,
-        delete_attributes: Vec<AttributeName>,
+        _delete_attributes: Vec<AttributeName>,
         schema: &PublicSchema,
     ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
         let mut update_user_attributes = Vec::new();
-        let mut remove_user_attributes = Vec::new();
+        let remove_user_attributes: Vec<AttributeName> = Vec::new();
         let mut kerb_sync_enabled: Option<bool> = None;
 
         for attribute in insert_attributes {
+            let canonical_name = schema
+            .user_attributes()
+            .get_by_name_or_alias(attribute.name.as_str())
+            .map(|s| s.name.clone().into())
+            .unwrap_or_else(|| attribute.name.clone());
+
             if attribute.name.as_str() == "kerberossync" {
-                // Integer only — frontend now sends proper Integer (no string fallback)
                 kerb_sync_enabled = match &attribute.value {
                     AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
                     AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
                     _ => Some(false),
                 };
-                info!("Detected kerberossync change → enabled = {:?}", kerb_sync_enabled);
             }
 
             if schema
@@ -226,31 +231,13 @@ impl SqlBackendHandler {
                     let db_value = attribute_value_to_db_bytes(&attribute.value);
                     update_user_attributes.push(model::user_attributes::ActiveModel {
                         user_id: Set(user_id.clone()),
-                                                attribute_name: Set(attribute.name),
+                                                attribute_name: Set(canonical_name.clone()),
                                                 value: Set(Serialized(db_value)),
                     });
                 } else {
                     return Err(DomainError::InternalError(format!(
                         "User attribute name {} doesn't exist in the schema",
                         &attribute.name
-                    )));
-                }
-        }
-
-        for attribute in delete_attributes {
-            if attribute.as_str() == "kerberossync" {
-                kerb_sync_enabled = Some(false);
-            }
-
-            if schema
-                .user_attributes()
-                .get_attribute_type(attribute.as_str())
-                .is_some()
-                {
-                    remove_user_attributes.push(attribute);
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "User attribute name {attribute} doesn't exist in the schema"
                     )));
                 }
         }
@@ -291,6 +278,7 @@ impl SqlBackendHandler {
             .exec(transaction)
             .await?;
         }
+
         if !update_user_attributes.is_empty() {
             model::UserAttributes::insert_many(update_user_attributes)
             .on_conflict(
@@ -305,20 +293,18 @@ impl SqlBackendHandler {
             .await?;
         }
 
-        // Only clear krbPrincipalName when toggling OFF.
-        if let Some(false) = kerb_sync_enabled {
-            info!("kerberossync toggled OFF for user {} — clearing krbPrincipalName", request.user_id);
-
-            let update = model::users::ActiveModel {
-                user_id: ActiveValue::Set(request.user_id.clone()),
-                krb_principal_name: ActiveValue::Set(None),
-                modified_date: ActiveValue::Set(now),
-                ..Default::default()
-            };
-            update.update(transaction).await?;
-        } else if let Some(true) = kerb_sync_enabled {
-            info!("kerberossync toggled ON for user {} — waiting for next password change to inject krbPrincipalName", request.user_id);
-            // Do nothing here — field stays None until password change triggers ensure(true)
+        match kerb_sync_enabled {
+            Some(false) => {
+                let update = model::users::ActiveModel {
+                    user_id: ActiveValue::Set(request.user_id.clone()),
+                    krb_principal_name: ActiveValue::Set(None),
+                    modified_date: ActiveValue::Set(now),
+                    ..Default::default()
+                };
+                update.update(transaction).await?;
+            }
+            Some(true) => {}
+            None => {}
         }
 
         Ok(())
@@ -327,7 +313,7 @@ impl SqlBackendHandler {
 
 #[async_trait]
 impl UserBackendHandler for SqlBackendHandler {
-    #[instrument(skip_all, level = "debug", ret, err, fields(user_id = ?user_id.as_str()))]
+    #[instrument(skip_all, level = "debug", err, fields(user_id = ?user_id.as_str()))]
     async fn get_user_details(&self, user_id: &UserId) -> Result<User> {
         let mut user = User::from(
             model::User::find_by_id(user_id.to_owned())
@@ -412,12 +398,19 @@ impl UserBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
 
-        let mut new_user_attributes = Vec::new();
         self.sql_pool
         .transaction::<_, (), DomainError>(|transaction| {
             Box::pin(async move {
                 let schema = Self::get_schema_with_transaction(transaction).await?;
+                let mut new_user_attributes = Vec::new();
+
                 for attribute in request.attributes {
+                    let canonical_name = schema
+                    .user_attributes()
+                    .get_by_name_or_alias(attribute.name.as_str())
+                    .map(|s| s.name.clone().into())
+                    .unwrap_or_else(|| attribute.name.clone());
+
                     if schema
                         .user_attributes()
                         .get_attribute_type(attribute.name.as_str())
@@ -426,22 +419,19 @@ impl UserBackendHandler for SqlBackendHandler {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
-                                                     attribute_name: Set(attribute.name),
+                                                     attribute_name: Set(canonical_name.clone()),
                                                      value: Set(Serialized(db_value)),
                             });
-                        } else {
-                            return Err(DomainError::InternalError(format!(
-                                "Attribute name {} doesn't exist in the user schema",
-                                &attribute.name
-                            )));
                         }
                 }
+
                 new_user.insert(transaction).await?;
                 if !new_user_attributes.is_empty() {
-                    model::UserAttributes::insert_many(new_user_attributes)
+                    let _ = model::UserAttributes::insert_many(new_user_attributes)
                     .exec(transaction)
                     .await?;
                 }
+
                 Ok(())
             })
         })

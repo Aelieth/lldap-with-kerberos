@@ -13,19 +13,19 @@ pub fn deserialize_attribute_value(
 ) -> AttributeValue {
     match (typ, is_list) {
         (AttributeType::String, false) => {
-            AttributeValue::String(Cardinality::Singleton(value.unwrap()))
+            let s = std::str::from_utf8(&value.0).unwrap_or("");
+            AttributeValue::String(Cardinality::Singleton(s.to_string()))
         }
         (AttributeType::String, true) => {
-            AttributeValue::String(Cardinality::Unbounded(value.unwrap()))
+            let s = std::str::from_utf8(&value.0).unwrap_or("");
+            AttributeValue::String(Cardinality::Unbounded(vec![s.to_string()]))
         }
         (AttributeType::Integer, false) => {
-            // NEW: parse string bytes ("1" or "0") back to i64
             let s = std::str::from_utf8(&value.0).unwrap_or("0");
             let i: i64 = s.parse().unwrap_or(0);
             AttributeValue::Integer(Cardinality::Singleton(i))
         }
         (AttributeType::Integer, true) => {
-            // list of integers (future-proof)
             let s = std::str::from_utf8(&value.0).unwrap_or("0");
             let i: i64 = s.parse().unwrap_or(0);
             AttributeValue::Integer(Cardinality::Unbounded(vec![i]))

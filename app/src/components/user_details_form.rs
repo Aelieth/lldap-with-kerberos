@@ -51,6 +51,7 @@ pub struct UserDetailsForm {
     user: User,
     form_ref: NodeRef,
         kerberossync_enabled: bool,
+        original_kerberossync_enabled: bool,
         show_kerberos_banner: bool,
 }
 
@@ -82,6 +83,8 @@ impl CommonComponent<UserDetailsForm> for UserDetailsForm {
                 if response.is_ok() {
                     self.show_kerberos_banner = false;
                     self.just_updated = true;
+                    // Keep original in sync here too (handles the CommonComponent path)
+                    self.original_kerberossync_enabled = self.kerberossync_enabled;
                 }
                 Ok(true)
             }
@@ -110,6 +113,7 @@ impl Component for UserDetailsForm {
             user: ctx.props().user.clone(),
             form_ref: NodeRef::default(),
                 kerberossync_enabled,
+                original_kerberossync_enabled: kerberossync_enabled,  // ← capture original
                 show_kerberos_banner: false,
         }
     }
@@ -122,13 +126,15 @@ impl Component for UserDetailsForm {
             Msg::UserUpdated(response) => {
                 if response.is_ok() {
                     self.just_updated = true;
-                    self.show_kerberos_banner = false;   // hide banner after successful save
+                    self.show_kerberos_banner = false;
+                    // Sync original value so next edit is clean
+                    self.original_kerberossync_enabled = self.kerberossync_enabled;
                 }
                 true
             }
             Msg::ToggleKerberosSync(value) => {
                 self.kerberossync_enabled = value;
-                self.show_kerberos_banner = value;   // banner appears ONLY when turned ON
+                self.show_kerberos_banner = value;
                 true
             }
         }
@@ -218,38 +224,60 @@ impl Component for UserDetailsForm {
 
 impl UserDetailsForm {
     fn submit_user_update_form(&mut self, ctx: &Context<Self>) -> bool {
-        let mut all_values = read_all_form_attributes(
+        let form_values = read_all_form_attributes(
             ctx.props().user_attributes_schema.iter(),
-                                                      &self.form_ref,
-                                                      IsAdmin(ctx.props().is_admin),
-                                                      EmailIsRequired(!ctx.props().is_edited_user_admin),
+                                                   &self.form_ref,
+                                                   IsAdmin(ctx.props().is_admin),
+                                                   EmailIsRequired(!ctx.props().is_edited_user_admin),
         ).unwrap_or_default();
 
         let base_attributes = &self.user.attributes;
-        all_values.retain(|a| {
-            let base_val = base_attributes.iter().find(|base_val| base_val.name == a.name);
-            base_val.map(|v| v.value != a.values).unwrap_or(!a.values.is_empty())
-        });
 
-        all_values.retain(|a| a.name != "kerberossync");
-        all_values.push(AttributeValue {
-            name: "kerberossync".to_string(),
-                        values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
-        });
+        let empty: Vec<String> = vec![];  // lives for the whole function → fixes borrow error
 
-        let remove_attributes: Option<Vec<String>> = if all_values.is_empty() {
+        let mut to_insert: Vec<AttributeValue> = vec![];
+        let mut to_remove: Vec<String> = vec![];
+
+        for attr in form_values {
+            let name = &attr.name;
+            let old_val = base_attributes.iter().find(|b| &b.name == name);
+            let old_values = old_val.map_or(&empty, |v| &v.value);
+
+            let has_changed = old_values != &attr.values;
+
+            if !has_changed {
+                continue;
+            }
+
+            if name == "kerberossync" {
+                if self.kerberossync_enabled != self.original_kerberossync_enabled {
+                    to_insert.push(AttributeValue {
+                        name: "kerberossync".to_string(),
+                                   values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
+                    });
+                }
+                continue;
+            }
+
+            if attr.values.is_empty() {
+                to_remove.push(name.clone());
+            } else {
+                to_insert.push(attr);
+            }
+        }
+
+        let remove_attributes = if to_remove.is_empty() {
             None
         } else {
-            Some(all_values.iter().map(|a| a.name.clone()).collect())
+            Some(to_remove)
         };
 
-        let insert_attributes: Option<Vec<update_user::AttributeValueInput>> = if remove_attributes.is_none() {
+        let insert_attributes: Option<Vec<update_user::AttributeValueInput>> = if to_insert.is_empty() {
             None
         } else {
             Some(
-                all_values
+                to_insert
                 .into_iter()
-                .filter(|a| !a.values.is_empty())
                 .map(|AttributeValue { name, values }| update_user::AttributeValueInput {
                     name,
                     value: values,
@@ -258,7 +286,18 @@ impl UserDetailsForm {
             )
         };
 
-        let mut user_input = update_user::UpdateUserInput {
+        let user_input = update_user::UpdateUserInput {  // no mut needed
+            id: self.user.id.clone(),
+            email: None,
+            displayName: None,
+            firstName: None,
+            lastName: None,
+            avatar: None,
+            removeAttributes: remove_attributes,
+            insertAttributes: insert_attributes,
+        };
+
+        let default_user_input = update_user::UpdateUserInput {
             id: self.user.id.clone(),
             email: None,
             displayName: None,
@@ -268,9 +307,6 @@ impl UserDetailsForm {
             removeAttributes: None,
             insertAttributes: None,
         };
-        let default_user_input = user_input.clone();
-        user_input.removeAttributes = remove_attributes;
-        user_input.insertAttributes = insert_attributes;
 
         if user_input == default_user_input {
             return false;
