@@ -223,23 +223,30 @@ impl SqlBackendHandler {
                 };
             }
 
-            if schema
-                .user_attributes()
-                .get_attribute_type(attribute.name.as_str())
-                .is_some()
-                {
-                    let db_value = attribute_value_to_db_bytes(&attribute.value);
-                    update_user_attributes.push(model::user_attributes::ActiveModel {
-                        user_id: Set(user_id.clone()),
-                                                attribute_name: Set(canonical_name.clone()),
-                                                value: Set(Serialized(db_value)),
-                    });
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "User attribute name {} doesn't exist in the schema",
-                        &attribute.name
-                    )));
+            if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
+
+                // === WHAT ACTUALLY HITS THE EAV TABLE ===
+                if canonical_name.as_str() == "avatar" {
+                    tracing::info!("EAV_AVATAR_INSERT: raw bytes length = {}", db_value.len());
+                    if !db_value.is_empty() {
+                        tracing::info!("EAV_AVATAR_INSERT: first 16 bytes hex = {:02x?}", &db_value[0..16.min(db_value.len())]);
+                    } else {
+                        tracing::info!("EAV_AVATAR_INSERT: EMPTY BYTES - avatar will stay blank");
+                    }
                 }
+
+                update_user_attributes.push(model::user_attributes::ActiveModel {
+                    user_id: Set(user_id.clone()),
+                                            attribute_name: Set(canonical_name.clone()),
+                                            value: Set(Serialized(db_value)),
+                });
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "User attribute name {} doesn't exist in the schema",
+                    &attribute.name
+                )));
+            }
         }
 
         Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
@@ -332,11 +339,17 @@ impl UserBackendHandler for SqlBackendHandler {
         user.attributes = attributes
         .into_iter()
         .map(|a| {
-            deserialize::deserialize_attribute(
+            let attr = deserialize::deserialize_attribute(
                 a.attribute_name,
                 &a.value,
                 schema.user_attributes(),
-            )
+            )?;
+
+            // === SAFE READ PATH LOGGING ===
+            if attr.name.as_str() == "avatar" {
+                tracing::info!("GET_USER_DETAILS: avatar attribute found in EAV");
+            }
+            Ok(attr)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -362,7 +375,7 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Enforce Integer only for kerberossync (frontend now sends Integer)
+        // Enforce Integer only for kerberossync
         let kerb_index = request
         .attributes
         .iter()
@@ -417,6 +430,17 @@ impl UserBackendHandler for SqlBackendHandler {
                         .is_some()
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
+
+                            // === WHAT ACTUALLY HITS THE DATABASE ===
+                            if canonical_name.as_str() == "avatar" {
+                                tracing::info!("EAV_CREATE_INSERT: raw bytes length = {}", db_value.len());
+                                if !db_value.is_empty() {
+                                    tracing::info!("EAV_CREATE_INSERT: first 16 bytes hex = {:02x?}", &db_value[0..16.min(db_value.len())]);
+                                } else {
+                                    tracing::info!("EAV_CREATE_INSERT: EMPTY BYTES - avatar will stay blank");
+                                }
+                            }
+
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
                                                      attribute_name: Set(canonical_name.clone()),

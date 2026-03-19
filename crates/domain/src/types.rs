@@ -290,97 +290,37 @@ impl AsRef<GroupName> for GroupName {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, DeriveValueType, Hash)]
-#[sea_orm(
-column_type = "Custom(SeaRc::new(MySqlType::MediumBlob))",
-          array_type = "Bytes"
+#[derive(
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    DeriveValueType,
+    Hash,
 )]
-pub struct JpegPhoto(#[serde(with = "serde_bytes")] Vec<u8>);
+#[sea_orm(
+    column_type = "Blob",
+    array_type = "Bytes"
+)]
+pub struct Avatar(pub Bytes);
 
 const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
-impl From<&JpegPhoto> for Value {
-    fn from(photo: &JpegPhoto) -> Self {
-        photo.0.as_slice().into()
+impl Avatar {
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        Self(bytes)
     }
-}
 
-impl TryFrom<&[u8]> for JpegPhoto {
-    type Error = anyhow::Error;
-    fn try_from(bytes: &[u8]) -> anyhow::Result<Self> {
-        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
-            return Err(anyhow::anyhow!(
-                "Avatar too large: {} bytes (max 2 MB)",
-                bytes.len()
-            ));
-        }
-        if bytes.is_empty() {
-            return Ok(JpegPhoto::null());
-        }
-        image::io::Reader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
-            .decode()?;
-        Ok(JpegPhoto(bytes.to_vec()))
-    }
-}
-
-impl TryFrom<Vec<u8>> for JpegPhoto {
-    type Error = anyhow::Error;
-    fn try_from(bytes: Vec<u8>) -> anyhow::Result<Self> {
-        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
-            return Err(anyhow::anyhow!(
-                "Avatar too large: {} bytes (max 2 MB)",
-                bytes.len()
-            ));
-        }
-        if bytes.is_empty() {
-            return Ok(JpegPhoto::null());
-        }
-        image::io::Reader::with_format(
-            std::io::Cursor::new(bytes.as_slice()),
-            image::ImageFormat::Jpeg,
-        )
-        .decode()?;
-        Ok(JpegPhoto(bytes))
-    }
-}
-
-impl TryFrom<&str> for JpegPhoto {
-    type Error = anyhow::Error;
-    fn try_from(string: &str) -> anyhow::Result<Self> {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(string)?;
-        Self::try_from(bytes)
-    }
-}
-
-impl From<&JpegPhoto> for String {
-    fn from(val: &JpegPhoto) -> Self {
-        base64::engine::general_purpose::STANDARD.encode(&val.0)
-    }
-}
-
-impl std::fmt::Debug for JpegPhoto {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut encoded = base64::engine::general_purpose::STANDARD.encode(&self.0);
-        if encoded.len() > 100 {
-            encoded.truncate(100);
-            encoded.push_str(" ...");
-        };
-        f.debug_tuple("JpegPhoto")
-            .field(&format!("b64[{encoded}]"))
-            .finish()
-    }
-}
-
-impl JpegPhoto {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     pub fn null() -> Self {
-        Self(vec![])
+        Self(Bytes::new())
     }
 
-    pub fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Bytes {
         self.0
     }
 
@@ -388,30 +328,83 @@ impl JpegPhoto {
     pub fn for_tests() -> Self {
         use image::{ImageOutputFormat, Rgb, RgbImage};
         let img = RgbImage::from_fn(32, 32, |x, y| {
-            if (x + y) % 2 == 0 {
-                Rgb([0, 0, 0])
-            } else {
-                Rgb([255, 255, 255])
-            }
+            if (x + y) % 2 == 0 { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) }
         });
-        let mut bytes: Vec<u8> = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut bytes),
-            ImageOutputFormat::Jpeg(0),
-        )
-        .unwrap();
-        Self(bytes)
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageOutputFormat::Jpeg(0)).unwrap();
+        Self(Bytes::from(buf))
     }
 }
 
-impl Default for JpegPhoto {
+impl From<&Avatar> for Value {
+    fn from(photo: &Avatar) -> Self {
+        photo.0.as_ref().into()
+    }
+}
+
+impl TryFrom<&[u8]> for Avatar {
+    type Error = anyhow::Error;
+    fn try_from(bytes: &[u8]) -> anyhow::Result<Self> {
+        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
+            return Err(anyhow::anyhow!("Avatar too large: {} bytes (max 2 MB)", bytes.len()));
+        }
+        if bytes.is_empty() {
+            return Ok(Self::null());
+        }
+        // Generic validation: JPEG, PNG, BMP (and anything image crate supports)
+        let reader = image::io::Reader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|e| anyhow::anyhow!("Invalid image format: {}", e))?;
+        match reader.format() {
+            Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Png) | Some(image::ImageFormat::Bmp) => {},
+            _ => return Err(anyhow::anyhow!("Only JPEG, PNG, and BMP images are allowed")),
+        }
+        Ok(Self(Bytes::from(bytes.to_vec())))
+    }
+}
+
+impl TryFrom<Bytes> for Avatar {
+    type Error = anyhow::Error;
+    fn try_from(bytes: Bytes) -> anyhow::Result<Self> {
+        Self::try_from(bytes.as_ref())
+    }
+}
+
+impl TryFrom<&str> for Avatar {
+    type Error = anyhow::Error;
+    fn try_from(string: &str) -> anyhow::Result<Self> {
+        let bytes = general_purpose::STANDARD.decode(string)?;
+        Self::try_from(Bytes::from(bytes))
+    }
+}
+
+impl From<&Avatar> for String {
+    fn from(val: &Avatar) -> Self {
+        general_purpose::STANDARD.encode(&val.0)
+    }
+}
+
+impl std::fmt::Debug for Avatar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut encoded = general_purpose::STANDARD.encode(&self.0);
+        if encoded.len() > 100 {
+            encoded.truncate(100);
+            encoded.push_str(" ...");
+        }
+        f.debug_tuple("Avatar")
+            .field(&format!("b64[{} bytes]", self.0.len()))
+            .finish()
+    }
+}
+
+impl Default for Avatar {
     fn default() -> Self {
         Self::null()
     }
 }
 
-impl IntoActiveValue<JpegPhoto> for JpegPhoto {
-    fn into_active_value(self) -> sea_orm::ActiveValue<JpegPhoto> {
+impl IntoActiveValue<Avatar> for Avatar {
+    fn into_active_value(self) -> sea_orm::ActiveValue<Avatar> {
         if self.is_empty() {
             sea_orm::ActiveValue::NotSet
         } else {

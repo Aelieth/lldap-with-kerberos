@@ -17,6 +17,7 @@ use anyhow::Result;
 use chrono::NaiveDateTime;
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
+use gloo_console::log;
 
 /// The GraphQL query sent to the server to update the user details.
 #[derive(GraphQLQuery)]
@@ -231,6 +232,15 @@ impl UserDetailsForm {
                                                    EmailIsRequired(!ctx.props().is_edited_user_admin),
         ).unwrap_or_default();
 
+        // === WHAT THE FORM READER ACTUALLY SAW (gloo) ===
+        if let Some(avatar_attr) = form_values.iter().find(|a| a.name == "avatar") {
+            let avatar_val = avatar_attr.values.first().cloned().unwrap_or_default();
+            log!("EDIT_FORM_READER: avatar value length = {}", avatar_val.len());
+            if avatar_val.len() > 100 {
+                log!("EDIT_FORM_READER: avatar base64 starts with: {}", &avatar_val[0..100.min(avatar_val.len())]);
+            }
+        }
+
         let base_attributes = &self.user.attributes;
 
         let empty: Vec<String> = vec![];  // lives for the whole function → fixes borrow error
@@ -373,7 +383,7 @@ fn get_custom_attribute_static(
                 v
             }
         },
-        AttributeType::JpegPhoto => |_: String| "JPEG photo".to_string(),
+        AttributeType::JpegPhoto => |_: String| "Avatar image (JPEG or PNG)".to_string(),
     };
 
     html! {

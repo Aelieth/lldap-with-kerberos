@@ -3170,6 +3170,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "strum 0.25.0",
+ "tracing",
  "uuid 1.19.0",
 ]
 

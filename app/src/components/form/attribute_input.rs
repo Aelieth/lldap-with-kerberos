@@ -20,37 +20,45 @@ struct AttributeInputProps {
 fn attribute_input(props: &AttributeInputProps) -> Html {
     let current_value = use_state(|| props.value.clone().unwrap_or_default());
 
-    let input_type = match props.attribute_type {
-        AttributeType::String => "text",
-        AttributeType::Integer => "number",
-        AttributeType::DateTime => {
-            return html! {
-                <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
-            };
-        }
-        AttributeType::JpegPhoto => {
+    // ROBUST GUARD: Force JpegFileInput for any avatar field
+    // This matches original LLDAP dispatch but survives our EAV + Kerberos schema changes
+    if props.attribute_type == AttributeType::JpegPhoto
+        || props.name == AttrValue::Static("avatar")
+        || props.name == AttrValue::Static("jpegphoto")
+        || props.name == AttrValue::Static("jpegPhoto") {
             return html! {
                 <JpegFileInput name={props.name.clone()} value={props.value.clone()} />
             };
         }
-    };
 
-    let onchange = {
-        let current_value = current_value.clone();
-        Callback::from(move |e: Event| {
-            let input: HtmlInputElement = e.target_unchecked_into();
-            current_value.set(input.value());
-        })
-    };
+        let input_type = match props.attribute_type {
+            AttributeType::String => "text",
+            AttributeType::Integer => "number",
+            AttributeType::DateTime => {
+                return html! {
+                    <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
+                };
+            }
+            // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
+            AttributeType::JpegPhoto => unreachable!("JpegPhoto already handled by guard above"),
+        };
 
-    html! {
-        <input
-        type={input_type}
-        name={props.name.clone()}
-        class="form-control"
-        value={(*current_value).clone()}
-        onchange={onchange} />
-    }
+        let onchange = {
+            let current_value = current_value.clone();
+            Callback::from(move |e: Event| {
+                let input: HtmlInputElement = e.target_unchecked_into();
+                current_value.set(input.value());
+            })
+        };
+
+        html! {
+            <input
+            type={input_type}
+            name={props.name.clone()}
+            class="form-control"
+            value={(*current_value).clone()}
+            onchange={onchange} />
+        }
 }
 
 #[derive(Properties, PartialEq)]

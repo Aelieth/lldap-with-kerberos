@@ -128,6 +128,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                                                              user.avatar,
         );
 
+        // === LOG WHAT REACHES THE MUTATION ===
+        if let Some(avatar) = consolidated_attributes.iter().find(|a| a.name == "avatar") {
+            if let Some(v) = avatar.value.first() {
+                tracing::info!("MUTATION_CREATE: avatar base64 from frontend length = {}", v.len());
+                if v.len() > 100 {
+                    tracing::info!("MUTATION_CREATE: avatar base64 starts with: {}", &v[0..100.min(v.len())]);
+                }
+            }
+        }
+
         let UnpackedAttributes {
             email,
             display_name,
@@ -137,11 +147,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         handler
         .create_user(CreateUserRequest {
             user_id: user_id.clone(),
-                     email: user
-                     .email
-                     .map(Email::from)
-                     .or(email)
-                     .ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
+                     email: user.email.map(Email::from).or(email).ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
                      display_name: user.display_name.or(display_name),
                      attributes,
         })

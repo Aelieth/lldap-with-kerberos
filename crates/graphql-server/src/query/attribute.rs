@@ -8,12 +8,9 @@ use lldap_domain_handlers::handler::BackendHandler;
 use serde::{Deserialize, Serialize};
 use lldap_opaque_handler::OpaqueHandler;
 use crate::api::Context;
-
-// Single source of truth for the entire schema (user + group + POSIX + Kerberos)
-// uidnumber, gidnumber, homedirectory, loginshell, kerberossync, krbprincipalname
-// all appear automatically in the web UI with correct types/visibility/editable flags.
-// No more duplication, perfect for KDE/GNOME SSO + Keycloak federation on ZimaBlade.
 use lldap_schema::{AttributeSchema as SchemaAttributeSchema, PublicSchema};
+use base64::engine::general_purpose;
+use base64::Engine;
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct AttributeSchema<Handler: BackendHandler> {
@@ -115,8 +112,18 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
         DomainAttributeValue::Integer(Cardinality::Unbounded(l)) => l.iter().map(|i| i.to_string()).collect(),
         DomainAttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![convert_date(dt)],
         DomainAttributeValue::DateTime(Cardinality::Unbounded(l)) => l.iter().map(convert_date).collect(),
-        DomainAttributeValue::JpegPhoto(Cardinality::Singleton(p)) => vec![String::from(p)],
-        DomainAttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => l.iter().map(String::from).collect(),
+        DomainAttributeValue::JpegPhoto(Cardinality::Singleton(p)) => {
+            let bytes: Vec<u8> = p.clone().into_bytes();   // extract raw JPEG/PNG bytes (same method used in sql_user_backend_handler.rs)
+            let b64 = general_purpose::STANDARD.encode(&bytes);
+            tracing::info!("GRAPHQL_SERIALIZE_AVATAR: JpegPhoto raw bytes length = {}, base64 length = {}", bytes.len(), b64.len());
+            vec![b64]
+        }
+        DomainAttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => {
+            l.iter().map(|p| {
+                let bytes: Vec<u8> = p.clone().into_bytes();
+                general_purpose::STANDARD.encode(&bytes)
+            }).collect()
+        }
     }
 }
 

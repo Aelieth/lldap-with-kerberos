@@ -24,6 +24,8 @@ bincode = "1.3"
 itertools = "0.10"
 juniper = "0.15"
 serde_bytes = "0.11"
+tracing = "*"
+bytes = "1.9"
 
 [dev-dependencies]
 pretty_assertions = "1"

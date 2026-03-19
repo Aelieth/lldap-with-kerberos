@@ -26,6 +26,7 @@ use yew::prelude::*;
 use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
+use gloo_console::log;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
@@ -199,6 +200,15 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                                                           IsAdmin(true),
                                                           EmailIsRequired(true),
                 )?;
+
+                // === WHAT THE FORM READER ACTUALLY SAW (gloo) ===
+                if let Some(avatar_attr) = all_values.iter().find(|a| a.name == "avatar") {
+                    let avatar_val = avatar_attr.values.first().cloned().unwrap_or_default();
+                    log!("CREATE_FORM_READER: avatar value length = {}", avatar_val.len());
+                    if avatar_val.len() > 100 {
+                        log!("CREATE_FORM_READER: avatar base64 starts with: {}", &avatar_val[0..100.min(avatar_val.len())]);
+                    }
+                }
 
                 let mut attributes = vec![];
                 let mut email = None;
