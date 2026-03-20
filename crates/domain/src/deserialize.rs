@@ -30,12 +30,6 @@ pub fn deserialize_attribute_value(
         .decode(value)
         .context("Invalid base64 data for avatar")?;
 
-        tracing::info!("DESERIALIZE_AVATAR: decoded raw bytes length = {}", raw_bytes.len());
-        if !raw_bytes.is_empty() {
-            tracing::info!("DESERIALIZE_AVATAR: first 16 bytes hex = {:02x?}", &raw_bytes[0..16.min(raw_bytes.len())]);
-        }
-
-        // Direct construction using our new Avatar(pub Vec<u8>) struct — exactly like types.rs
         Ok(Avatar(raw_bytes))
     };
     Ok(match (typ, is_list) {
@@ -49,7 +43,7 @@ pub fn deserialize_attribute_value(
        (AttributeType::DateTime, true) => {
            (value.iter().map(parse_date).collect::<Result<Vec<_>>>()?).into()
        }
-       (AttributeType::Avatar, false) => (parse_avatar(&value[0])?).into(),   // ← renamed from JpegPhoto
+       (AttributeType::Avatar, false) => (parse_avatar(&value[0])?).into(),
        (AttributeType::Avatar, true) => {
            (value.iter().map(parse_avatar).collect::<Result<Vec<_>>>()?).into()
        }

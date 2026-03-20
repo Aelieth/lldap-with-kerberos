@@ -38,18 +38,9 @@ pub fn deserialize_attribute_value(
             AttributeValue::DateTime(Cardinality::Unbounded(value.unwrap()))
         }
         (AttributeType::Avatar, false) => {
-            tracing::info!("DOMAIN_MODEL_DESERIALIZE_AVATAR: ENTERED (singleton) - Serialized raw bytes length = {}", value.0.len());
-            if !value.0.is_empty() {
-                tracing::info!("DOMAIN_MODEL_DESERIALIZE_AVATAR: first 16 bytes hex = {:02x?}", &value.0[0..16.min(value.0.len())]);
-            }
-            // ← EXPLICIT CONSTRUCTION (this was the missing piece)
             AttributeValue::Avatar(Cardinality::Singleton(Avatar(value.0.clone())))
         }
         (AttributeType::Avatar, true) => {
-            tracing::info!("DOMAIN_MODEL_DESERIALIZE_AVATAR: ENTERED (list) - Serialized raw bytes length = {}", value.0.len());
-            if !value.0.is_empty() {
-                tracing::info!("DOMAIN_MODEL_DESERIALIZE_AVATAR: first 16 bytes hex = {:02x?}", &value.0[0..16.min(value.0.len())]);
-            }
             AttributeValue::Avatar(Cardinality::Unbounded(vec![Avatar(value.0.clone())]))
         }
     }
