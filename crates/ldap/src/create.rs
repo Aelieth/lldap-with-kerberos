@@ -119,7 +119,7 @@ async fn create_user(
         {
             new_user_attributes.push(Attribute {
                 name: "avatar".into(),
-                                     value: deserialize::deserialize_attribute_value(&[avatar], AttributeType::JpegPhoto, false)
+                                     value: deserialize::deserialize_attribute_value(&[avatar], AttributeType::Avatar, false)  // ← TOTAL RIP-OUT: was JpegPhoto
                                      .map_err(|e| LdapError {
                                          code: LdapResultCode::ConstraintViolation,
                                          message: format!("Invalid avatar value: {e}"),

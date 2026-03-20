@@ -1,4 +1,4 @@
-use crate::types::{AttributeType, AttributeValue, JpegPhoto};
+use crate::types::{AttributeType, AttributeValue, Avatar};
 use anyhow::{Context as AnyhowContext, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose;
@@ -21,9 +21,9 @@ pub fn deserialize_attribute_value(
         .with_context(|| format!("Invalid date value {value}"))?
         .naive_utc())
     };
-    let parse_photo = |value: &String| -> Result<JpegPhoto> {
+    let parse_avatar = |value: &String| -> Result<Avatar> {
         if value.is_empty() {
-            return Ok(JpegPhoto::null());
+            return Ok(Avatar::null());
         }
 
         let raw_bytes = general_purpose::STANDARD
@@ -35,8 +35,8 @@ pub fn deserialize_attribute_value(
             tracing::info!("DESERIALIZE_AVATAR: first 16 bytes hex = {:02x?}", &raw_bytes[0..16.min(raw_bytes.len())]);
         }
 
-        // Direct construction — this is the missing piece (bypasses the broken TryFrom path)
-        Ok(JpegPhoto(raw_bytes))   // ← this line was the culprit
+        // Direct construction using our new Avatar(pub Vec<u8>) struct — exactly like types.rs
+        Ok(Avatar(raw_bytes))
     };
     Ok(match (typ, is_list) {
         (AttributeType::String, false) => value[0].clone().into(),
@@ -49,9 +49,9 @@ pub fn deserialize_attribute_value(
        (AttributeType::DateTime, true) => {
            (value.iter().map(parse_date).collect::<Result<Vec<_>>>()?).into()
        }
-       (AttributeType::JpegPhoto, false) => (parse_photo(&value[0])?).into(),
-       (AttributeType::JpegPhoto, true) => {
-           (value.iter().map(parse_photo).collect::<Result<Vec<_>>>()?).into()
+       (AttributeType::Avatar, false) => (parse_avatar(&value[0])?).into(),   // ← renamed from JpegPhoto
+       (AttributeType::Avatar, true) => {
+           (value.iter().map(parse_avatar).collect::<Result<Vec<_>>>()?).into()
        }
     })
 }

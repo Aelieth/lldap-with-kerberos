@@ -123,18 +123,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
-                                                             user.first_name,
-                                                             user.last_name,
-                                                             user.avatar,
+            user.first_name,
+            user.last_name,
+            user.avatar,
         );
 
         // === LOG WHAT REACHES THE MUTATION ===
         if let Some(avatar) = consolidated_attributes.iter().find(|a| a.name == "avatar") {
             if let Some(v) = avatar.value.first() {
-                tracing::info!("MUTATION_CREATE: avatar base64 from frontend length = {}", v.len());
-                if v.len() > 100 {
-                    tracing::info!("MUTATION_CREATE: avatar base64 starts with: {}", &v[0..100.min(v.len())]);
-                }
+                debug!("MUTATION_CREATE: avatar base64 length = {}", v.len());
             }
         }
 
@@ -238,7 +235,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         create_group_with_details(context, request, span).await
     }
 
-    async fn update_user(
+        async fn update_user(
         context: &Context<Handler>,
         user: UpdateUserInput,
     ) -> FieldResult<Success> {
@@ -253,34 +250,46 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let is_admin = context.validation_result.is_admin();
         let schema = handler.get_schema().await?;
 
+        debug!("MUTATION_UPDATE: remove_attributes from frontend = {:?}", user.remove_attributes);
+
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
-                                                             user.first_name,
-                                                             user.last_name,
-                                                             user.avatar,
+            user.first_name,
+            user.last_name,
+            user.avatar,
         );
 
-        let (delete_attrs, insert_attrs): (Vec<_>, Vec<_>) = consolidated_attributes
-        .into_iter()
-        .partition(|a| a.value == vec!["".to_string()]);
+        let mut delete_attributes: Vec<String> = user.remove_attributes.unwrap_or_default();
 
-        let mut delete_attributes: Vec<String> = delete_attrs
-        .iter()
-        .map(|a| a.name.to_owned())
-        .collect();
-        delete_attributes.extend(user.remove_attributes.unwrap_or_default());
+        for attr in &consolidated_attributes {
+            if attr.value.is_empty() || attr.value == vec!["".to_string()] {
+                if !delete_attributes.contains(&attr.name) {
+                    delete_attributes.push(attr.name.clone());
+                    debug!("MUTATION_UPDATE: Adding {} to delete list from empty value", attr.name);
+                }
+            }
+        }
+
+        debug!("MUTATION_UPDATE: FINAL delete_attributes list = {:?}", delete_attributes);
 
         let UnpackedAttributes {
             email,
             display_name,
             attributes: insert_attributes,
-        } = unpack_attributes(insert_attrs, &schema, is_admin)?;
+        } = unpack_attributes(
+            consolidated_attributes
+                .into_iter()
+                .filter(|a| !delete_attributes.contains(&a.name))
+                .collect(),
+            &schema,
+            is_admin,
+        )?;
 
         let display_name = display_name.or_else(|| {
             delete_attributes
-            .iter()
-            .find(|attr| *attr == "display_name")
-            .map(|_| String::new())
+                .iter()
+                .find(|attr| *attr == "display_name")
+                .map(|_| String::new())
         });
 
         handler
@@ -317,10 +326,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 info!("Deleted Kerberos principal for user {} (sync disabled)", user_id);
             }
         } else {
-            debug!("Kerberos sync enabled for user {} — waiting for password change to trigger sync", user_id);
+            debug!("Kerberos sync enabled for user {} — waiting for password change", user_id);
         }
 
-        // No ensure call here on re-enable — only on password changes
         Ok(Success::new())
     }
 

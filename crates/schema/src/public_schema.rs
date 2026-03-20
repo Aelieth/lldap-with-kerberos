@@ -15,7 +15,7 @@ impl PublicSchema {
                     AttributeSchema {
                         name: "avatar".into(),
                         aliases: vec!["jpegphoto".into(), "jpegPhoto".into()],
-                        attribute_type: AttributeType::JpegPhoto,
+                        attribute_type: AttributeType::Avatar, // ← renamed from JpegPhoto (now supports JPG/PNG/BMP for KDE/GNOME)
                         is_list: false,
                         is_visible: true,
                         is_editable: true,

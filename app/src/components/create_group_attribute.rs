@@ -144,7 +144,7 @@ impl Component for CreateGroupAttributeForm {
                 oninput={link.callback(|_| Msg::Update)}>
                 <option selected=true value="String">{"String"}</option>
                 <option value="Integer">{"Integer"}</option>
-                <option value="JpegPhoto">{"Jpeg"}</option>
+                <option value="Avatar">{"Avatar"}</option>
                 <option value="DateTime">{"DateTime"}</option>
               </Select<CreateGroupAttributeModel>>
               <CheckBox<CreateGroupAttributeModel>

@@ -236,18 +236,18 @@ pub fn map_user_field(field: &AttributeName, schema: &PublicSchema) -> UserField
         }
         "givenname" | "first_name" | "firstname" => UserFieldType::Attribute(
             AttributeName::from("first_name"),
-                                                                             AttributeType::String,
-                                                                             false,
+            AttributeType::String,
+            false,
         ),
         "sn" | "last_name" | "lastname" => UserFieldType::Attribute(
             AttributeName::from("last_name"),
-                                                                    AttributeType::String,
-                                                                    false,
+            AttributeType::String,
+            false,
         ),
         "avatar" | "jpegphoto" => UserFieldType::Attribute(
             AttributeName::from("avatar"),
-                                                           AttributeType::JpegPhoto,
-                                                           false,
+            AttributeType::Avatar,
+            false,
         ),
         "creationdate" | "createtimestamp" | "creation_date" => {
             UserFieldType::PrimaryField(UserColumn::CreationDate)
@@ -336,35 +336,35 @@ pub fn get_custom_attribute(
     attribute_name: &AttributeName,
 ) -> Option<Vec<Vec<u8>>> {
     attributes
+    .iter()
+    .find(|a| &a.name == attribute_name)
+    .map(|attribute| match &attribute.value {
+        AttributeValue::String(Cardinality::Singleton(s)) => {
+            vec![s.clone().into_bytes()]
+        }
+        AttributeValue::String(Cardinality::Unbounded(l)) => {
+            l.iter().map(|s| s.clone().into_bytes()).collect()
+        }
+        AttributeValue::Integer(Cardinality::Singleton(i)) => {
+            // LDAP integers are encoded as strings.
+            vec![i.to_string().into_bytes()]
+        }
+        AttributeValue::Integer(Cardinality::Unbounded(l)) => l
         .iter()
-        .find(|a| &a.name == attribute_name)
-        .map(|attribute| match &attribute.value {
-            AttributeValue::String(Cardinality::Singleton(s)) => {
-                vec![s.clone().into_bytes()]
-            }
-            AttributeValue::String(Cardinality::Unbounded(l)) => {
-                l.iter().map(|s| s.clone().into_bytes()).collect()
-            }
-            AttributeValue::Integer(Cardinality::Singleton(i)) => {
-                // LDAP integers are encoded as strings.
-                vec![i.to_string().into_bytes()]
-            }
-            AttributeValue::Integer(Cardinality::Unbounded(l)) => l
-                .iter()
-                // LDAP integers are encoded as strings.
-                .map(|i| i.to_string().into_bytes())
-                .collect(),
-            AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => {
-                vec![p.clone().into_bytes()]
-            }
-            AttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => {
-                l.iter().map(|p| p.clone().into_bytes()).collect()
-            }
-            AttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![to_generalized_time(dt)],
-            AttributeValue::DateTime(Cardinality::Unbounded(l)) => {
-                l.iter().map(to_generalized_time).collect()
-            }
-        })
+        // LDAP integers are encoded as strings.
+        .map(|i| i.to_string().into_bytes())
+        .collect(),
+         AttributeValue::Avatar(Cardinality::Singleton(p)) => {  // ← TOTAL RIP-OUT
+             vec![p.0.clone()]
+         }
+         AttributeValue::Avatar(Cardinality::Unbounded(l)) => {  // ← TOTAL RIP-OUT
+             l.iter().map(|p| p.0.clone()).collect()
+         }
+         AttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![to_generalized_time(dt)],
+         AttributeValue::DateTime(Cardinality::Unbounded(l)) => {
+             l.iter().map(to_generalized_time).collect()
+         }
+    })
 }
 
 #[derive(derive_more::From)]

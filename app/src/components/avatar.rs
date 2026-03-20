@@ -17,15 +17,11 @@ fn get_avatar_data_url(base64_data: &str) -> String {
   if base64_data.is_empty() {
     return String::new();
   }
-  // Tiny decode just to check magic bytes (no re-encoding, keeps transparency)
   match general_purpose::STANDARD.decode(base64_data) {
-    Ok(bytes) if bytes.starts_with(&[0xFF, 0xD8]) => {
-      format!("data:image/jpeg;base64,{}", base64_data)
-    }
-    Ok(bytes) if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) => {
-      format!("data:image/png;base64,{}", base64_data)
-    }
-    _ => format!("data:image/jpeg;base64,{}", base64_data), // safe fallback
+    Ok(bytes) if bytes.starts_with(&[0xFF, 0xD8]) => format!("data:image/jpeg;base64,{}", base64_data),
+    Ok(bytes) if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) => format!("data:image/png;base64,{}", base64_data),
+    Ok(bytes) if bytes.starts_with(b"BM") => format!("data:image/bmp;base64,{}", base64_data),
+    _ => format!("data:image/jpeg;base64,{}", base64_data),
   }
 }
 
@@ -49,30 +45,15 @@ pub fn avatar(props: &Props) -> Html {
       let avatar = response.user.avatar.clone();
       match &avatar {
         Some(data) => html! {
-          <img
-          id="avatarDisplay"
-          src={get_avatar_data_url(data)}
-          style={format!("max-height:{}px;max-width:{}px;height:auto;width:auto;", props.height, props.width)}
-          alt="Avatar" />
+          <div style="background:transparent !important;background-color:transparent !important;display:inline-block;padding:2px;border-radius:4px;">
+          <div style={format!("width:{}px;height:{}px;background-image:url({});background-size:contain;background-repeat:no-repeat;background-position:center;background-color:transparent !important;", props.width, props.height, get_avatar_data_url(data))} />
+          </div>
         },
-        None => html! {
-          <BlankAvatarDisplay
-          width={props.width}
-          height={props.height} />
-        },
+        None => html! { <BlankAvatarDisplay width={props.width} height={props.height} /> },
       }
     }
-    LoadableResult::Loaded(Err(error)) => html! {
-      <BlankAvatarDisplay
-      error={error.to_string()}
-      width={props.width}
-      height={props.height} />
-    },
-    LoadableResult::Loading => html! {
-      <BlankAvatarDisplay
-      width={props.width}
-      height={props.height} />
-    },
+    LoadableResult::Loaded(Err(error)) => html! { <BlankAvatarDisplay error={error.to_string()} width={props.width} height={props.height} /> },
+    LoadableResult::Loading => html! { <BlankAvatarDisplay width={props.width} height={props.height} /> },
   }
 }
 
@@ -91,12 +72,7 @@ fn blank_avatar_display(props: &BlankAvatarDisplayProps) -> Html {
     None => "currentColor",
   };
   html! {
-    <svg xmlns="http://www.w3.org/2000/svg"
-    width={props.width.to_string()}
-    height={props.height.to_string()}
-    fill={fill}
-    class="bi bi-person-circle"
-    viewBox="0 0 16 16">
+    <svg xmlns="http://www.w3.org/2000/svg" width={props.width.to_string()} height={props.height.to_string()} fill={fill} class="bi bi-person-circle" viewBox="0 0 16 16">
     <title>{props.error.clone().unwrap_or(AttrValue::Static("Avatar"))}</title>
     <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>
     <path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1z"/>

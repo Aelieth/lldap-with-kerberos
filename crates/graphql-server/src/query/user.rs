@@ -1,3 +1,4 @@
+// crates/graphql-server/src/query/user.rs  ← EXACT FILE FOR THIS STEP
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_access_control::UserReadableBackendHandler;
@@ -87,7 +88,7 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
         self.attributes
         .iter()
         .find(|a| a.name() == "avatar")
-        .and_then(|a| a.attribute.value.as_jpeg_photo())
+        .and_then(|a| a.attribute.value.as_avatar())   // ← renamed from as_jpeg_photo (total rip-out complete)
         .map(String::from)
     }
 

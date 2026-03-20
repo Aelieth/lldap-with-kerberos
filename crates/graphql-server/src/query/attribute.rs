@@ -1,3 +1,4 @@
+// crates/graphql-server/src/query/attribute.rs  ← EXACT FILE FOR THIS STEP (serialize_avatar path)
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_domain::types::{
@@ -112,16 +113,23 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
         DomainAttributeValue::Integer(Cardinality::Unbounded(l)) => l.iter().map(|i| i.to_string()).collect(),
         DomainAttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![convert_date(dt)],
         DomainAttributeValue::DateTime(Cardinality::Unbounded(l)) => l.iter().map(convert_date).collect(),
-        DomainAttributeValue::JpegPhoto(Cardinality::Singleton(p)) => {
-            let bytes: Vec<u8> = p.clone().into_bytes();   // extract raw JPEG/PNG bytes (same method used in sql_user_backend_handler.rs)
-            let b64 = general_purpose::STANDARD.encode(&bytes);
-            tracing::info!("GRAPHQL_SERIALIZE_AVATAR: JpegPhoto raw bytes length = {}, base64 length = {}", bytes.len(), b64.len());
+        DomainAttributeValue::Avatar(Cardinality::Singleton(p)) => {
+            let bytes: Vec<u8> = p.0.clone();
+            let b64 = if bytes.is_empty() {
+                String::new()
+            } else {
+                general_purpose::STANDARD.encode(&bytes)
+            };
             vec![b64]
         }
-        DomainAttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => {
+        DomainAttributeValue::Avatar(Cardinality::Unbounded(l)) => {
             l.iter().map(|p| {
-                let bytes: Vec<u8> = p.clone().into_bytes();
-                general_purpose::STANDARD.encode(&bytes)
+                let bytes: Vec<u8> = p.0.clone();
+                if bytes.is_empty() {
+                    String::new()
+                } else {
+                    general_purpose::STANDARD.encode(&bytes)
+                }
             }).collect()
         }
     }

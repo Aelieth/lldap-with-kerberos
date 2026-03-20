@@ -1,6 +1,6 @@
 use std::{fmt::Display, str::FromStr};
 
-use anyhow::{Error, Ok, Result, bail};
+use anyhow::{Error, Result, bail};
 use gloo_file::{
     File,
     callbacks::{FileReader, read_as_bytes},
@@ -11,13 +11,12 @@ use yew::{prelude::*, virtual_dom::AttrValue};
 use base64::{engine::general_purpose, Engine as _};
 use image::ImageFormat;
 use std::io::Cursor;
-use gloo_console::log;
 
 #[derive(Default)]
 struct JsFile {
     file: Option<File>,
     contents: Option<Vec<u8>>,
-    base64: Option<String>,   // stable value across re-renders
+    base64: Option<String>,
 }
 
 impl Display for JsFile {
@@ -49,12 +48,15 @@ fn validate_avatar(bytes: &[u8]) -> Result<()> {
     let reader = image::io::Reader::new(Cursor::new(bytes))
     .with_guessed_format()
     .map_err(|e| anyhow::anyhow!("Invalid image data: {}", e))?;
+
+    let format_str = match reader.format() {
+        Some(f) => format!("{:?}", f),
+        None => "None".to_string(),
+    };
+
     match reader.format() {
-        Some(ImageFormat::Jpeg) | Some(ImageFormat::Png) => {
-            reader.decode().map_err(|e| anyhow::anyhow!("Decode failed: {}", e))?;
-            Ok(())
-        }
-        _ => bail!("Only JPEG and PNG images are allowed"),
+        Some(ImageFormat::Jpeg) | Some(ImageFormat::Png) | Some(ImageFormat::Bmp) => Ok(()),
+        _ => bail!("Only JPEG, PNG, and BMP images are allowed (detected: {})", format_str),
     }
 }
 
@@ -65,6 +67,8 @@ fn get_data_url(bytes: &[u8]) -> Result<String> {
         "image/jpeg"
     } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
         "image/png"
+    } else if bytes.starts_with(b"BM") {
+        "image/bmp"
     } else {
         "image/jpeg"
     };
@@ -87,9 +91,12 @@ fn to_base64(file: &JsFile) -> Result<String> {
     }
 }
 
-pub struct JpegFileInput {
+pub struct AvatarFileInput {
     avatar: Option<JsFile>,
     reader: Option<FileReader>,
+    error: Option<String>,
+    cleared: bool,
+    hidden_ref: NodeRef,
 }
 
 pub enum Msg {
@@ -105,7 +112,7 @@ pub struct Props {
     pub value: Option<String>,
 }
 
-impl Component for JpegFileInput {
+impl Component for AvatarFileInput {
     type Message = Msg;
     type Properties = Props;
 
@@ -117,11 +124,17 @@ impl Component for JpegFileInput {
                          base64: ctx.props().value.clone(),
             }),
             reader: None,
+            error: None,
+            cleared: false,
+            hidden_ref: NodeRef::default(),
         }
     }
 
     fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        // Only reset from props if we have no local data yet (prevents overwrite after upload)
+        if self.cleared {
+            self.cleared = false;
+            return true;
+        }
         if self.avatar.as_ref().and_then(|a| a.base64.as_ref()).is_none() {
             self.avatar = Some(JsFile {
                 file: None,
@@ -130,6 +143,7 @@ impl Component for JpegFileInput {
             });
         }
         self.reader = None;
+        self.error = None;
         true
     }
 
@@ -137,9 +151,10 @@ impl Component for JpegFileInput {
         match msg {
             Msg::Update => true,
             Msg::FileSelected(new_avatar) => {
-                log!("FileSelected: picked file {}", new_avatar.name());
+                self.error = None;
+                self.cleared = false;
                 if new_avatar.size() > 2 * 1024 * 1024 {
-                    log!("FileSelected: too big (>2MB) - clearing");
+                    self.error = Some("Image must be smaller than 2MB".to_string());
                     self.avatar = Some(JsFile::default());
                     return true;
                 }
@@ -152,8 +167,12 @@ impl Component for JpegFileInput {
                 true
             }
             Msg::ClearClicked => {
-                log!("ClearClicked: avatar cleared");
                 self.avatar = Some(JsFile::default());
+                self.error = None;
+                self.cleared = true;
+                if let Some(input) = self.hidden_ref.cast::<HtmlInputElement>() {
+                    input.set_value("");
+                }
                 true
             }
             Msg::FileLoaded(file_name, data) => {
@@ -162,16 +181,14 @@ impl Component for JpegFileInput {
                     && file.name() == file_name
                     && let Result::Ok(data) = data
                     {
-                        log!("FileLoaded: received {} bytes for {}", data.len(), file_name);
                         if validate_avatar(&data).is_err() {
-                            log!("FileLoaded: invalid image - clearing");
+                            self.error = Some("Only JPEG, PNG, or BMP <2MB allowed".to_string());
                             self.avatar = Some(JsFile::default());
                         } else {
                             let b64 = general_purpose::STANDARD.encode(&data);
                             avatar.contents = Some(data);
                             avatar.base64 = Some(b64.clone());
-                            log!("FileLoaded: SUCCESS - base64 stored (len={})", b64.len());
-                            return true;
+                            self.error = None;
                         }
                     }
                     self.reader = None;
@@ -192,37 +209,21 @@ impl Component for JpegFileInput {
             _ => String::new(),
         };
 
-        log!("JpegFileInput view: hidden input length = {}", avatar_string.len());
-        if avatar_string.is_empty() {
-            log!("JpegFileInput view: ERROR - hidden input is EMPTY");
-        } else if avatar_string.len() < 100 {
-            log!("JpegFileInput view: WARNING - base64 very short (len={})", avatar_string.len());
-        } else {
-            log!("JpegFileInput view: OK - base64 looks good (len={})", avatar_string.len());
-        }
-
         html! {
             <div class="row align-items-center">
             <div class="col-5">
-            <input type="hidden" name={ctx.props().name.clone()} value={avatar_string.clone()} />
-            <input
-            class="form-control"
-            id="avatarInput"
-            type="file"
-            accept="image/jpeg,image/png"
-            oninput={link.callback(|e: InputEvent| {
-                let input: HtmlInputElement = e.target_unchecked_into();
-                Self::upload_files(input.files())
-            })} />
+            <input type="hidden" ref={self.hidden_ref.clone()} name={ctx.props().name.clone()} value={avatar_string.clone()} />
+            <input class="form-control" id="avatarInput" type="file" accept="image/jpeg,image/png,image/bmp" oninput={link.callback(|e: InputEvent| { let input: HtmlInputElement = e.target_unchecked_into(); Self::upload_files(input.files()) })} />
             </div>
             <div class="col-3">
-            <button class="btn btn-secondary col-auto" onclick={link.callback(|_| Msg::ClearClicked)}>
-            {"Clear"}
-            </button>
+            <button type="button" class="btn btn-secondary col-auto" onclick={link.callback(|_| Msg::ClearClicked)}>{"Clear"}</button>
+            { if let Some(err) = &self.error { html! { <div class="text-danger small mt-1">{err}</div> } } else { html! {} }}
             </div>
-            <div class="col-4">
+            <div class="col-4" style="background:transparent !important;background-color:transparent !important;">
             { if !avatar_src.is_empty() {
-                html! { <img src={avatar_src} style="max-height:128px;max-width:128px;" alt="Avatar" /> }
+                html! {
+                    <div style={format!("width:128px;height:128px;background-image:url({});background-size:contain;background-repeat:no-repeat;background-position:center;background-color:transparent !important;border-radius:4px;", avatar_src)} />
+                }
             } else { html! {} }}
             </div>
             </div>
@@ -230,11 +231,11 @@ impl Component for JpegFileInput {
     }
 }
 
-impl JpegFileInput {
+impl AvatarFileInput {
     fn upload_files(files: Option<FileList>) -> Msg {
         match files {
             Some(files) if files.length() > 0 => Msg::FileSelected(File::from(files.item(0).unwrap())),
-            Some(_) | None => Msg::Update,
+            _ => Msg::Update,
         }
     }
 }

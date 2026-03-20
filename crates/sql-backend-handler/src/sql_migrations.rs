@@ -1,7 +1,8 @@
+// crates/sql-backend-handler/src/sql_migrations.rs
 use crate::sql_tables::{DbConnection, LAST_SCHEMA_VERSION, SchemaVersion};
 use itertools::Itertools;
-use lldap_domain::types::{GroupId, JpegPhoto, UserId, Uuid};
-use lldap_domain::types::AttributeType;  // still needed for older migrations
+use lldap_domain::types::{Avatar, GroupId, UserId, Uuid};
+use lldap_domain::types::AttributeType;
 use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbErr, DeriveIden, FromQueryResult, Iden, Order,
     Statement, TransactionTrait,
@@ -822,7 +823,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                     ])
                     .values_panic([
                         "avatar".into(),
-                        AttributeType::JpegPhoto.into(),
+                        AttributeType::Avatar.into(),
                         false.into(),
                         true.into(),
                         true.into(),
@@ -833,7 +834,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
         .await?;
 
         // Migrate old hardcoded columns into EAV user_attributes table
-    // Strings stored as raw UTF-8 bytes, avatar as raw JPEG bytes
+    // Strings stored as raw UTF-8 bytes, avatar as raw bytes (JPG/PNG/BMP)
     // No Serialized / bincode → zero ser/de headaches forever
     {
         let mut user_statement = Query::insert()
@@ -850,7 +851,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
             user_id: UserId,
             first_name: Option<String>,
             last_name: Option<String>,
-            avatar: Option<JpegPhoto>,
+            avatar: Option<Avatar>,
         }
 
         let mut any_user = false;
@@ -887,7 +888,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                     user_statement.values_panic([
                         user.user_id.clone().into(),
                         "avatar".into(),
-                        sea_orm::Value::from(avatar.clone().into_bytes()).into(),
+                        sea_orm::Value::from(avatar).into(),  // ← FIXED: use &Avatar directly (SeaORM has From<&Avatar>)
                     ]);
                 }
             }

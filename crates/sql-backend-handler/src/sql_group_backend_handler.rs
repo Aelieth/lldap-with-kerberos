@@ -19,12 +19,11 @@ use sea_orm::{
 use tracing::instrument;
 
 // Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
-// Matches exactly what we use on the user side for POSIX/Kerberos consistency
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
-        AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
+        AttributeValue::Avatar(Cardinality::Singleton(p)) => p.0.clone(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
         _ => vec![],
     }

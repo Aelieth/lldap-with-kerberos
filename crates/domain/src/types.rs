@@ -1,6 +1,4 @@
 use std::cmp::Ordering;
-
-use base64::Engine;
 use chrono::{NaiveDateTime, TimeZone};
 use lldap_auth::types::CaseInsensitiveString;
 use sea_orm::{
@@ -12,6 +10,9 @@ use sea_orm::{
     },
 };
 use serde::{Deserialize, Serialize};
+use bytes::Bytes;
+use base64::Engine;
+use base64::engine::general_purpose;
 pub use lldap_auth::types::UserId;
 pub use lldap_schema::AttributeType;
 
@@ -120,8 +121,8 @@ impl From<AttributeValue> for Serialized {
             AttributeValue::String(Cardinality::Unbounded(l)) => Serialized::from(l),
             AttributeValue::Integer(Cardinality::Singleton(i)) => Serialized::from(i),
             AttributeValue::Integer(Cardinality::Unbounded(l)) => Serialized::from(l),
-            AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => Serialized::from(p),
-            AttributeValue::JpegPhoto(Cardinality::Unbounded(l)) => Serialized::from(l),
+            AttributeValue::Avatar(Cardinality::Singleton(p)) => Serialized::from(p),
+            AttributeValue::Avatar(Cardinality::Unbounded(l)) => Serialized::from(l),
             AttributeValue::DateTime(Cardinality::Singleton(dt)) => Serialized::from(dt),
             AttributeValue::DateTime(Cardinality::Unbounded(l)) => Serialized::from(l),
         }
@@ -300,16 +301,17 @@ impl AsRef<GroupName> for GroupName {
     Hash,
 )]
 #[sea_orm(
-    column_type = "Blob",
+    column_type = "Blob",          // ← generic BLOB (SQLite/MySQL/Postgres safe)
     array_type = "Bytes"
 )]
-pub struct Avatar(pub Bytes);
+pub struct Avatar(pub Vec<u8>);   // ← Vec<u8> for full SeaORM/serde compatibility
 
 const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
 impl Avatar {
+    /// Public constructor for bytes::Bytes (your request)
     pub fn from_bytes(bytes: Bytes) -> Self {
-        Self(bytes)
+        Self(bytes.into())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -317,11 +319,11 @@ impl Avatar {
     }
 
     pub fn null() -> Self {
-        Self(Bytes::new())
+        Self(vec![])
     }
 
     pub fn into_bytes(self) -> Bytes {
-        self.0
+        Bytes::from(self.0)
     }
 
     #[cfg(any(feature = "test", test))]
@@ -332,13 +334,13 @@ impl Avatar {
         });
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), ImageOutputFormat::Jpeg(0)).unwrap();
-        Self(Bytes::from(buf))
+        Self(buf)
     }
 }
 
 impl From<&Avatar> for Value {
     fn from(photo: &Avatar) -> Self {
-        photo.0.as_ref().into()
+        photo.0.as_slice().into()
     }
 }
 
@@ -351,7 +353,7 @@ impl TryFrom<&[u8]> for Avatar {
         if bytes.is_empty() {
             return Ok(Self::null());
         }
-        // Generic validation: JPEG, PNG, BMP (and anything image crate supports)
+        // Generic validation: JPEG, PNG, BMP
         let reader = image::io::Reader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .map_err(|e| anyhow::anyhow!("Invalid image format: {}", e))?;
@@ -359,7 +361,7 @@ impl TryFrom<&[u8]> for Avatar {
             Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Png) | Some(image::ImageFormat::Bmp) => {},
             _ => return Err(anyhow::anyhow!("Only JPEG, PNG, and BMP images are allowed")),
         }
-        Ok(Self(Bytes::from(bytes.to_vec())))
+        Ok(Self(bytes.to_vec()))
     }
 }
 
@@ -439,7 +441,7 @@ impl<T: Clone> Cardinality<T> {
 pub enum AttributeValue {
     String(Cardinality<String>),
     Integer(Cardinality<i64>),
-    JpegPhoto(Cardinality<JpegPhoto>),
+    Avatar(Cardinality<Avatar>),      // ← renamed from JpegPhoto
     DateTime(Cardinality<NaiveDateTime>),
 }
 
@@ -448,7 +450,7 @@ impl AttributeValue {
         match self {
             Self::String(_) => AttributeType::String,
             Self::Integer(_) => AttributeType::Integer,
-            Self::JpegPhoto(_) => AttributeType::JpegPhoto,
+            Self::Avatar(_) => AttributeType::Avatar,
             Self::DateTime(_) => AttributeType::DateTime,
         }
     }
@@ -466,8 +468,8 @@ impl AttributeValue {
             None
         }
     }
-    pub fn as_jpeg_photo(&self) -> Option<&JpegPhoto> {
-        if let AttributeValue::JpegPhoto(Cardinality::Singleton(p)) = self {
+    pub fn as_avatar(&self) -> Option<&Avatar> {
+        if let AttributeValue::Avatar(Cardinality::Singleton(p)) = self {
             Some(p)
         } else {
             None
@@ -497,14 +499,14 @@ impl From<Vec<i64>> for AttributeValue {
     }
 }
 
-impl From<JpegPhoto> for AttributeValue {
-    fn from(j: JpegPhoto) -> Self {
-        AttributeValue::JpegPhoto(Cardinality::Singleton(j))
+impl From<Avatar> for AttributeValue {                    // renamed
+    fn from(j: Avatar) -> Self {
+        AttributeValue::Avatar(Cardinality::Singleton(j))
     }
 }
-impl From<Vec<JpegPhoto>> for AttributeValue {
-    fn from(l: Vec<JpegPhoto>) -> Self {
-        AttributeValue::JpegPhoto(Cardinality::Unbounded(l))
+impl From<Vec<Avatar>> for AttributeValue {               // renamed
+    fn from(l: Vec<Avatar>) -> Self {
+        AttributeValue::Avatar(Cardinality::Unbounded(l))
     }
 }
 

@@ -5,13 +5,21 @@ use derive_more::Display;
 
 // ==================== ATTRIBUTE TYPE (SINGLE SOURCE OF TRUTH) ====================
 #[derive(
-Clone, Copy, Debug, PartialEq, Eq,
-Serialize, Deserialize,
-sea_orm::DeriveActiveEnum,   // ← SeaORM can now read/write this enum from DB columns
-EnumIter,                    // ← required by DeriveActiveEnum
-EnumString, IntoStaticStr, GraphQLEnum, Display,
+Clone,
+Copy,
+Debug,
+PartialEq,
+Eq,
+Serialize,
+Deserialize,
+sea_orm::DeriveActiveEnum, // ← SeaORM can now read/write this enum from DB columns
+EnumIter,                  // ← required by DeriveActiveEnum
+EnumString,
+IntoStaticStr,
+GraphQLEnum,
+Display,
 )]
-#[sea_orm(rs_type = "String", db_type = "Text")]   // Text = simple VARCHAR/TEXT, avoids StringLen constructor conflict
+#[sea_orm(rs_type = "String", db_type = "Text")] // Text = simple VARCHAR/TEXT, avoids StringLen constructor conflict
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[display("{_0}")]
@@ -20,8 +28,8 @@ pub enum AttributeType {
     String,
     #[sea_orm(string_value = "Integer")]
     Integer,
-    #[sea_orm(string_value = "JpegPhoto")]
-    JpegPhoto,
+    #[sea_orm(string_value = "Avatar")] // ← renamed from JpegPhoto (full multi-format support: JPG/PNG/BMP)
+    Avatar,
     #[sea_orm(string_value = "DateTime")]
     DateTime,
 }

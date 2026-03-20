@@ -408,7 +408,7 @@ mod tests {
         search::{make_search_request, make_search_success},
     };
     use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-    use lldap_domain::types::{Attribute, GroupDetails, JpegPhoto};
+    use lldap_domain::types::{Attribute, Avatar, GroupDetails};
     use lldap_test_utils::MockTestBackendHandler;
     use mockall::predicate::eq;
     use pretty_assertions::assert_eq;
@@ -586,7 +586,7 @@ mod tests {
                         attributes: vec![
                             Attribute {
                                 name: "avatar".into(),
-                                value: JpegPhoto::for_tests().into(),
+                                value: Avatar::for_tests().into(),
                             },
                             Attribute {
                                 name: "first_name".into(),
@@ -698,7 +698,7 @@ mod tests {
                         },
                         LdapPartialAttribute {
                             atype: "jpegPhoto".to_string(),
-                            vals: vec![JpegPhoto::for_tests().into_bytes()]
+                            vals: vec![Avatar::for_tests().0.clone()]
                         },
                         LdapPartialAttribute {
                             atype: "mail".to_string(),

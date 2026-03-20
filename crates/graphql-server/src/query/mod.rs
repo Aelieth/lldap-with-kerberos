@@ -569,7 +569,7 @@ mod tests {
             user_attributes: AttributeList {
                 attributes: vec![DomainAttributeSchema {
                     name: "invisible".into(),
-           attribute_type: AttributeType::JpegPhoto,
+                      attribute_type: AttributeType::Avatar,
            is_list: false,
            is_visible: false,
            is_editable: true,

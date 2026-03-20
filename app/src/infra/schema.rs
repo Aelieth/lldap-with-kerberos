@@ -11,13 +11,13 @@ pub(crate) enum AttributeType {
     Integer,
     #[strum(serialize = "DATE_TIME", serialize = "DATETIME")]
     DateTime,
-    #[strum(serialize = "JPEG_PHOTO", serialize = "JPEGPHOTO")]
-    JpegPhoto,
+    #[strum(serialize = "AVATAR", serialize = "AVATAR")]
+    Avatar,
 }
 
 pub fn validate_attribute_type(attribute_type: &str) -> Result<(), ValidationError> {
     AttributeType::try_from(attribute_type)
-        .map_err(|_| ValidationError::new("Invalid attribute type"))?;
+    .map_err(|_| ValidationError::new("Invalid attribute type"))?;
     Ok(())
 }
 
@@ -36,7 +36,11 @@ mod tests {
         let attr_type: AttributeType = "DATE_TIME".try_into().unwrap();
         assert_eq!(attr_type, AttributeType::DateTime);
 
-        let attr_type: AttributeType = "JpegPhoto".try_into().unwrap();
-        assert_eq!(attr_type, AttributeType::JpegPhoto);
+        let attr_type: AttributeType = "AVATAR".try_into().unwrap();
+        assert_eq!(attr_type, AttributeType::Avatar);
+
+        // Also accept the old aliases for backward compatibility during migration
+        let attr_type: AttributeType = "JPEGPHOTO".try_into().unwrap();
+        assert_eq!(attr_type, AttributeType::Avatar);
     }
 }

@@ -83,6 +83,7 @@ pub fn consolidate_attributes(
         )
     })
     .collect::<BTreeMap<_, _>>();
+
     let field_attrs = [
         ("first_name", first_name),
         ("last_name", last_name),
@@ -90,6 +91,9 @@ pub fn consolidate_attributes(
     ];
     for (name, value) in field_attrs.into_iter() {
         if let Some(val) = value {
+            if name == "avatar" && val.trim().is_empty() {
+                continue; // let removeAttributes handle deletion
+            }
             let attr_name: AttributeName = name.into();
             provided_attributes
             .entry(attr_name)

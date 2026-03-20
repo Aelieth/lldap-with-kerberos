@@ -437,7 +437,7 @@ mod tests {
     use lldap_domain::{
         schema::{AttributeList, AttributeSchema, Schema},
         types::{
-            Attribute, AttributeName, AttributeType, GroupId, JpegPhoto, LdapObjectClass, User,
+            Attribute, AttributeName, AttributeType, GroupId, LdapObjectClass, User,
             UserId,
         },
         uuid,
@@ -1090,7 +1090,7 @@ mod tests {
                     attributes: vec![
                         Attribute {
                             name: "avatar".into(),
-                            value: JpegPhoto::for_tests().into(),
+                            value: Avatar::for_tests().into(),
                         },
                         Attribute {
                             name: "last_name".into(),
@@ -1131,7 +1131,7 @@ mod tests {
                 attributes: vec![
                     LdapPartialAttribute {
                         atype: "avatar".to_string(),
-                        vals: vec![JpegPhoto::for_tests().into_bytes()],
+                        vals: vec![Avatar::for_tests().0.clone()],
                     },
                     LdapPartialAttribute {
                         atype: "cn".to_string(),

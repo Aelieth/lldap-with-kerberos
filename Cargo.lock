@@ -3158,6 +3158,7 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "bincode",
+ "bytes",
  "chrono",
  "derive_more 1.0.0",
  "image",
@@ -3212,6 +3213,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "thiserror 2.0.17",
+ "tracing",
  "uuid 1.19.0",
 ]
 

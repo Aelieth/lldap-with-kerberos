@@ -292,7 +292,7 @@ mod tests {
         let fixture = TestFixture::new().await;
         let new_attribute = CreateAttributeRequest {
             name: "NeW_aTTribute".into(),
-            attribute_type: AttributeType::JpegPhoto,
+            attribute_type: AttributeType::Avatar,
             is_list: false,
             is_visible: true,
             is_editable: false,
@@ -304,7 +304,7 @@ mod tests {
         .unwrap();
         let expected_value = AttributeSchema {
             name: "new_attribute".into(),
-            attribute_type: AttributeType::JpegPhoto,
+            attribute_type: AttributeType::Avatar,
             is_list: false,
             is_visible: true,
             is_editable: false,

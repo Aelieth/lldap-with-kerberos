@@ -232,18 +232,18 @@ impl UserDetailsForm {
                                                    EmailIsRequired(!ctx.props().is_edited_user_admin),
         ).unwrap_or_default();
 
-        // === WHAT THE FORM READER ACTUALLY SAW (gloo) ===
+        // === DEBUG: WHAT THE FORM READER SAW ===
         if let Some(avatar_attr) = form_values.iter().find(|a| a.name == "avatar") {
             let avatar_val = avatar_attr.values.first().cloned().unwrap_or_default();
             log!("EDIT_FORM_READER: avatar value length = {}", avatar_val.len());
-            if avatar_val.len() > 100 {
-                log!("EDIT_FORM_READER: avatar base64 starts with: {}", &avatar_val[0..100.min(avatar_val.len())]);
+            if avatar_val.is_empty() {
+                log!("EDIT_FORM_READER: avatar is EMPTY — forcing removal");
             }
         }
 
         let base_attributes = &self.user.attributes;
 
-        let empty: Vec<String> = vec![];  // lives for the whole function → fixes borrow error
+        let empty: Vec<String> = vec![];
 
         let mut to_insert: Vec<AttributeValue> = vec![];
         let mut to_remove: Vec<String> = vec![];
@@ -257,6 +257,15 @@ impl UserDetailsForm {
 
             if !has_changed {
                 continue;
+            }
+
+            // FORCE removal for avatar when empty
+            if name == "avatar" {
+                if attr.values.is_empty() || attr.values.first().map_or(true, |s| s.trim().is_empty()) {
+                    to_remove.push(name.clone());
+                    log!("SUBMIT_FORM: forcing avatar removal");
+                    continue;
+                }
             }
 
             if name == "kerberossync" {
@@ -275,6 +284,9 @@ impl UserDetailsForm {
                 to_insert.push(attr);
             }
         }
+
+        log!("SUBMIT_FORM: to_remove = {:?}", to_remove.clone());  // ← CLONE FIX (prevents move)
+        log!("SUBMIT_FORM: to_insert contains avatar = {}", to_insert.iter().any(|a| a.name == "avatar"));
 
         let remove_attributes = if to_remove.is_empty() {
             None
@@ -296,7 +308,7 @@ impl UserDetailsForm {
             )
         };
 
-        let user_input = update_user::UpdateUserInput {  // no mut needed
+        let user_input = update_user::UpdateUserInput {
             id: self.user.id.clone(),
             email: None,
             displayName: None,
@@ -306,21 +318,6 @@ impl UserDetailsForm {
             removeAttributes: remove_attributes,
             insertAttributes: insert_attributes,
         };
-
-        let default_user_input = update_user::UpdateUserInput {
-            id: self.user.id.clone(),
-            email: None,
-            displayName: None,
-            firstName: None,
-            lastName: None,
-            avatar: None,
-            removeAttributes: None,
-            insertAttributes: None,
-        };
-
-        if user_input == default_user_input {
-            return false;
-        }
 
         let req = update_user::Variables { user: user_input };
         self.common.call_graphql::<UpdateUser, _>(
@@ -383,7 +380,7 @@ fn get_custom_attribute_static(
                 v
             }
         },
-        AttributeType::JpegPhoto => |_: String| "Avatar image (JPEG or PNG)".to_string(),
+        AttributeType::Avatar => |_: String| "Avatar image (JPEG, PNG, or BMP)".to_string(),
     };
 
     html! {

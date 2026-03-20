@@ -24,7 +24,7 @@ use sea_orm::{
     },
 };
 use std::collections::HashSet;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 // Helper: Convert AttributeValue to raw bytes for the EAV value BLOB column
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
@@ -32,7 +32,7 @@ fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
         AttributeValue::String(Cardinality::Unbounded(_)) => vec![],
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
-        AttributeValue::JpegPhoto(Cardinality::Singleton(p)) => p.clone().into_bytes(),
+        AttributeValue::Avatar(Cardinality::Singleton(p)) => p.0.clone(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
         _ => vec![],
     }
@@ -201,12 +201,14 @@ impl SqlBackendHandler {
     fn compute_user_attribute_changes(
         user_id: &UserId,
         insert_attributes: Vec<Attribute>,
-        _delete_attributes: Vec<AttributeName>,
+        delete_attributes: Vec<AttributeName>,
         schema: &PublicSchema,
     ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
         let mut update_user_attributes = Vec::new();
-        let remove_user_attributes: Vec<AttributeName> = Vec::new();
+        let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
         let mut kerb_sync_enabled: Option<bool> = None;
+
+        debug!("EAV_COMPUTE: delete_attributes received = {:?}", remove_user_attributes.iter().map(|n| n.as_str()).collect::<Vec<_>>());
 
         for attribute in insert_attributes {
             let canonical_name = schema
@@ -226,14 +228,8 @@ impl SqlBackendHandler {
             if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
                 let db_value = attribute_value_to_db_bytes(&attribute.value);
 
-                // === WHAT ACTUALLY HITS THE EAV TABLE ===
                 if canonical_name.as_str() == "avatar" {
-                    tracing::info!("EAV_AVATAR_INSERT: raw bytes length = {}", db_value.len());
-                    if !db_value.is_empty() {
-                        tracing::info!("EAV_AVATAR_INSERT: first 16 bytes hex = {:02x?}", &db_value[0..16.min(db_value.len())]);
-                    } else {
-                        tracing::info!("EAV_AVATAR_INSERT: EMPTY BYTES - avatar will stay blank");
-                    }
+                    debug!("EAV_AVATAR_INSERT: {} bytes (avatar)", db_value.len());
                 }
 
                 update_user_attributes.push(model::user_attributes::ActiveModel {
@@ -248,6 +244,12 @@ impl SqlBackendHandler {
                 )));
             }
         }
+
+        remove_user_attributes.retain(|name| {
+            !update_user_attributes.iter().any(|u| u.attribute_name == Set(name.clone()))
+        });
+
+        debug!("EAV_COMPUTE: FINAL remove list = {:?}", remove_user_attributes.iter().map(|n| n.as_str()).collect::<Vec<_>>());
 
         Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
     }
@@ -347,7 +349,7 @@ impl UserBackendHandler for SqlBackendHandler {
 
             // === SAFE READ PATH LOGGING ===
             if attr.name.as_str() == "avatar" {
-                tracing::info!("GET_USER_DETAILS: avatar attribute found in EAV");
+                debug!("GET_USER_DETAILS: avatar attribute found in EAV");
             }
             Ok(attr)
         })
@@ -431,14 +433,8 @@ impl UserBackendHandler for SqlBackendHandler {
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
 
-                            // === WHAT ACTUALLY HITS THE DATABASE ===
                             if canonical_name.as_str() == "avatar" {
-                                tracing::info!("EAV_CREATE_INSERT: raw bytes length = {}", db_value.len());
-                                if !db_value.is_empty() {
-                                    tracing::info!("EAV_CREATE_INSERT: first 16 bytes hex = {:02x?}", &db_value[0..16.min(db_value.len())]);
-                                } else {
-                                    tracing::info!("EAV_CREATE_INSERT: EMPTY BYTES - avatar will stay blank");
-                                }
+                                debug!("EAV_CREATE_INSERT: {} bytes (avatar)", db_value.len());
                             }
 
                             new_user_attributes.push(model::user_attributes::ActiveModel {

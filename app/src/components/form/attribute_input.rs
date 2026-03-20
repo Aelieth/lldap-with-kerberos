@@ -1,5 +1,5 @@
 use crate::{
-    components::form::{date_input::DateTimeInput, file_input::JpegFileInput},
+    components::form::{date_input::DateTimeInput, file_input::AvatarFileInput},
     infra::{schema::AttributeType, tooltip::Tooltip},
 };
 use web_sys::{HtmlInputElement, Element};
@@ -20,14 +20,14 @@ struct AttributeInputProps {
 fn attribute_input(props: &AttributeInputProps) -> Html {
     let current_value = use_state(|| props.value.clone().unwrap_or_default());
 
-    // ROBUST GUARD: Force JpegFileInput for any avatar field
+    // ROBUST GUARD: Force AvatarFileInput for any avatar field
     // This matches original LLDAP dispatch but survives our EAV + Kerberos schema changes
-    if props.attribute_type == AttributeType::JpegPhoto
+    if props.attribute_type == AttributeType::Avatar
         || props.name == AttrValue::Static("avatar")
         || props.name == AttrValue::Static("jpegphoto")
         || props.name == AttrValue::Static("jpegPhoto") {
             return html! {
-                <JpegFileInput name={props.name.clone()} value={props.value.clone()} />
+                <AvatarFileInput name={props.name.clone()} value={props.value.clone()} />
             };
         }
 
@@ -40,7 +40,7 @@ fn attribute_input(props: &AttributeInputProps) -> Html {
                 };
             }
             // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
-            AttributeType::JpegPhoto => unreachable!("JpegPhoto already handled by guard above"),
+            AttributeType::Avatar => unreachable!("Avatar already handled by guard above"),
         };
 
         let onchange = {
