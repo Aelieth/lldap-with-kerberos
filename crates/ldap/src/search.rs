@@ -125,11 +125,7 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
                                   },
                                   LdapPartialAttribute {
                                       atype: "vendorVersion".to_string(),
-                              vals: vec![
-                                  concat!("lldap_", env!("CARGO_PKG_VERSION"))
-                                  .to_string()
-                                  .into_bytes(),
-                              ],
+                              vals: vec![concat!("lldap_", env!("CARGO_PKG_VERSION")).to_string().into_bytes()],
                                   },
                                   LdapPartialAttribute {
                                       atype: "supportedLDAPVersion".to_string(),
@@ -156,6 +152,14 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
                                   },
                                   LdapPartialAttribute {
                                       atype: "namingContexts".to_string(),
+                              vals: vec![base_dn.to_string().into_bytes()],
+                                  },
+                                  LdapPartialAttribute {
+                                      atype: "schemaNamingContext".to_string(),
+                              vals: vec![base_dn.to_string().into_bytes()],
+                                  },
+                                  LdapPartialAttribute {
+                                      atype: "configurationNamingContext".to_string(),
                               vals: vec![base_dn.to_string().into_bytes()],
                                   },
                                   LdapPartialAttribute {
@@ -190,11 +194,11 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
                                   },
                                   LdapPartialAttribute {
                                       atype: "createTimestamp".to_string(),
-                              vals: vec![current_time_utc.to_vec()],
+                              vals: vec![current_time_utc.clone()],
                                   },
                                   LdapPartialAttribute {
                                       atype: "modifyTimestamp".to_string(),
-                              vals: vec![current_time_utc.to_vec()],
+                              vals: vec![current_time_utc],
                                   },
                                   LdapPartialAttribute {
                                       atype: "ldapSyntaxes".to_string(),
@@ -250,7 +254,7 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
                               b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512: structural object class of entry' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
                               b"( 10.0 NAME 'String' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
                               b"( 10.1 NAME 'Integer' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )".to_vec(),
-                              b"( 10.2 NAME 'JpegPhoto' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
+                              b"( 10.2 NAME 'Avatar' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
                               b"( 10.3 NAME 'DateTime' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
                                   ];
                                   hardcoded_attributes.into_iter().chain(
@@ -286,6 +290,7 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
                               ],
     })
 }
+
 pub(crate) fn is_root_dse_request(request: &LdapSearchRequest) -> bool {
     request.base.is_empty()
     && request.scope == LdapSearchScope::Base
