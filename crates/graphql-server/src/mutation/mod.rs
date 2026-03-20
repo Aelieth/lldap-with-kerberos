@@ -500,18 +500,24 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         is_editable: bool,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] add_user_attribute");
-        span.in_scope(|| {
-            debug!(?name, ?attribute_type, is_list, is_visible, is_editable);
-        });
+        span.in_scope(|| debug!(?name, ?attribute_type, is_list));
+
+        let handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized attribute creation"))?;
+
+        let schema = handler.get_schema().await?;
+
+        // === STRICTER #1202 FIX: No duplicate names at all across user/group ===
+        if schema.group_attributes().get_by_name_or_alias(&name).is_some() {
+            return Err(anyhow!(
+                "Attribute '{}' already exists in the group schema. Duplicate names are not allowed across user and group attributes.",
+                name
+            ).into());
+        }
+
         validate_attribute_name(&name).map_err(|invalid_chars: Vec<char>| -> FieldError {
             let chars = String::from_iter(invalid_chars);
-            span.in_scope(|| {
-                debug!(
-                    "Cannot create attribute with invalid name. Valid characters: {}. Invalid chars found: {}",
-                    ALLOWED_CHARACTERS_DESCRIPTION,
-                    chars
-                )
-            });
             anyhow!(
                 "Cannot create attribute with invalid name. Valid characters: {}. Invalid chars found: {}",
                 ALLOWED_CHARACTERS_DESCRIPTION,
@@ -519,12 +525,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             )
             .into()
         })?;
-        let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized attribute creation",
-        ))?;
+
         handler
         .add_user_attribute(CreateAttributeRequest {
             name: name.into(),
@@ -547,29 +548,32 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         is_editable: bool,
     ) -> FieldResult<Success> {
         let span = debug_span!("[GraphQL mutation] add_group_attribute");
-        span.in_scope(|| {
-            debug!(?name, ?attribute_type, is_list, is_visible, is_editable);
-        });
+        span.in_scope(|| debug!(?name, ?attribute_type, is_list));
+
+        let handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized attribute creation"))?;
+
+        let schema = handler.get_schema().await?;
+
+        // === STRICTER #1202 FIX: No duplicate names at all across user/group ===
+        if schema.user_attributes().get_by_name_or_alias(&name).is_some() {
+            return Err(anyhow!(
+                "Attribute '{}' already exists in the user schema. Duplicate names are not allowed across user and group attributes.",
+                name
+            ).into());
+        }
+
         validate_attribute_name(&name).map_err(|invalid_chars: Vec<char>| -> FieldError {
             let chars = String::from_iter(invalid_chars);
-            span.in_scope(|| {
-                debug!(
-                    "Cannot create attribute with invalid name. Invalid chars found: {}",
-                    chars
-                )
-            });
             anyhow!(
-                "Cannot create attribute with invalid name. Valid characters: {}",
-                ALLOWED_CHARACTERS_DESCRIPTION
+                "Cannot create attribute with invalid name. Valid characters: {}. Invalid chars found: {}",
+                ALLOWED_CHARACTERS_DESCRIPTION,
+                chars
             )
             .into()
         })?;
-        let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized attribute creation",
-        ))?;
+
         handler
         .add_group_attribute(CreateAttributeRequest {
             name: name.into(),
