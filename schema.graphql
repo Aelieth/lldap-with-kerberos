@@ -21,6 +21,8 @@ type Mutation {
   removeUserFromGroup(userId: String!, groupId: Int!): Success!
   deleteUser(userId: String!): Success!
   deleteGroup(groupId: Int!): Success!
+  deleteOu(name: String!): Success!
+  createOu(name: String!): Success!
   addUserAttribute(name: String!, attributeType: AttributeType!, isList: Boolean!, isVisible: Boolean!, isEditable: Boolean!): Success!
   addGroupAttribute(name: String!, attributeType: AttributeType!, isList: Boolean!, isVisible: Boolean!, isEditable: Boolean!): Success!
   deleteUserAttribute(name: String!): Success!
@@ -47,7 +49,9 @@ type Group {
   displayName: String!
   creationDate: DateTimeUtc!
   uuid: String!
-  "User-defined attributes."
+  "Single-layer OU (defaults to \"groups\" — editable by admin only)"
+  ou: String!
+  "User-defined attributes (includes ou for legacy clients)."
   attributes: [AttributeValue!]!
   "The users that belong to this group."
   users: [User!]!
@@ -224,9 +228,13 @@ type User {
   firstName: String!
   lastName: String!
   avatar: String
+  "Single-layer OU (defaults to \"people\" — editable by admin only)"
+  ou: String!
+  "SSH public keys (multi-value list — exactly like authorized_keys)"
+  sshPublicKeys: [String!]!
   creationDate: DateTimeUtc!
   uuid: String!
-  "User-defined attributes."
+  "User-defined attributes (includes ou + sshpublickey for legacy clients)."
   attributes: [AttributeValue!]!
   "The groups to which this user belongs."
   groups: [Group!]!

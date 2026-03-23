@@ -18,8 +18,13 @@ pub fn deserialize_attribute_value(
             AttributeValue::String(Cardinality::Singleton(s.to_string()))
         }
         (AttributeType::String, true) => {
-            let s = std::str::from_utf8(&value.0).unwrap_or("");
-            AttributeValue::String(Cardinality::Unbounded(vec![s.to_string()]))
+            let bytes = &value.0;
+            if let Ok(list) = serde_json::from_slice::<Vec<String>>(bytes) {
+                AttributeValue::String(Cardinality::Unbounded(list))
+            } else {
+                let s = std::str::from_utf8(bytes).unwrap_or("");
+                AttributeValue::String(Cardinality::Unbounded(vec![s.to_string()]))
+            }
         }
         (AttributeType::Integer, false) => {
             let s = std::str::from_utf8(&value.0).unwrap_or("0");

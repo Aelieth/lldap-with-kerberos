@@ -198,20 +198,8 @@ impl App {
                 <CreateUserForm/>
             },
             AppRoute::Index | AppRoute::ListUsers => {
-                let user_button = |key| {
-                    html! {
-                      <Link classes="btn btn-primary" key={key} to={AppRoute::CreateUser}>
-                        <i class="bi-person-plus me-2"></i>
-                        {"Create a user"}
-                      </Link>
-                    }
-                };
                 html! {
-                  <div>
-                    { user_button("top-create-user") }
                     <UserTable />
-                    { user_button("bottom-create-user") }
-                  </div>
                 }
             }
             AppRoute::CreateGroup => html! {

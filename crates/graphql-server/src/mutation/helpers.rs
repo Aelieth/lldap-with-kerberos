@@ -1,19 +1,18 @@
-use anyhow::{Context as AnyhowContext, anyhow};
+// crates/graphql-server/src/mutation/helpers.rs
+use anyhow::anyhow;
 use juniper::FieldResult;
 use lldap_access_control::{AdminBackendHandler, ReadonlyBackendHandler};
 use lldap_domain::{
-    deserialize::deserialize_attribute_value,
     requests::CreateGroupRequest,
-    types::{Attribute as DomainAttribute, AttributeName, Email},
+    types::{Attribute as DomainAttribute, AttributeName, Email, Serialized},
 };
 use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
+use lldap_domain_model::model::deserialize::deserialize_attribute_value;
 use std::{collections::BTreeMap, sync::Arc};
 use tracing::{Instrument, Span};
 use lldap_opaque_handler::OpaqueHandler;
 use super::inputs::AttributeValue;
 use crate::api::{Context, field_error_callback};
-
-// Single source of truth — now always the live PublicSchema from DB
 use lldap_schema::{PublicSchema, schema::AttributeList};
 
 pub struct UnpackedAttributes {
@@ -27,17 +26,8 @@ pub fn unpack_attributes(
     schema: &PublicSchema,
     is_admin: bool,
 ) -> FieldResult<UnpackedAttributes> {
-    // Single-source-of-truth size check (now 16 user attrs: core + POSIX + Kerberos)
-    let expected = PublicSchema::get().user_attributes().attributes.len();
-    let actual = schema.user_attributes().attributes.len();
-    if actual != expected {
-        tracing::warn!(
-            "Schema size mismatch in unpack_attributes: got {} attributes, expected {} from PublicSchema",
-            actual, expected
-        );
-    }
-
     let user_schema = schema.user_attributes();
+
     let email = attributes
     .iter()
     .find(|attr| attr.name == "mail")
@@ -46,6 +36,7 @@ pub fn unpack_attributes(
     .transpose()?
     .map(|attr| attr.value.into_string().unwrap())
     .map(Email::from);
+
     let display_name = attributes
     .iter()
     .find(|attr| attr.name == "display_name")
@@ -53,11 +44,13 @@ pub fn unpack_attributes(
     .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
     .transpose()?
     .map(|attr| attr.value.into_string().unwrap());
+
     let attributes = attributes
     .into_iter()
     .filter(|attr| attr.name != "mail" && attr.name != "display_name")
     .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
     .collect::<Result<Vec<_>, _>>()?;
+
     Ok(UnpackedAttributes {
         email,
        display_name,
@@ -141,29 +134,38 @@ pub fn deserialize_attribute(
 ) -> FieldResult<DomainAttribute> {
     let attribute_name = AttributeName::from(attribute.name.as_str());
 
-    let attribute_schema = attribute_schema
+    let attr_schema = attribute_schema
     .get_attribute_schema(attribute_name.as_str())
     .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
-    if attribute_schema.is_readonly {
+
+    if attr_schema.is_readonly {
         return Err(anyhow!(
             "Permission denied: Attribute {} is read-only",
             attribute.name
         ).into());
     }
-    if !is_admin && !attribute_schema.is_editable {
+    if !is_admin && !attr_schema.is_editable {
         return Err(anyhow!(
             "Permission denied: Attribute {} is not editable by regular users",
             attribute.name
         ).into());
     }
-    let deserialized_values = deserialize_attribute_value(
-        &attribute.value,
-        attribute_schema.attribute_type,
-        attribute_schema.is_list,
-    ).context(format!("While deserializing attribute {}", attribute.name))?;
+
+    let serialized = if attr_schema.is_list {
+        Serialized(serde_json::to_vec(&attribute.value).unwrap_or_else(|_| b"[]".to_vec()))
+    } else {
+        let val = attribute.value.first().cloned().unwrap_or_default();
+        Serialized(val.into_bytes())
+    };
+
+    let value = deserialize_attribute_value(
+        &serialized,
+        attr_schema.attribute_type,
+        attr_schema.is_list,
+    );
 
     Ok(DomainAttribute {
         name: attribute_name,
-       value: deserialized_values,
+       value,
     })
 }

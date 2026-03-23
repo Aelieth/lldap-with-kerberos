@@ -88,8 +88,27 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
         self.attributes
         .iter()
         .find(|a| a.name() == "avatar")
-        .and_then(|a| a.attribute.value.as_avatar())   // ← renamed from as_jpeg_photo (total rip-out complete)
+        .and_then(|a| a.attribute.value.as_avatar())
         .map(String::from)
+    }
+
+    /// Single-layer OU (defaults to "people" — editable by admin only)
+    fn ou(&self) -> String {
+        self.attributes
+        .iter()
+        .find(|a| a.name() == "ou")
+        .and_then(|a| a.attribute.value.as_str())
+        .unwrap_or("people")
+        .to_string()
+    }
+
+    /// SSH public keys (multi-value list — exactly like authorized_keys)
+    fn ssh_public_keys(&self) -> Vec<String> {
+        self.attributes
+        .iter()
+        .find(|a| a.name() == "sshpublickey")
+        .map(|a| super::serialize_attribute_to_graphql(&a.attribute.value))
+        .unwrap_or_default()
     }
 
     fn creation_date(&self) -> chrono::DateTime<chrono::Utc> {
@@ -100,7 +119,7 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
         self.user.uuid.as_str()
     }
 
-    /// User-defined attributes.
+    /// User-defined attributes (includes ou + sshpublickey for legacy clients).
     fn attributes(&self) -> &[AttributeValue<Handler>] {
         &self.attributes
     }

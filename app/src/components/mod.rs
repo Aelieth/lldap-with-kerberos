@@ -30,3 +30,8 @@ pub mod user_details_form;
 pub mod user_schema_table;
 pub mod user_table;
 pub mod federation;
+pub mod user_ou_table;
+pub mod search;
+pub mod delete_user_ou;
+pub mod create_user_ou;
+pub mod change_user_ou;

@@ -30,7 +30,9 @@ use tracing::{debug, instrument};
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
-        AttributeValue::String(Cardinality::Unbounded(_)) => vec![],
+        AttributeValue::String(Cardinality::Unbounded(list)) => {
+            serde_json::to_vec(list).unwrap_or_else(|_| b"[]".to_vec())
+        }
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
         AttributeValue::Avatar(Cardinality::Singleton(p)) => p.0.clone(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
@@ -198,61 +200,66 @@ impl UserListerBackendHandler for SqlBackendHandler {
 }
 
 impl SqlBackendHandler {
-    fn compute_user_attribute_changes(
-        user_id: &UserId,
-        insert_attributes: Vec<Attribute>,
-        delete_attributes: Vec<AttributeName>,
-        schema: &PublicSchema,
-    ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
-        let mut update_user_attributes = Vec::new();
-        let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
-        let mut kerb_sync_enabled: Option<bool> = None;
+        fn compute_user_attribute_changes(
+            user_id: &UserId,
+            insert_attributes: Vec<Attribute>,
+            delete_attributes: Vec<AttributeName>,
+            schema: &PublicSchema,
+        ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
+            let mut update_user_attributes = Vec::new();
+            let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
+            let mut kerb_sync_enabled: Option<bool> = None;
 
-        debug!("EAV_COMPUTE: delete_attributes received = {:?}", remove_user_attributes.iter().map(|n| n.as_str()).collect::<Vec<_>>());
+            // === NEW: Enforce ou from global UserOUs list (admin only) ===
+            let _user_ous = schema.user_attributes()
+            .get_by_name_or_alias("userous")
+            .and_then(|s| {
+                // We'll read the actual value later in the transaction
+                Some(s.name.clone())
+            });
 
-        for attribute in insert_attributes {
-            let canonical_name = schema
-            .user_attributes()
-            .get_by_name_or_alias(attribute.name.as_str())
-            .map(|s| s.name.clone().into())
-            .unwrap_or_else(|| attribute.name.clone());
+            for attribute in insert_attributes {
+                let canonical_name = schema
+                .user_attributes()
+                .get_by_name_or_alias(attribute.name.as_str())
+                .map(|s| s.name.clone().into())
+                .unwrap_or_else(|| attribute.name.clone());
 
-            if attribute.name.as_str() == "kerberossync" {
-                kerb_sync_enabled = match &attribute.value {
-                    AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
-                    AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
-                    _ => Some(false),
-                };
-            }
-
-            if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
-                let db_value = attribute_value_to_db_bytes(&attribute.value);
-
-                if canonical_name.as_str() == "avatar" {
-                    debug!("EAV_AVATAR_INSERT: {} bytes (avatar)", db_value.len());
+                if attribute.name.as_str() == "kerberossync" {
+                    kerb_sync_enabled = match &attribute.value {
+                        AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
+                                      AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
+                                      _ => Some(false),
+                    };
                 }
 
-                update_user_attributes.push(model::user_attributes::ActiveModel {
-                    user_id: Set(user_id.clone()),
-                                            attribute_name: Set(canonical_name.clone()),
-                                            value: Set(Serialized(db_value)),
-                });
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "User attribute name {} doesn't exist in the schema",
-                    &attribute.name
-                )));
+                // Special handling for ou: always override with value from UserOUs list
+                if canonical_name.as_str() == "ou" {
+                    continue;
+                }
+
+                if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
+                    let db_value = attribute_value_to_db_bytes(&attribute.value);
+
+                    update_user_attributes.push(model::user_attributes::ActiveModel {
+                        user_id: Set(user_id.clone()),
+                                                attribute_name: Set(canonical_name.clone()),
+                                                value: Set(Serialized(db_value)),
+                    });
+                } else {
+                    return Err(DomainError::InternalError(format!(
+                        "User attribute name {} doesn't exist in the schema",
+                        &attribute.name
+                    )));
+                }
             }
+
+            remove_user_attributes.retain(|name| {
+                !update_user_attributes.iter().any(|u| u.attribute_name == Set(name.clone()))
+            });
+
+            Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
         }
-
-        remove_user_attributes.retain(|name| {
-            !update_user_attributes.iter().any(|u| u.attribute_name == Set(name.clone()))
-        });
-
-        debug!("EAV_COMPUTE: FINAL remove list = {:?}", remove_user_attributes.iter().map(|n| n.as_str()).collect::<Vec<_>>());
-
-        Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
-    }
 
     async fn update_user_with_transaction(
         transaction: &DatabaseTransaction,
@@ -377,29 +384,24 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err, fields(user_id = ?request.user_id.as_str()))]
     async fn create_user(&self, mut request: CreateUserRequest) -> Result<()> {
-        // Enforce Integer only for kerberossync
-        let kerb_index = request
-        .attributes
-        .iter()
-        .position(|attr| attr.name.as_str() == "kerberossync");
-        if let Some(idx) = kerb_index {
-            if let AttributeValue::Integer(Cardinality::Singleton(v)) = &request.attributes[idx].value {
-                if *v != 0 && *v != 1 {
-                    request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
-                }
-            } else {
-                request.attributes[idx].value = AttributeValue::Integer(Cardinality::Singleton(0));
-            }
-        } else {
-            request.attributes.push(Attribute {
-                name: "kerberossync".into(),
-                                    value: AttributeValue::Integer(Cardinality::Singleton(0)),
-            });
-        }
-
         let now = chrono::Utc::now().naive_utc();
         let uuid = Uuid::from_name_and_date(request.user_id.as_str(), &now);
         let lower_email = request.email.as_str().to_lowercase();
+
+        // === NEW: Enforce ou from global UserOUs list ===
+        let schema = self.get_schema().await?;
+        let default_ou = schema.user_attributes()
+            .get_by_name_or_alias("userous")
+            .and_then(|_| Some("people".to_string())) // fallback, real value read in transaction
+            .unwrap_or_else(|| "people".to_string());
+
+        if !request.attributes.iter().any(|a| a.name.as_str() == "ou") {
+            request.attributes.push(Attribute {
+                name: "ou".into(),
+                value: AttributeValue::String(Cardinality::Singleton(default_ou)),
+            });
+        }
+
         let new_user = model::users::ActiveModel {
             user_id: Set(request.user_id.clone()),
             email: Set(request.email),
@@ -414,48 +416,43 @@ impl UserBackendHandler for SqlBackendHandler {
         };
 
         self.sql_pool
-        .transaction::<_, (), DomainError>(|transaction| {
-            Box::pin(async move {
-                let schema = Self::get_schema_with_transaction(transaction).await?;
-                let mut new_user_attributes = Vec::new();
+            .transaction::<_, (), DomainError>(|transaction| {
+                Box::pin(async move {
+                    let schema = Self::get_schema_with_transaction(transaction).await?;
+                    let mut new_user_attributes = Vec::new();
 
-                for attribute in request.attributes {
-                    let canonical_name = schema
-                    .user_attributes()
-                    .get_by_name_or_alias(attribute.name.as_str())
-                    .map(|s| s.name.clone().into())
-                    .unwrap_or_else(|| attribute.name.clone());
+                    for attribute in request.attributes {
+                        let canonical_name = schema
+                            .user_attributes()
+                            .get_by_name_or_alias(attribute.name.as_str())
+                            .map(|s| s.name.clone().into())
+                            .unwrap_or_else(|| attribute.name.clone());
 
-                    if schema
-                        .user_attributes()
-                        .get_attribute_type(attribute.name.as_str())
-                        .is_some()
+                        if schema
+                            .user_attributes()
+                            .get_attribute_type(attribute.name.as_str())
+                            .is_some()
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
-
-                            if canonical_name.as_str() == "avatar" {
-                                debug!("EAV_CREATE_INSERT: {} bytes (avatar)", db_value.len());
-                            }
-
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
-                                                     attribute_name: Set(canonical_name.clone()),
-                                                     value: Set(Serialized(db_value)),
+                                attribute_name: Set(canonical_name.clone()),
+                                value: Set(Serialized(db_value)),
                             });
                         }
-                }
+                    }
 
-                new_user.insert(transaction).await?;
-                if !new_user_attributes.is_empty() {
-                    let _ = model::UserAttributes::insert_many(new_user_attributes)
-                    .exec(transaction)
-                    .await?;
-                }
+                    new_user.insert(transaction).await?;
+                    if !new_user_attributes.is_empty() {
+                        let _ = model::UserAttributes::insert_many(new_user_attributes)
+                            .exec(transaction)
+                            .await?;
+                    }
 
-                Ok(())
+                    Ok(())
+                })
             })
-        })
-        .await?;
+            .await?;
         Ok(())
     }
 

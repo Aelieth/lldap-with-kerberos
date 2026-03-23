@@ -9,61 +9,59 @@ use yew::prelude::*;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/delete_user.graphql",
+    query_path = "queries/delete_ou.graphql",
     response_derives = "Debug",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct DeleteUserQuery;
+pub struct DeleteOuQuery;
 
-pub struct DeleteUser {
+pub struct DeleteUserOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
-pub struct DeleteUserProps {
-    pub username: String,
-    pub on_user_deleted: Callback<String>,
+pub struct DeleteUserOuProps {
+    pub ou: String,
+    pub on_ou_deleted: Callback<String>,
     pub on_error: Callback<Error>,
 }
 
 pub enum Msg {
-    ClickedDeleteUser,
-    ConfirmDeleteUser,
+    ClickedDeleteOu,
+    ConfirmDeleteOu,
     DismissModal,
-    DeleteUserResponse(Result<delete_user_query::ResponseData>),
+    DeleteOuResponse(Result<delete_ou_query::ResponseData>),
 }
 
-impl CommonComponent<DeleteUser> for DeleteUser {
+impl CommonComponent<DeleteUserOu> for DeleteUserOu {
     fn handle_msg(
         &mut self,
         ctx: &Context<Self>,
         msg: <Self as Component>::Message,
     ) -> Result<bool> {
         match msg {
-            Msg::ClickedDeleteUser => {
+            Msg::ClickedDeleteOu => {
                 self.modal.as_ref().expect("modal not initialized").show();
             }
-            Msg::ConfirmDeleteUser => {
+            Msg::ConfirmDeleteOu => {
                 self.update(ctx, Msg::DismissModal);
-                self.common.call_graphql::<DeleteUserQuery, _>(
+                self.common.call_graphql::<DeleteOuQuery, _>(
                     ctx,
-                    delete_user_query::Variables {
-                        user: ctx.props().username.clone(),
+                    delete_ou_query::Variables {
+                        name: ctx.props().ou.clone(),
                     },
-                    Msg::DeleteUserResponse,
-                    "Error trying to delete user",
+                    Msg::DeleteOuResponse,
+                    "Error trying to delete OU",
                 );
             }
             Msg::DismissModal => {
                 self.modal.as_ref().expect("modal not initialized").hide();
             }
-            Msg::DeleteUserResponse(response) => {
+            Msg::DeleteOuResponse(response) => {
                 response?;
-                ctx.props()
-                    .on_user_deleted
-                    .emit(ctx.props().username.clone());
+                ctx.props().on_ou_deleted.emit(ctx.props().ou.clone());
             }
         }
         Ok(true)
@@ -74,9 +72,9 @@ impl CommonComponent<DeleteUser> for DeleteUser {
     }
 }
 
-impl Component for DeleteUser {
+impl Component for DeleteUserOu {
     type Message = Msg;
-    type Properties = DeleteUserProps;
+    type Properties = DeleteUserOuProps;
 
     fn create(_: &Context<Self>) -> Self {
         Self {
@@ -112,9 +110,9 @@ impl Component for DeleteUser {
           <button
             class="btn btn-danger"
             disabled={self.common.is_task_running()}
-            onclick={link.callback(|_| Msg::ClickedDeleteUser)}>
-            <i class="bi-x-circle-fill" aria-label="Delete user" />
-            {"Delete User"}
+            onclick={link.callback(|_| Msg::ClickedDeleteOu)}>
+            <i class="bi-x-circle-fill me-2" aria-label="Delete OU" />
+            {"Delete OU"}
           </button>
           {self.show_modal(ctx)}
           </>
@@ -122,22 +120,21 @@ impl Component for DeleteUser {
     }
 }
 
-impl DeleteUser {
+impl DeleteUserOu {
     fn show_modal(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
         html! {
           <div
             class="modal fade"
-            id={format!("deleteUserModal{}", ctx.props().username)}
+            id={format!("deleteOuModal{}", ctx.props().ou)}
             tabindex="-1"
-            //role="dialog"
-            aria-labelledby="deleteUserModalLabel"
+            aria-labelledby="deleteOuModalLabel"
             aria-hidden="true"
             ref={self.node_ref.clone()}>
-            <div class="modal-dialog" /*role="document"*/>
+            <div class="modal-dialog">
               <div class="modal-content">
                 <div class="modal-header">
-                  <h5 class="modal-title" id="deleteUserModalLabel">{"Delete user?"}</h5>
+                  <h5 class="modal-title" id="deleteOuModalLabel">{"Delete Organizational Unit?"}</h5>
                   <button
                     type="button"
                     class="btn-close"
@@ -146,8 +143,9 @@ impl DeleteUser {
                 </div>
                 <div class="modal-body">
                 <span>
-                  {"Are you sure you want to delete user "}
-                  <b>{&ctx.props().username}</b>{"?"}
+                  {"Are you sure you want to delete Organizational Unit "}
+                  <b>{&ctx.props().ou}</b>{"?"}<br />
+                  {"All users in this OU will be reassigned to 'people'. This cannot be undone."}
                 </span>
                 </div>
                 <div class="modal-footer">
@@ -160,7 +158,7 @@ impl DeleteUser {
                   </button>
                   <button
                     type="button"
-                    onclick={link.callback(|_| Msg::ConfirmDeleteUser)}
+                    onclick={link.callback(|_| Msg::ConfirmDeleteOu)}
                     class="btn btn-danger">
                     <i class="bi-check-circle me-2"></i>
                     {"Yes, I'm sure"}

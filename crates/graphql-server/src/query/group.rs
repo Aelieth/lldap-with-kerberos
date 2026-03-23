@@ -77,7 +77,17 @@ impl<Handler: BackendHandler + OpaqueHandler> Group<Handler> {
         self.uuid.clone()
     }
 
-    /// User-defined attributes.
+    /// Single-layer OU (defaults to "groups" — editable by admin only)
+    fn ou(&self) -> String {
+        self.attributes
+        .iter()
+        .find(|a| a.name() == "ou")
+        .and_then(|a| a.attribute.value.as_str())
+        .unwrap_or("groups")
+        .to_string()
+    }
+
+    /// User-defined attributes (includes ou for legacy clients).
     fn attributes(&self) -> &[AttributeValue<Handler>] {
         &self.attributes
     }

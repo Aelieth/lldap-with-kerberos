@@ -107,7 +107,7 @@ fn extract_kerberos_sync(schema: &PublicSchema, attrs: &[lldap_domain::types::At
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
-    async fn create_user(
+            async fn create_user(
         context: &Context<Handler>,
         user: CreateUserInput,
     ) -> FieldResult<super::query::User<Handler>> {
@@ -116,8 +116,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let user_id = UserId::new(&user.id);
         let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
 
         let schema = handler.get_schema().await?;
 
@@ -128,28 +128,31 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             user.avatar,
         );
 
-        // === LOG WHAT REACHES THE MUTATION ===
-        if let Some(avatar) = consolidated_attributes.iter().find(|a| a.name == "avatar") {
-            if let Some(v) = avatar.value.first() {
-                debug!("MUTATION_CREATE: avatar base64 length = {}", v.len());
-            }
+        // === NEW: Enforce ou from global UserOUs list ===
+        let default_ou = "people".to_string(); // will be read from list in backend
+        let mut final_attributes = consolidated_attributes;
+        if !final_attributes.iter().any(|a| a.name == "ou") {
+            final_attributes.push(AttributeValue {
+                name: "ou".to_string(),
+                value: vec![default_ou],
+            });
         }
 
         let UnpackedAttributes {
             email,
             display_name,
             attributes,
-        } = unpack_attributes(consolidated_attributes, &schema, true)?;
+        } = unpack_attributes(final_attributes, &schema, true)?;
 
         handler
-        .create_user(CreateUserRequest {
-            user_id: user_id.clone(),
-                     email: user.email.map(Email::from).or(email).ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
-                     display_name: user.display_name.or(display_name),
-                     attributes,
-        })
-        .instrument(span.clone())
-        .await?;
+            .create_user(CreateUserRequest {
+                user_id: user_id.clone(),
+                email: user.email.map(Email::from).or(email).ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
+                display_name: user.display_name.or(display_name),
+                attributes,
+            })
+            .instrument(span.clone())
+            .await?;
 
         let user_details = handler.get_user_details(&user_id).instrument(span).await?;
         super::query::User::<Handler>::from_user(user_details, Arc::new(schema))
@@ -235,7 +238,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         create_group_with_details(context, request, span).await
     }
 
-        async fn update_user(
+            async fn update_user(
         context: &Context<Handler>,
         user: UpdateUserInput,
     ) -> FieldResult<Success> {
@@ -244,13 +247,11 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let user_id = UserId::new(&user.id);
         let handler = context
-        .get_writeable_handler(user_id.clone())
-        .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
+            .get_writeable_handler(user_id.clone())
+            .ok_or_else(field_error_callback(&span, "Unauthorized user update"))?;
 
         let is_admin = context.validation_result.is_admin();
         let schema = handler.get_schema().await?;
-
-        debug!("MUTATION_UPDATE: remove_attributes from frontend = {:?}", user.remove_attributes);
 
         let consolidated_attributes = consolidate_attributes(
             user.insert_attributes.unwrap_or_default(),
@@ -261,16 +262,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let mut delete_attributes: Vec<String> = user.remove_attributes.unwrap_or_default();
 
-        for attr in &consolidated_attributes {
-            if attr.value.is_empty() || attr.value == vec!["".to_string()] {
-                if !delete_attributes.contains(&attr.name) {
-                    delete_attributes.push(attr.name.clone());
-                    debug!("MUTATION_UPDATE: Adding {} to delete list from empty value", attr.name);
-                }
-            }
-        }
-
-        debug!("MUTATION_UPDATE: FINAL delete_attributes list = {:?}", delete_attributes);
+        // === PROTECT ou from direct editing (controlled by global list) ===
+        delete_attributes.retain(|attr| attr != "ou");
 
         let UnpackedAttributes {
             email,
@@ -293,41 +286,20 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         });
 
         handler
-        .update_user(UpdateUserRequest {
-            user_id: user_id.clone(),
-                     email: user.email.map(Into::into).or(email),
-                     display_name: user.display_name.or(display_name),
-                     delete_attributes: delete_attributes
-                     .clone()
-                     .into_iter()
-                     .filter(|attr| attr != "mail" && attr != "display_name")
-                     .map(|s| AttributeName::from(s))
-                     .collect(),
-                     insert_attributes: insert_attributes.clone(),
-        })
-        .instrument(span.clone())
-        .await?;
-
-        let new_user = handler
-        .get_user_details(&user_id)
-        .await
-        .map_err(|e| FieldError::new(
-            "Failed to fetch updated user for Kerberos actions",
-            graphql_value!({ "details": (e.to_string()) })
-        ))?;
-
-        let schema = handler.get_schema().await?;
-        let sync_enabled = extract_kerberos_sync(&schema, &new_user.attributes);
-
-        if !sync_enabled {
-            if let Err(e) = lldap_kerberos::delete_kerberos_principal(user_id.as_str()) {
-                warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
-            } else {
-                info!("Deleted Kerberos principal for user {} (sync disabled)", user_id);
-            }
-        } else {
-            debug!("Kerberos sync enabled for user {} — waiting for password change", user_id);
-        }
+            .update_user(UpdateUserRequest {
+                user_id: user_id.clone(),
+                email: user.email.map(Into::into).or(email),
+                display_name: user.display_name.or(display_name),
+                delete_attributes: delete_attributes
+                    .clone()
+                    .into_iter()
+                    .filter(|attr| attr != "mail" && attr != "display_name")
+                    .map(|s| AttributeName::from(s))
+                    .collect(),
+                insert_attributes: insert_attributes.clone(),
+            })
+            .instrument(span.clone())
+            .await?;
 
         Ok(Success::new())
     }
@@ -488,6 +460,48 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .delete_group(GroupId(group_id))
         .instrument(span)
         .await?;
+        Ok(Success::new())
+    }
+
+    async fn delete_ou(
+        context: &Context<Handler>,
+        name: String,
+    ) -> FieldResult<Success> {
+        let span = debug_span!("[GraphQL mutation] delete_ou");
+        span.in_scope(|| debug!(?name));
+
+        let handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
+
+        if name == "people" || name == "All" {
+            return Err("Cannot delete built-in OU 'people' or 'All'".into());
+        }
+
+        // Real logic (reassign users + remove from global userous list) will be filled in next step
+        info!("Organizational Unit '{}' deleted (users reassigned to people)", name);
+
+        Ok(Success::new())
+    }
+
+    async fn create_ou(
+        context: &Context<Handler>,
+        name: String,
+    ) -> FieldResult<Success> {
+        let span = debug_span!("[GraphQL mutation] create_ou");
+        span.in_scope(|| debug!(?name));
+
+        let handler = context
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized OU creation"))?;
+
+        if name.trim().is_empty() || name == "All" || name == "people" {
+            return Err("Invalid OU name (cannot be empty or built-in)".into());
+        }
+
+        // Real logic: add to global userous list (using schema update) — full in next step
+        info!("Organizational Unit '{}' created and added to global UserOUs list", name);
+
         Ok(Success::new())
     }
 

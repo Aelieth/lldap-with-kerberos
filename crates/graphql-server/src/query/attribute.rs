@@ -135,7 +135,6 @@ pub fn serialize_attribute_to_graphql(attribute_value: &DomainAttributeValue) ->
     }
 }
 
-// Hardcoded helpers (now all using PublicSchema::get() from crates/schema)
 fn get_hardcoded_user_value(user: &DomainUser, name: &str) -> Option<DomainAttributeValue> {
     match name {
         "userid" | "user_id" | "uid" => Some(user.user_id.clone().into_string().into()),

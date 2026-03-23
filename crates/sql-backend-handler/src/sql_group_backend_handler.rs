@@ -2,7 +2,7 @@ use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
     requests::{CreateGroupRequest, UpdateGroupRequest},
-    types::{AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
+    types::{Attribute, AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
 };
 use lldap_domain_handlers::handler::{
     GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler,
@@ -22,6 +22,9 @@ use tracing::instrument;
 fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     match value {
         AttributeValue::String(Cardinality::Singleton(s)) => s.as_bytes().to_vec(),
+        AttributeValue::String(Cardinality::Unbounded(list)) => {
+            serde_json::to_vec(list).unwrap_or_else(|_| b"[]".to_vec())
+        }
         AttributeValue::Integer(Cardinality::Singleton(i)) => i.to_string().as_bytes().to_vec(),
         AttributeValue::Avatar(Cardinality::Singleton(p)) => p.0.clone(),
         AttributeValue::DateTime(Cardinality::Singleton(dt)) => dt.and_utc().timestamp().to_string().as_bytes().to_vec(),
@@ -218,42 +221,59 @@ impl GroupBackendHandler for SqlBackendHandler {
             modified_date: Set(now),
             ..Default::default()
         };
+
         Ok(self
-        .sql_pool
-        .transaction::<_, GroupId, DomainError>(|transaction| {
-            Box::pin(async move {
-                let schema = Self::get_schema_with_transaction(transaction).await?;
-                let group_id = new_group.insert(transaction).await?.group_id;
-                let mut new_group_attributes = Vec::new();
-                for attribute in request.attributes {
-                    if schema
-                        .group_attributes()
-                        .get_attribute_type(attribute.name.as_str())
-                        .is_some()
+            .sql_pool
+            .transaction::<_, GroupId, DomainError>(|transaction| {
+                Box::pin(async move {
+                    let schema = Self::get_schema_with_transaction(transaction).await?;
+
+                    // === NEW: Enforce ou from global GroupOUs list ===
+                    let default_ou = schema.group_attributes()
+                        .get_by_name_or_alias("groupous")
+                        .and_then(|_| Some("groups".to_string()))
+                        .unwrap_or_else(|| "groups".to_string());
+
+                    let mut final_attributes = request.attributes;
+                    if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
+                        final_attributes.push(Attribute {
+                            name: "ou".into(),
+                            value: AttributeValue::String(Cardinality::Singleton(default_ou)),
+                        });
+                    }
+
+                    let group_id = new_group.insert(transaction).await?.group_id;
+                    let mut new_group_attributes = Vec::new();
+
+                    for attribute in final_attributes {
+                        if schema
+                            .group_attributes()
+                            .get_attribute_type(attribute.name.as_str())
+                            .is_some()
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_group_attributes.push(model::group_attributes::ActiveModel {
                                 group_id: Set(group_id),
-                                                      attribute_name: Set(attribute.name),
-                                                      value: Set(Serialized(db_value)),
+                                attribute_name: Set(attribute.name),
+                                value: Set(Serialized(db_value)),
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
-                                "Attribute name {} doesn't exist in the group schema,
-                                yet was attempted to be inserted in the database",
+                                "Attribute name {} doesn't exist in the group schema",
                                 &attribute.name
                             )));
                         }
-                }
-                if !new_group_attributes.is_empty() {
-                    model::GroupAttributes::insert_many(new_group_attributes)
-                    .exec(transaction)
-                    .await?;
-                }
-                Ok(group_id)
+                    }
+
+                    if !new_group_attributes.is_empty() {
+                        model::GroupAttributes::insert_many(new_group_attributes)
+                            .exec(transaction)
+                            .await?;
+                    }
+                    Ok(group_id)
+                })
             })
-        })
-        .await?)
+            .await?)
     }
 
     #[instrument(skip(self), level = "debug", err)]

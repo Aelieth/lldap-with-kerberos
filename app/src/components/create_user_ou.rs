@@ -5,65 +5,73 @@ use crate::infra::{
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/delete_user.graphql",
+    query_path = "queries/create_ou.graphql",
     response_derives = "Debug",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct DeleteUserQuery;
+pub struct CreateOuQuery;
 
-pub struct DeleteUser {
+pub struct CreateUserOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
+    new_ou_name: String,
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
-pub struct DeleteUserProps {
-    pub username: String,
-    pub on_user_deleted: Callback<String>,
+pub struct CreateUserOuProps {
+    pub on_ou_created: Callback<String>,
     pub on_error: Callback<Error>,
 }
 
 pub enum Msg {
-    ClickedDeleteUser,
-    ConfirmDeleteUser,
+    ClickedCreateOu,
+    ConfirmCreateOu,
     DismissModal,
-    DeleteUserResponse(Result<delete_user_query::ResponseData>),
+    CreateOuResponse(Result<create_ou_query::ResponseData>),
+    NewOuNameChanged(String),
 }
 
-impl CommonComponent<DeleteUser> for DeleteUser {
+impl CommonComponent<CreateUserOu> for CreateUserOu {
     fn handle_msg(
         &mut self,
         ctx: &Context<Self>,
         msg: <Self as Component>::Message,
     ) -> Result<bool> {
         match msg {
-            Msg::ClickedDeleteUser => {
+            Msg::ClickedCreateOu => {
                 self.modal.as_ref().expect("modal not initialized").show();
             }
-            Msg::ConfirmDeleteUser => {
+            Msg::ConfirmCreateOu => {
                 self.update(ctx, Msg::DismissModal);
-                self.common.call_graphql::<DeleteUserQuery, _>(
+                if self.new_ou_name.trim().is_empty() {
+                    return Ok(true);
+                }
+                self.common.call_graphql::<CreateOuQuery, _>(
                     ctx,
-                    delete_user_query::Variables {
-                        user: ctx.props().username.clone(),
+                    create_ou_query::Variables {
+                        name: self.new_ou_name.clone(),
                     },
-                    Msg::DeleteUserResponse,
-                    "Error trying to delete user",
+                    Msg::CreateOuResponse,
+                    "Error trying to create OU",
                 );
             }
             Msg::DismissModal => {
                 self.modal.as_ref().expect("modal not initialized").hide();
             }
-            Msg::DeleteUserResponse(response) => {
+            Msg::CreateOuResponse(response) => {
                 response?;
-                ctx.props()
-                    .on_user_deleted
-                    .emit(ctx.props().username.clone());
+                ctx.props().on_ou_created.emit(self.new_ou_name.clone());
+                self.new_ou_name = String::new();
+            }
+            Msg::NewOuNameChanged(name) => {
+                self.new_ou_name = name;
+                return Ok(true);
             }
         }
         Ok(true)
@@ -74,15 +82,16 @@ impl CommonComponent<DeleteUser> for DeleteUser {
     }
 }
 
-impl Component for DeleteUser {
+impl Component for CreateUserOu {
     type Message = Msg;
-    type Properties = DeleteUserProps;
+    type Properties = CreateUserOuProps;
 
     fn create(_: &Context<Self>) -> Self {
         Self {
             common: CommonComponentParts::<Self>::create(),
             node_ref: NodeRef::default(),
             modal: None,
+            new_ou_name: String::new(),
         }
     }
 
@@ -107,37 +116,45 @@ impl Component for DeleteUser {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+        let on_input = link.callback(|e: InputEvent| {
+            let value = e.target()
+            .unwrap()
+            .dyn_into::<web_sys::HtmlInputElement>()
+            .unwrap()
+            .value();
+            Msg::NewOuNameChanged(value)
+        });
+
         html! {
           <>
           <button
-            class="btn btn-danger"
+            class="btn btn-primary"
             disabled={self.common.is_task_running()}
-            onclick={link.callback(|_| Msg::ClickedDeleteUser)}>
-            <i class="bi-x-circle-fill" aria-label="Delete user" />
-            {"Delete User"}
+            onclick={link.callback(|_| Msg::ClickedCreateOu)}>
+            <i class="bi-people-fill me-2" aria-label="Create OU" />
+            {"Create OU"}
           </button>
-          {self.show_modal(ctx)}
+          {self.show_modal(ctx, on_input)}
           </>
         }
     }
 }
 
-impl DeleteUser {
-    fn show_modal(&self, ctx: &Context<Self>) -> Html {
+impl CreateUserOu {
+    fn show_modal(&self, ctx: &Context<Self>, on_input: Callback<InputEvent>) -> Html {
         let link = &ctx.link();
         html! {
           <div
             class="modal fade"
-            id={format!("deleteUserModal{}", ctx.props().username)}
+            id="createOuModal"
             tabindex="-1"
-            //role="dialog"
-            aria-labelledby="deleteUserModalLabel"
+            aria-labelledby="createOuModalLabel"
             aria-hidden="true"
             ref={self.node_ref.clone()}>
-            <div class="modal-dialog" /*role="document"*/>
+            <div class="modal-dialog">
               <div class="modal-content">
                 <div class="modal-header">
-                  <h5 class="modal-title" id="deleteUserModalLabel">{"Delete user?"}</h5>
+                  <h5 class="modal-title" id="createOuModalLabel">{"Create New Organizational Unit"}</h5>
                   <button
                     type="button"
                     class="btn-close"
@@ -145,10 +162,12 @@ impl DeleteUser {
                     onclick={link.callback(|_| Msg::DismissModal)} />
                 </div>
                 <div class="modal-body">
-                <span>
-                  {"Are you sure you want to delete user "}
-                  <b>{&ctx.props().username}</b>{"?"}
-                </span>
+                  <input
+                    type="text"
+                    class="form-control"
+                    placeholder="Enter OU name (e.g. office)"
+                    value={self.new_ou_name.clone()}
+                    oninput={on_input} />
                 </div>
                 <div class="modal-footer">
                   <button
@@ -160,10 +179,11 @@ impl DeleteUser {
                   </button>
                   <button
                     type="button"
-                    onclick={link.callback(|_| Msg::ConfirmDeleteUser)}
-                    class="btn btn-danger">
+                    onclick={link.callback(|_| Msg::ConfirmCreateOu)}
+                    class="btn btn-primary"
+                    disabled={self.new_ou_name.trim().is_empty()}>
                     <i class="bi-check-circle me-2"></i>
-                    {"Yes, I'm sure"}
+                    {"Create OU"}
                   </button>
                 </div>
               </div>

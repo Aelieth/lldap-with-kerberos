@@ -50,17 +50,18 @@ pub fn get_group_attribute(
 
             classes.extend(
                 schema
-                    .get_schema()
-                    .extra_group_object_classes
-                    .iter()
-                    .map(|c| c.as_str().as_bytes().to_vec()),
+                .get_schema()
+                .extra_group_object_classes
+                .iter()
+                .map(|c| c.as_str().as_bytes().to_vec()),
             );
             classes
         }
         // Always returned as part of the base response.
         GroupFieldType::Dn => return None,
         GroupFieldType::EntryDn => {
-            vec![format!("uid={},ou=groups,{}", group.display_name, base_dn_str).into_bytes()]
+            let ou = get_group_ou(group);
+            vec![format!("cn={},ou={},{}", group.display_name, ou, base_dn_str).into_bytes()]
         }
         GroupFieldType::GroupId => {
             vec![group.id.0.to_string().into_bytes()]
@@ -68,22 +69,22 @@ pub fn get_group_attribute(
         GroupFieldType::DisplayName => vec![group.display_name.to_string().into_bytes()],
         GroupFieldType::CreationDate => vec![
             chrono::Utc
-                .from_utc_datetime(&group.creation_date)
-                .to_rfc3339()
-                .into_bytes(),
+            .from_utc_datetime(&group.creation_date)
+            .to_rfc3339()
+            .into_bytes(),
         ],
         GroupFieldType::ModifiedDate => vec![
             chrono::Utc
-                .from_utc_datetime(&group.modified_date)
-                .to_rfc3339()
-                .into_bytes(),
+            .from_utc_datetime(&group.modified_date)
+            .to_rfc3339()
+            .into_bytes(),
         ],
         GroupFieldType::Member => group
-            .users
-            .iter()
-            .filter(|u| user_filter.as_ref().map(|f| *u == f).unwrap_or(true))
-            .map(|u| format!("uid={u},ou=people,{base_dn_str}").into_bytes())
-            .collect(),
+        .users
+        .iter()
+        .filter(|u| user_filter.as_ref().map(|f| *u == f).unwrap_or(true))
+        .map(|u| format!("uid={u},ou=people,{base_dn_str}").into_bytes())
+        .collect(),
         GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
         GroupFieldType::Attribute(attr, _, _) => get_custom_attribute(&group.attributes, &attr)?,
         GroupFieldType::NoMatch => match attribute.as_str() {
@@ -100,12 +101,12 @@ pub fn get_group_attribute(
                     return None;
                 }
                 get_custom_attribute(
-                        &group.attributes,
-                        attribute,
-                    ).or_else(||{warn!(
-                            r#"Ignoring unrecognized group attribute: {}. To disable this warning, add it to "ignored_group_attributes" in the config."#,
-                            attribute
-                        );None})?
+                    &group.attributes,
+                    attribute,
+                ).or_else(||{warn!(
+                    r#"Ignoring unrecognized group attribute: {}. To disable this warning, add it to "ignored_group_attributes" in the config."#,
+                    attribute
+                );None})?
             }
         },
     };
@@ -123,6 +124,7 @@ const ALL_GROUP_ATTRIBUTE_KEYS: &[&str] = &[
     "member",
     "uniquemember",
     "entryuuid",
+    "ou",
 ];
 
 fn expand_group_attribute_wildcards(attributes: &[String]) -> ExpandedAttributes {
@@ -140,31 +142,34 @@ fn make_ldap_search_group_result_entry(
     if expanded_attributes.include_custom_attributes {
         expanded_attributes.attribute_keys.extend(
             group
-                .attributes
-                .iter()
-                .map(|a| (a.name.clone(), a.name.to_string())),
+            .attributes
+            .iter()
+            .map(|a| (a.name.clone(), a.name.to_string())),
         );
     }
     LdapSearchResultEntry {
-        dn: format!("cn={},ou=groups,{}", group.display_name, base_dn_str),
+        dn: {
+            let ou = get_group_ou(&group);
+            format!("cn={},ou={},{}", group.display_name, ou, base_dn_str)
+        },
         attributes: expanded_attributes
-            .attribute_keys
-            .into_iter()
-            .filter_map(|(attribute, name)| {
-                let values = get_group_attribute(
-                    &group,
-                    base_dn_str,
-                    &attribute,
-                    user_filter,
-                    ignored_group_attributes,
-                    schema,
-                )?;
-                Some(LdapPartialAttribute {
-                    atype: name,
-                    vals: values,
-                })
+        .attribute_keys
+        .into_iter()
+        .filter_map(|(attribute, name)| {
+            let values = get_group_attribute(
+                &group,
+                base_dn_str,
+                &attribute,
+                user_filter,
+                ignored_group_attributes,
+                schema,
+            )?;
+            Some(LdapPartialAttribute {
+                atype: name,
+                vals: values,
             })
-            .collect::<Vec<LdapPartialAttribute>>(),
+        })
+        .collect::<Vec<LdapPartialAttribute>>(),
     }
 }
 
@@ -379,6 +384,24 @@ pub fn convert_groups_to_ldap_op<'a>(
             schema,
         ))
     })
+}
+
+// NEW helper — used by EntryDn so ou appears in real LDAP DNs for groups
+fn get_group_ou(group: &Group) -> String {
+    group.attributes
+    .iter()
+    .find(|a| a.name.as_str() == "ou")
+    .and_then(|a| {
+        if let lldap_domain::types::AttributeValue::String(
+            lldap_domain::types::Cardinality::Singleton(s),
+        ) = &a.value
+        {
+            Some(s.clone())
+        } else {
+            None
+        }
+    })
+    .unwrap_or_else(|| "groups".to_string())
 }
 
 #[cfg(test)]

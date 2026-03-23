@@ -1238,7 +1238,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     let public_schema = lldap_schema::PublicSchema::get();
     let schema = public_schema.get_schema();
 
-    // 3. Re-seed ALL hardcoded attributes from single source of truth (one summary line)
+    // 3. Re-seed ALL hardcoded attributes from single source of truth
     let mut user_count = 0;
     for attr in &schema.user_attributes.attributes {
         if !attr.is_hardcoded {
@@ -1366,9 +1366,91 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
     .execute(sea_orm::Statement::from_string(backend, insert_krb_sql))
     .await;
 
-    info!("Added protected krbPrincipalName column to main users table + defaulted existing users (v12 migration)");
+    // 7. Default ou values for existing records (idempotent)
+    let insert_ou_users_sql = format!(
+        "INSERT INTO {} ({}, {}, {})
+    SELECT u.{}, 'ou', 'people'
+    FROM {} u
+    WHERE NOT EXISTS (
+        SELECT 1 FROM {} ua
+        WHERE ua.{} = u.{}
+        AND ua.{} = 'ou'
+    )",
+    UserAttributes::Table.to_string(),
+                                      UserAttributes::UserAttributeUserId.to_string(),
+                                      UserAttributes::UserAttributeName.to_string(),
+                                      UserAttributes::UserAttributeValue.to_string(),
+                                      Users::UserId.to_string(),
+                                      Users::Table.to_string(),
+                                      UserAttributes::Table.to_string(),
+                                      UserAttributes::UserAttributeUserId.to_string(),
+                                      Users::UserId.to_string(),
+                                      UserAttributes::UserAttributeName.to_string()
+    );
 
-    Ok(transaction)
+    let _ = transaction
+    .execute(sea_orm::Statement::from_string(backend, insert_ou_users_sql))
+    .await;
+
+    let insert_ou_groups_sql = format!(
+        "INSERT INTO {} ({}, {}, {})
+    SELECT g.{}, 'ou', 'groups'
+    FROM {} g
+    WHERE NOT EXISTS (
+        SELECT 1 FROM {} ga
+        WHERE ga.{} = g.{}
+        AND ga.{} = 'ou'
+    )",
+    GroupAttributes::Table.to_string(),
+                                       GroupAttributes::GroupAttributeGroupId.to_string(),
+                                       GroupAttributes::GroupAttributeName.to_string(),
+                                       GroupAttributes::GroupAttributeValue.to_string(),
+                                       Groups::GroupId.to_string(),
+                                       Groups::Table.to_string(),
+                                       GroupAttributes::Table.to_string(),
+                                       GroupAttributes::GroupAttributeGroupId.to_string(),
+                                       Groups::GroupId.to_string(),
+                                       GroupAttributes::GroupAttributeName.to_string()
+    );
+
+    let _ = transaction
+    .execute(sea_orm::Statement::from_string(backend, insert_ou_groups_sql))
+    .await;
+
+    // 8. NEW: Seed global allowed OU lists (admin-only control) — both stored on lldap_admin user
+    // UserOUs default = ["people"]
+    let insert_userous_sql = r#"
+    INSERT INTO user_attributes (user_id, attribute_name, value)
+    SELECT 'lldap_admin', 'userous', '["people"]'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM user_attributes ua
+        WHERE ua.user_id = 'lldap_admin'
+        AND ua.attribute_name = 'userous'
+        )
+        "#;
+
+        let _ = transaction
+        .execute(sea_orm::Statement::from_string(backend, insert_userous_sql))
+        .await;
+
+        // GroupOUs default = ["groups"]
+        let insert_groupous_sql = r#"
+        INSERT INTO user_attributes (user_id, attribute_name, value)
+        SELECT 'lldap_admin', 'groupous', '["groups"]'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM user_attributes ua
+            WHERE ua.user_id = 'lldap_admin'
+            AND ua.attribute_name = 'groupous'
+            )
+            "#;
+
+            let _ = transaction
+            .execute(sea_orm::Statement::from_string(backend, insert_groupous_sql))
+            .await;
+
+            info!("Seeded global UserOUs = [\"people\"] and GroupOUs = [\"groups\"] + protected ou (readonly)");
+
+            Ok(transaction)
 }
 
 // This is needed to make an array of async functions.

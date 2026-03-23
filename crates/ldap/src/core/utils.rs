@@ -259,10 +259,19 @@ pub fn map_user_field(field: &AttributeName, schema: &PublicSchema) -> UserField
             UserFieldType::PrimaryField(UserColumn::PasswordModifiedDate)
         }
         "entryuuid" | "uuid" => UserFieldType::PrimaryField(UserColumn::Uuid),
-        // NEW: Protected krbPrincipalName from main table (exactly like CreationDate)
         "krbprincipalname" | "krb_principal_name" | "krbPrincipalName" => {
             UserFieldType::PrimaryField(UserColumn::KrbPrincipalName)
         }
+        "ou" | "organizationalunit" | "organizationalUnit" => UserFieldType::Attribute(
+            AttributeName::from("ou"),
+            AttributeType::String,
+            false,
+        ),
+        "sshpublickey" | "sshPublicKey" | "ssHPublicKey" => UserFieldType::Attribute(
+            AttributeName::from("sshpublickey"),
+            AttributeType::String,
+            true,   // ← list!
+        ),
         _ => schema
         .get_schema()
         .user_attributes
@@ -298,6 +307,11 @@ pub fn map_group_field(field: &AttributeName, schema: &PublicSchema) -> GroupFie
         "member" | "uniquemember" => GroupFieldType::Member,
         "entryuuid" | "uuid" => GroupFieldType::Uuid,
         "group_id" | "groupid" => GroupFieldType::GroupId,
+        "ou" | "organizationalunit" | "organizationalUnit" => GroupFieldType::Attribute(
+            AttributeName::from("ou"),
+            AttributeType::String,
+            false,
+        ),
         _ => schema
             .get_schema()
             .group_attributes

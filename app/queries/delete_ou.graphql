@@ -1,0 +1,5 @@
+mutation DeleteOuQuery($name: String!) {
+  deleteOu(name: $name) {
+    ok
+  }
+}
