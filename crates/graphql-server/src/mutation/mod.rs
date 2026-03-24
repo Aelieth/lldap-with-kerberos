@@ -492,15 +492,69 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| debug!(?name));
 
         let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(&span, "Unauthorized OU creation"))?;
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized OU creation"))?;
 
-        if name.trim().is_empty() || name == "All" || name == "people" {
+        let name_lower = name.trim().to_lowercase();
+        if name_lower.is_empty() || name_lower == "all" || name_lower == "people" {
             return Err("Invalid OU name (cannot be empty or built-in)".into());
         }
 
-        // Real logic: add to global userous list (using schema update) — full in next step
-        info!("Organizational Unit '{}' created and added to global UserOUs list", name);
+        if name.len() < 2 || name.len() > 64 ||
+           !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
+           name.starts_with('-') || name.starts_with('_') ||
+           name.ends_with('-') || name.ends_with('_') {
+            return Err(FieldError::new(
+                "Invalid OU name: 2-64 characters, only a-z A-Z 0-9 - _ allowed. No spaces or special characters.",
+                juniper::Value::null(),
+            ));
+        }
+
+        let admin_id = UserId::new("admin");
+
+        let admin_user = handler.get_user_details(&admin_id).await
+            .map_err(|e| FieldError::new(
+                "Failed to load admin user for OU list",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        let current_ous: Vec<String> = admin_user.attributes.iter()
+            .find(|a| a.name.as_str() == "userous")
+            .and_then(|a| match &a.value {
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(s),
+                ) => serde_json::from_str(s.as_str()).ok(),
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(list),
+                ) => Some(list.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| vec!["people".to_string()]);
+
+        if current_ous.contains(&name) {
+            return Ok(Success::new());
+        }
+
+        let mut new_ous = current_ous;
+        new_ous.push(name.clone());
+        new_ous.sort();
+
+        handler.update_user(UpdateUserRequest {
+            user_id: admin_id,
+            email: None,
+            display_name: None,
+            delete_attributes: vec![],
+            insert_attributes: vec![lldap_domain::types::Attribute {
+                name: AttributeName::from("userous"),
+                value: lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(new_ous),
+                ),
+            }],
+        }).await
+        .map_err(|e| FieldError::new(
+            "Failed to save updated OU list",
+            graphql_value!({ "details": (e.to_string()) }),
+        ))?;
 
         Ok(Success::new())
     }

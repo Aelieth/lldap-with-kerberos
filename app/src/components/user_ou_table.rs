@@ -1,27 +1,29 @@
-use crate::components::create_user_ou::CreateUserOu;
+use crate::components::{create_user_ou::CreateUserOu, delete_user_ou::DeleteUserOu};
 use yew::prelude::*;
 use wasm_bindgen::JsCast;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
     pub ou_filter: String,
-    pub ous: Vec<String>,                     // ← real list from backend (next step)
+    pub ous: Vec<String>,
     pub on_ou_changed: Callback<String>,
-    pub on_delete_ou: Callback<()>,
-    pub on_ou_created: Callback<String>,      // ← for the real modal
+    pub on_ou_created: Callback<String>,
+    pub on_ou_deleted: Callback<String>,
+    pub error: Option<String>,
 }
 
 #[function_component(UserOuTable)]
 pub fn user_ou_table(props: &Props) -> Html {
-    // Build nice tree display: All + people always first, then the rest with ├── / └──
     let mut display_ous = vec![
         ("All".to_string(), "All".to_string()),
         ("people".to_string(), "people".to_string()),
     ];
 
-    for (i, ou) in props.ous.iter().enumerate() {
-        let prefix = if i == props.ous.len() - 1 { "└── " } else { "├── " };
-        display_ous.push((format!("{}{}", prefix, ou), ou.clone()));
+    let custom_ous: Vec<&String> = props.ous.iter().filter(|&o| o != "people").collect();
+
+    for (i, ou) in custom_ous.iter().enumerate() {
+        let prefix = if i == custom_ous.len() - 1 { "└── " } else { "├── " };
+        display_ous.push((format!("{}{}", prefix, ou), (*ou).clone()));
     }
 
     html! {
@@ -38,6 +40,16 @@ pub fn user_ou_table(props: &Props) -> Html {
                 </select>
             </div>
 
+            { if let Some(err) = &props.error {
+                html! {
+                    <div class="col-md-6">
+                        <span class="text-danger fw-bold">{err}</span>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
             <div class="col-auto">
                 <CreateUserOu
                     on_ou_created={props.on_ou_created.clone()}
@@ -46,10 +58,11 @@ pub fn user_ou_table(props: &Props) -> Html {
             </div>
 
             <div class="col-auto">
-                <button class="btn btn-danger" onclick={props.on_delete_ou.reform(|_| ())} disabled={props.ou_filter == "All"}>
-                    <i class="bi-x-circle-fill me-2"></i>
-                    {"Delete OU"}
-                </button>
+                <DeleteUserOu
+                    ou={props.ou_filter.clone()}
+                    on_ou_deleted={props.on_ou_deleted.clone()}
+                    on_error={Callback::noop()}
+                />
             </div>
         </div>
     }

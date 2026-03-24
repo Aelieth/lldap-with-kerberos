@@ -87,6 +87,7 @@ type Query {
   kerberosInfo: KerberosInfo!
   keycloakSuggestedConfig: KeycloakSuggestedConfig!
   keycloakConfig: KeycloakConfigResponse!
+  userOus: [String!]!
 }
 
 "The details required to create a user."

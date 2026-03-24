@@ -26,7 +26,7 @@ pub struct CreateUserOu {
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
 pub struct CreateUserOuProps {
     pub on_ou_created: Callback<String>,
-    pub on_error: Callback<Error>,
+    pub on_error: Callback<Error>,   // ← now actually used
 }
 
 pub enum Msg {
@@ -65,9 +65,15 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
                 self.modal.as_ref().expect("modal not initialized").hide();
             }
             Msg::CreateOuResponse(response) => {
-                response?;
-                ctx.props().on_ou_created.emit(self.new_ou_name.clone());
-                self.new_ou_name = String::new();
+                match response {
+                    Ok(_) => {
+                        ctx.props().on_ou_created.emit(self.new_ou_name.clone());
+                        self.new_ou_name = String::new();
+                    }
+                    Err(e) => {
+                        ctx.props().on_error.emit(e);   // ← send error up to parent
+                    }
+                }
             }
             Msg::NewOuNameChanged(name) => {
                 self.new_ou_name = name;
