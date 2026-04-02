@@ -1,0 +1,5 @@
+mutation ChangeUserOuQuery($userIds: [String!]!, $newOu: String!) {
+  changeUserOu(userIds: $userIds, newOu: $newOu) {
+    ok
+  }
+}

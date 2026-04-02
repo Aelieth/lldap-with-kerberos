@@ -273,6 +273,7 @@ impl Component for UserTable {
             <div class="col-auto">
             <ChangeUserOu
             selected_users={self.selected_users.clone()}
+            ous={self.ous.clone()}                     // ← add this line
             on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
             on_error={Callback::noop()} />
             </div>

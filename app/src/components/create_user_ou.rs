@@ -2,6 +2,7 @@ use crate::infra::{
     common_component::{CommonComponent, CommonComponentParts},
     modal::Modal,
 };
+use crate::components::status_modal::StatusModal;
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
@@ -21,12 +22,13 @@ pub struct CreateUserOu {
     node_ref: NodeRef,
     modal: Option<Modal>,
     new_ou_name: String,
+    status_message: Option<(String, bool)>,
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
 pub struct CreateUserOuProps {
     pub on_ou_created: Callback<String>,
-    pub on_error: Callback<Error>,   // ← now actually used
+    pub on_error: Callback<Error>,
 }
 
 pub enum Msg {
@@ -35,6 +37,8 @@ pub enum Msg {
     DismissModal,
     CreateOuResponse(Result<create_ou_query::ResponseData>),
     NewOuNameChanged(String),
+    ShowStatus(String, bool),
+    DismissStatus,
 }
 
 impl CommonComponent<CreateUserOu> for CreateUserOu {
@@ -45,13 +49,17 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
     ) -> Result<bool> {
         match msg {
             Msg::ClickedCreateOu => {
+                self.common.error = None;
+                self.new_ou_name = String::new();
+                self.status_message = None;
                 self.modal.as_ref().expect("modal not initialized").show();
+                Ok(true)
             }
             Msg::ConfirmCreateOu => {
-                self.update(ctx, Msg::DismissModal);
                 if self.new_ou_name.trim().is_empty() {
                     return Ok(true);
                 }
+                // ANY non-empty name now reaches the backend (including "all", "people", duplicates)
                 self.common.call_graphql::<CreateOuQuery, _>(
                     ctx,
                     create_ou_query::Variables {
@@ -60,27 +68,42 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
                     Msg::CreateOuResponse,
                     "Error trying to create OU",
                 );
+                Ok(true)
             }
             Msg::DismissModal => {
                 self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
             }
             Msg::CreateOuResponse(response) => {
                 match response {
                     Ok(_) => {
+                        let msg = format!("Successfully created OU: {}", self.new_ou_name);
                         ctx.props().on_ou_created.emit(self.new_ou_name.clone());
                         self.new_ou_name = String::new();
+                        ctx.link().send_message(Msg::ShowStatus(msg, true));
                     }
                     Err(e) => {
-                        ctx.props().on_error.emit(e);   // ← send error up to parent
+                        let msg = e.to_string();
+                        ctx.props().on_error.emit(e);
+                        ctx.link().send_message(Msg::ShowStatus(msg, false));
                     }
                 }
+                self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
             }
             Msg::NewOuNameChanged(name) => {
                 self.new_ou_name = name;
-                return Ok(true);
+                Ok(true)
+            }
+            Msg::ShowStatus(message, is_success) => {
+                self.status_message = Some((message, is_success));
+                Ok(true)
+            }
+            Msg::DismissStatus => {
+                self.status_message = None;
+                Ok(true)
             }
         }
-        Ok(true)
     }
 
     fn mut_common(&mut self) -> &mut CommonComponentParts<Self> {
@@ -98,6 +121,7 @@ impl Component for CreateUserOu {
             node_ref: NodeRef::default(),
             modal: None,
             new_ou_name: String::new(),
+            status_message: None,
         }
     }
 
@@ -124,30 +148,38 @@ impl Component for CreateUserOu {
         let link = &ctx.link();
         let on_input = link.callback(|e: InputEvent| {
             let value = e.target()
-            .unwrap()
-            .dyn_into::<web_sys::HtmlInputElement>()
-            .unwrap()
-            .value();
+                .unwrap()
+                .dyn_into::<web_sys::HtmlInputElement>()
+                .unwrap()
+                .value();
             Msg::NewOuNameChanged(value)
         });
+
+        let status_html = if let Some((msg, is_success)) = &self.status_message {
+            let on_dismiss = link.callback(|_| Msg::DismissStatus);
+            html! { <StatusModal message={msg.clone()} is_success={*is_success} on_dismiss={on_dismiss} /> }
+        } else {
+            html! {}
+        };
 
         html! {
           <>
           <button
             class="btn btn-primary"
-            disabled={self.common.is_task_running()}
+            disabled={self.common.is_task_running()}   // ← ONLY this line changed
             onclick={link.callback(|_| Msg::ClickedCreateOu)}>
             <i class="bi-people-fill me-2" aria-label="Create OU" />
             {"Create OU"}
           </button>
-          {self.show_modal(ctx, on_input)}
+          {self.show_create_modal(ctx, on_input)}
+          {status_html}
           </>
         }
     }
 }
 
 impl CreateUserOu {
-    fn show_modal(&self, ctx: &Context<Self>, on_input: Callback<InputEvent>) -> Html {
+    fn show_create_modal(&self, ctx: &Context<Self>, on_input: Callback<InputEvent>) -> Html {
         let link = &ctx.link();
         html! {
           <div
@@ -187,7 +219,7 @@ impl CreateUserOu {
                     type="button"
                     onclick={link.callback(|_| Msg::ConfirmCreateOu)}
                     class="btn btn-primary"
-                    disabled={self.new_ou_name.trim().is_empty()}>
+                    disabled={self.common.is_task_running() || self.new_ou_name.trim().is_empty()}>
                     <i class="bi-check-circle me-2"></i>
                     {"Create OU"}
                   </button>

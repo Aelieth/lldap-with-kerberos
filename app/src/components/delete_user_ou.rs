@@ -2,9 +2,11 @@ use crate::infra::{
     common_component::{CommonComponent, CommonComponentParts},
     modal::Modal,
 };
+use crate::components::status_modal::StatusModal;
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -19,6 +21,7 @@ pub struct DeleteUserOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
+    status_message: Option<(String, bool)>,  // (message, is_success)
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
@@ -33,6 +36,8 @@ pub enum Msg {
     ConfirmDeleteOu,
     DismissModal,
     DeleteOuResponse(Result<delete_ou_query::ResponseData>),
+    ShowStatus(String, bool),
+    DismissStatus,
 }
 
 impl CommonComponent<DeleteUserOu> for DeleteUserOu {
@@ -43,10 +48,16 @@ impl CommonComponent<DeleteUserOu> for DeleteUserOu {
     ) -> Result<bool> {
         match msg {
             Msg::ClickedDeleteOu => {
+                if ctx.props().ou == "people" || ctx.props().ou == "All" {
+                    ctx.link().send_message(Msg::ShowStatus("Cannot delete built-in OU 'people' or 'All'".to_string(), false));
+                    return Ok(true);
+                }
+                self.common.error = None;
+                self.status_message = None;
                 self.modal.as_ref().expect("modal not initialized").show();
+                Ok(true)
             }
             Msg::ConfirmDeleteOu => {
-                self.update(ctx, Msg::DismissModal);
                 self.common.call_graphql::<DeleteOuQuery, _>(
                     ctx,
                     delete_ou_query::Variables {
@@ -55,16 +66,37 @@ impl CommonComponent<DeleteUserOu> for DeleteUserOu {
                     Msg::DeleteOuResponse,
                     "Error trying to delete OU",
                 );
+                Ok(true)
             }
             Msg::DismissModal => {
                 self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
             }
             Msg::DeleteOuResponse(response) => {
-                response?;
-                ctx.props().on_ou_deleted.emit(ctx.props().ou.clone());
+                match response {
+                    Ok(_) => {
+                        let msg = format!("Successfully deleted OU: {}", ctx.props().ou);
+                        ctx.props().on_ou_deleted.emit(ctx.props().ou.clone());
+                        ctx.link().send_message(Msg::ShowStatus(msg, true));
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        ctx.props().on_error.emit(e);
+                        ctx.link().send_message(Msg::ShowStatus(msg, false));
+                    }
+                }
+                self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
+            }
+            Msg::ShowStatus(message, is_success) => {
+                self.status_message = Some((message, is_success));
+                Ok(true)
+            }
+            Msg::DismissStatus => {
+                self.status_message = None;
+                Ok(true)
             }
         }
-        Ok(true)
     }
 
     fn mut_common(&mut self) -> &mut CommonComponentParts<Self> {
@@ -81,6 +113,7 @@ impl Component for DeleteUserOu {
             common: CommonComponentParts::<Self>::create(),
             node_ref: NodeRef::default(),
             modal: None,
+            status_message: None,
         }
     }
 
@@ -105,16 +138,25 @@ impl Component for DeleteUserOu {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+
+        let status_html = if let Some((msg, is_success)) = &self.status_message {
+            let on_dismiss = link.callback(|_| Msg::DismissStatus);
+            html! { <StatusModal message={msg.clone()} is_success={*is_success} on_dismiss={on_dismiss} /> }
+        } else {
+            html! {}
+        };
+
         html! {
           <>
           <button
             class="btn btn-danger"
-            disabled={self.common.is_task_running()}
+            disabled={self.common.is_task_running() || ctx.props().ou == "people" || ctx.props().ou == "All"}
             onclick={link.callback(|_| Msg::ClickedDeleteOu)}>
             <i class="bi-x-circle-fill me-2" aria-label="Delete OU" />
             {"Delete OU"}
           </button>
           {self.show_modal(ctx)}
+          {status_html}
           </>
         }
     }
@@ -142,11 +184,11 @@ impl DeleteUserOu {
                     onclick={link.callback(|_| Msg::DismissModal)} />
                 </div>
                 <div class="modal-body">
-                <span>
-                  {"Are you sure you want to delete Organizational Unit "}
-                  <b>{&ctx.props().ou}</b>{"?"}<br />
-                  {"All users in this OU will be reassigned to 'people'. This cannot be undone."}
-                </span>
+                  <span>
+                    {"Are you sure you want to delete Organizational Unit "}
+                    <b>{&ctx.props().ou}</b>{"?"}<br />
+                    {"All users in this OU will be reassigned to 'people'. This cannot be undone."}
+                  </span>
                 </div>
                 <div class="modal-footer">
                   <button
@@ -159,7 +201,8 @@ impl DeleteUserOu {
                   <button
                     type="button"
                     onclick={link.callback(|_| Msg::ConfirmDeleteOu)}
-                    class="btn btn-danger">
+                    class="btn btn-danger"
+                    disabled={self.common.is_task_running()}>
                     <i class="bi-check-circle me-2"></i>
                     {"Yes, I'm sure"}
                   </button>

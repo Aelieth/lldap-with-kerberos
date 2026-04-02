@@ -6,6 +6,7 @@ use crate::{
             submit::Submit,
         },
         router::AppRoute,
+        ou_selector::OuSelector,
     },
     infra::{
         api::HostService,
@@ -27,6 +28,7 @@ use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
 use gloo_console::log;
+use wasm_bindgen::JsCast;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
@@ -83,6 +85,15 @@ extern_enums("AttributeType")
 )]
 pub struct GetUserAttributesSchema;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/list_user_ous.graphql",
+response_derives = "Debug, Clone",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct ListUserOusQuery;
+
 pub type Attribute = get_user_attributes_schema::GetUserAttributesSchemaSchemaUserSchemaAttributes;
 
 impl From<&Attribute> for GraphQlAttributeSchema {
@@ -107,6 +118,8 @@ pub struct CreateUserForm {
             opaque_data: Option<opaque::client::registration::ClientRegistration>,
             kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
             kerberossync_enabled: bool,
+            selected_ou: String,
+            ous: Vec<String>,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -133,6 +146,7 @@ fn empty_or_long(value: &str) -> Result<(), validator::ValidationError> {
 pub enum Msg {
     Update,
     ListAttributesResponse(Result<get_user_attributes_schema::ResponseData>),
+    ListUserOusResponse(Result<list_user_ous_query::ResponseData>),
     KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
     SubmitForm,
     CreateUserResponse(Result<create_user::ResponseData>),
@@ -141,6 +155,7 @@ pub enum Msg {
     RegistrationFinishResponse(Result<()>),
     SyncKerberosResponse(Result<sync_kerberos_password::ResponseData>),
     ToggleKerberosSync(bool),
+    OuChanged(String),
 }
 
 impl CommonComponent<CreateUserForm> for CreateUserForm {
@@ -162,12 +177,20 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 );
                 Ok(true)
             }
+            Msg::ListUserOusResponse(ous) => {
+                self.ous = ous?.user_ous;
+                Ok(true)
+            }
             Msg::KerberosInfoResponse(res) => {
                 self.kerberos_info = Some(res?.kerberos_info);
                 Ok(true)
             }
             Msg::ToggleKerberosSync(enabled) => {
                 self.kerberossync_enabled = enabled;
+                Ok(true)
+            }
+            Msg::OuChanged(ou) => {
+                self.selected_ou = ou;
                 Ok(true)
             }
             Msg::SubmitForm => {
@@ -255,6 +278,12 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                         }
                     }
                 }
+
+                // ← THIS IS THE MISSING PIECE: push the selected OU
+                attributes.push(GraphQLAttributeValue {
+                    name: "ou".to_string(),
+                                value: vec![self.selected_ou.clone()],
+                });
 
                 let kerb_value = if self.kerberossync_enabled { "1" } else { "0" };
                 attributes.push(GraphQLAttributeValue {
@@ -378,6 +407,8 @@ impl Component for CreateUserForm {
                     opaque_data: None,
                     kerberos_info: None,
                     kerberossync_enabled: true,
+                    selected_ou: "people".to_string(),
+                    ous: vec!["people".to_string()],
         }
     }
 
@@ -392,8 +423,7 @@ impl Component for CreateUserForm {
         } else {
             let attrs = self.attributes_schema.as_ref().unwrap();
 
-            // STRICT FILTER: Hide readonly fields (backend generates them)
-            // Only show fields where is_readonly == false AND not kerberossync
+            // ORIGINAL WORKING FILTER from before OU changes
             let should_show = |a: &Attribute| !a.is_readonly && a.name != "kerberossync";
 
             let mut visible_attrs: Vec<&Attribute> = attrs.iter().filter(|a| should_show(a)).collect();
@@ -413,7 +443,6 @@ impl Component for CreateUserForm {
                     .map(|&a| get_custom_attribute_input(a))
                     .collect::<Vec<Html>>() }
 
-                    // Kerberos sync toggle
                     <div class="mb-3 row">
                     <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
                     {"Kerberos Sync :"}
@@ -430,6 +459,21 @@ impl Component for CreateUserForm {
                     {"Off"}
                     </button>
                     </div>
+                    </div>
+                    </div>
+
+                    <div class="mb-3 row">
+                    <label class="form-label col-4 col-form-label">{"Organizational Unit :"}
+                    <button data-bs-placement="right" title="user_ou" type="button" class="btn btn-sm btn-link" aria-label="User OU Info">
+                    <i aria-label="Info" class="bi bi-info-circle"></i>
+                    </button>
+                    </label>
+                    <div class="col-8">
+                    <OuSelector
+                    ous={self.ous.clone()}
+                    current_ou={self.selected_ou.clone()}
+                    on_ou_changed={link.callback(Msg::OuChanged)}
+                    hide_all={true} />
                     </div>
                     </div>
 
@@ -470,6 +514,13 @@ impl Component for CreateUserForm {
                 "Error trying to fetch user schema",
             );
             self.fetched_schema = true;
+
+            self.common.call_graphql::<ListUserOusQuery, _>(
+                ctx,
+                list_user_ous_query::Variables {},
+                Msg::ListUserOusResponse,
+                "Error trying to fetch OUs",
+            );
         }
     }
 }

@@ -32,6 +32,7 @@ rand = "0.8.5"
 # Needed because of https://github.com/tkaitchuck/aHash/issues/95
 indexmap = "=1.6.2"
 sha2 = "0.10"
+gloo-timers = "0.3"
 
 [dependencies.lldap_schema]
 path = "../crates/schema"

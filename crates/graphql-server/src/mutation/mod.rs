@@ -11,7 +11,7 @@ use crate::api::{Context, field_error_callback};
 use anyhow::anyhow;
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
 use lldap_access_control::{
-    AdminBackendHandler, UserReadableBackendHandler, UserWriteableBackendHandler,
+    AdminBackendHandler, ReadonlyBackendHandler, UserReadableBackendHandler, UserWriteableBackendHandler,
 };
 use lldap_domain::{
     requests::{CreateAttributeRequest, CreateUserRequest, UpdateGroupRequest, UpdateUserRequest},
@@ -107,7 +107,7 @@ fn extract_kerberos_sync(schema: &PublicSchema, attrs: &[lldap_domain::types::At
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
-            async fn create_user(
+    async fn create_user(
         context: &Context<Handler>,
         user: CreateUserInput,
     ) -> FieldResult<super::query::User<Handler>> {
@@ -116,43 +116,53 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         let user_id = UserId::new(&user.id);
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized user creation"))?;
 
         let schema = handler.get_schema().await?;
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
-            user.first_name,
-            user.last_name,
-            user.avatar,
+                                                             user.first_name,
+                                                             user.last_name,
+                                                             user.avatar,
         );
 
-        // === NEW: Enforce ou from global UserOUs list ===
-        let default_ou = "people".to_string(); // will be read from list in backend
-        let mut final_attributes = consolidated_attributes;
-        if !final_attributes.iter().any(|a| a.name == "ou") {
-            final_attributes.push(AttributeValue {
-                name: "ou".to_string(),
-                value: vec![default_ou],
-            });
-        }
+        let ou_value = consolidated_attributes
+        .iter()
+        .find(|a| a.name == "ou")
+        .and_then(|a| a.value.first().cloned())
+        .unwrap_or_else(|| "people".to_string());
+
+        let attributes_for_unpack: Vec<_> = consolidated_attributes
+        .into_iter()
+        .filter(|a| a.name != "ou")
+        .collect();
 
         let UnpackedAttributes {
             email,
             display_name,
-            attributes,
-        } = unpack_attributes(final_attributes, &schema, true)?;
+            attributes: unpacked_attributes,
+        } = unpack_attributes(attributes_for_unpack, &schema, true)?;
+
+        // Add the OU back as a proper typed attribute (backend is allowed to set readonly fields on create)
+        let mut attributes = unpacked_attributes;
+        attributes.push(lldap_domain::types::Attribute {
+            name: lldap_domain::types::AttributeName::from("ou"),
+                        value: lldap_domain::types::AttributeValue::String(
+                            lldap_domain::types::Cardinality::Singleton(ou_value),
+                        ),
+        });
 
         handler
-            .create_user(CreateUserRequest {
-                user_id: user_id.clone(),
-                email: user.email.map(Email::from).or(email).ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
-                display_name: user.display_name.or(display_name),
-                attributes,
-            })
-            .instrument(span.clone())
-            .await?;
+        .create_user(CreateUserRequest {
+            user_id: user_id.clone(),
+                     email: user.email.map(Email::from).or(email).ok_or_else(|| anyhow!("Email is required when creating a new user"))?,
+                     display_name: user.display_name.or(display_name),
+                     attributes,
+        })
+        .instrument(span.clone())
+        .await?;
 
         let user_details = handler.get_user_details(&user_id).instrument(span).await?;
         super::query::User::<Handler>::from_user(user_details, Arc::new(schema))
@@ -471,16 +481,106 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| debug!(?name));
 
         let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
 
-        if name == "people" || name == "All" {
+        let name_lower = name.trim().to_lowercase();
+        if name_lower == "people" || name_lower == "all" {
             return Err("Cannot delete built-in OU 'people' or 'All'".into());
         }
 
-        // Real logic (reassign users + remove from global userous list) will be filled in next step
-        info!("Organizational Unit '{}' deleted (users reassigned to people)", name);
+        // === 1. Reassign all users in this OU to "people" ===
+        let users = handler.list_users(None, false).await.map_err(|e| {
+            FieldError::new(
+                "Failed to list users for OU reassignment",
+                graphql_value!({ "details": (e.to_string()) }),
+            )
+        })?;
 
+        for user_and_groups in users {
+            let user = &user_and_groups.user;
+            let user_ou = user.attributes
+                .iter()
+                .find(|a| a.name == AttributeName::from("ou"))
+                .and_then(|a| match &a.value {
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(s),
+                    ) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "people".to_string());
+
+            if user_ou.to_lowercase() == name_lower {
+                let update_req = lldap_domain::requests::UpdateUserRequest {
+                    user_id: user.user_id.clone(),
+                    email: None,
+                    display_name: None,
+                    delete_attributes: vec![],
+                    insert_attributes: vec![lldap_domain::types::Attribute {
+                        name: AttributeName::from("ou"),
+                        value: lldap_domain::types::AttributeValue::String(
+                            lldap_domain::types::Cardinality::Singleton("people".to_string()),
+                        ),
+                    }],
+                };
+                handler.update_user(update_req).await.map_err(|e| {
+                    FieldError::new(
+                        "Failed to reassign user to 'people'",
+                        graphql_value!({ "details": (e.to_string()) }),
+                    )
+                })?;
+                info!("Reassigned user {} from OU '{}' to 'people'", user.user_id, name);
+            }
+        }
+
+        // === 2. Remove OU from global userous list on admin user ===
+        let admin_id = lldap_domain::types::UserId::new("admin");
+        let admin_user = handler.get_user_details(&admin_id).await.map_err(|e| {
+            FieldError::new(
+                "Failed to load admin user for OU list",
+                graphql_value!({ "details": (e.to_string()) }),
+            )
+        })?;
+
+        let current_ous: Vec<String> = admin_user.attributes
+            .iter()
+            .find(|a| a.name == AttributeName::from("userous"))
+            .and_then(|a| match &a.value {
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(s),
+                ) => serde_json::from_str(s.as_str()).ok(),
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(list),
+                ) => Some(list.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| vec!["people".to_string()]);
+
+        let mut new_ous: Vec<String> = current_ous
+            .into_iter()
+            .filter(|o| o.to_lowercase() != name_lower)
+            .collect();
+        new_ous.sort();
+
+        handler.update_user(lldap_domain::requests::UpdateUserRequest {
+            user_id: admin_id,
+            email: None,
+            display_name: None,
+            delete_attributes: vec![],
+            insert_attributes: vec![lldap_domain::types::Attribute {
+                name: AttributeName::from("userous"),
+                value: lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(new_ous),
+                ),
+            }],
+        }).await.map_err(|e| {
+            FieldError::new(
+                "Failed to update OU list after deletion",
+                graphql_value!({ "details": (e.to_string()) }),
+            )
+        })?;
+
+        info!("Organizational Unit '{}' deleted and users reassigned to 'people'", name);
         Ok(Success::new())
     }
 
@@ -531,12 +631,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             })
             .unwrap_or_else(|| vec!["people".to_string()]);
 
-        if current_ous.contains(&name) {
-            return Ok(Success::new());
+        // Case-insensitive duplicate check (real LDAP/AD behavior)
+        if current_ous.iter().any(|existing| existing.to_lowercase() == name_lower) {
+            return Err(FieldError::new(
+                format!("Organizational Unit '{}' already exists", name),
+                juniper::Value::null(),
+            ));
         }
 
         let mut new_ous = current_ous;
-        new_ous.push(name.clone());
+        new_ous.push(name.clone());  // keep original case for display
         new_ous.sort();
 
         handler.update_user(UpdateUserRequest {
@@ -555,6 +659,49 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             "Failed to save updated OU list",
             graphql_value!({ "details": (e.to_string()) }),
         ))?;
+
+        Ok(Success::new())
+    }
+
+        async fn change_user_ou(
+        context: &Context<Handler>,
+        user_ids: Vec<String>,
+        new_ou: String,
+    ) -> FieldResult<Success> {
+        let span = debug_span!("[GraphQL mutation] change_user_ou");
+        span.in_scope(|| debug!(?user_ids, ?new_ou));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized OU change"))?;
+
+        let name_lower = new_ou.trim().to_lowercase();
+        if name_lower == "all" {
+            return Err("Cannot move users to built-in OU 'All'".into());
+        }
+
+        for user_id_str in user_ids {
+            let user_id = lldap_domain::types::UserId::new(&user_id_str);
+            let update_req = lldap_domain::requests::UpdateUserRequest {
+                user_id: user_id.clone(),
+                email: None,
+                display_name: None,
+                delete_attributes: vec![],
+                insert_attributes: vec![lldap_domain::types::Attribute {
+                    name: AttributeName::from("ou"),
+                    value: lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(new_ou.clone()),
+                    ),
+                }],
+            };
+            handler.update_user(update_req).await.map_err(|e| {
+                FieldError::new(
+                    format!("Failed to change OU for user {}", user_id_str),
+                    graphql_value!({ "details": (e.to_string()) }),
+                )
+            })?;
+            info!("Changed OU for user {} to '{}'", user_id_str, new_ou);
+        }
 
         Ok(Success::new())
     }
