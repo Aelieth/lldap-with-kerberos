@@ -448,8 +448,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         }
 
         // Kerberos consistency cleanup is allowed to do nothing if the user row is already gone
+        // (this is normal during bulk delete where the same user may already be removed by a previous call)
         let inner = AdminBackendHandler::unsafe_get_handler(handler);
-        let _ = inner.ensure_kerberos_principal_consistency(&user_id_typed, false).await;
+        if let Err(e) = inner.ensure_kerberos_principal_consistency(&user_id_typed, false).await {
+            if e.to_string().contains("None of the records are updated") {
+                debug!("User already deleted — Kerberos consistency cleanup skipped for {}", user_id);
+            } else {
+                warn!("Kerberos principal consistency cleanup failed for {}: {}", user_id, e);
+            }
+        }
 
         Ok(Success::new())
     }

@@ -28,7 +28,6 @@ use yew_form_derive::Model;
 use yew_router::{prelude::History, scope_ext::RouterScopeExt};
 use yew::Context as YewContext;
 use gloo_console::log;
-use wasm_bindgen::JsCast;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![

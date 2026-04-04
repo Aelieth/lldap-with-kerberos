@@ -6,7 +6,6 @@ use crate::components::status_modal::StatusModal;
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(

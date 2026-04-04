@@ -160,14 +160,22 @@ impl Component for ChangeUserOu {
             html! {}
         };
 
+        let count = ctx.props().selected_users.len();
+
+        let button_text = if count <= 1 {
+            "Change User OU".to_string()
+        } else {
+            format!("Change {} Users OU", count)
+        };
+
         html! {
           <>
           <button
             class="btn btn-warning"
-            disabled={self.common.is_task_running() || ctx.props().selected_users.is_empty()}
+            disabled={self.common.is_task_running() || count == 0}
             onclick={link.callback(|_| Msg::ClickedChangeOu)}>
             <i class="bi-arrow-left-right me-2" aria-label="Change User OU" />
-            {"Change User OU"}
+            {button_text}
           </button>
           {self.show_modal(ctx)}
           {status_html}

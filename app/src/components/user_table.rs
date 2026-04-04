@@ -3,7 +3,7 @@ use crate::{
         router::{AppRoute, Link},
         user_ou_table::UserOuTable,
         change_user_ou::ChangeUserOu,
-        delete_user::{DeleteUser, DeleteUserQuery, delete_user_query},
+        delete_user::DeleteUser,
     },
     infra::common_component::{CommonComponent, CommonComponentParts},
 };
@@ -58,8 +58,6 @@ pub enum Msg {
     OuDeleted(String),
     CreateNewUser,
     ChangeOuForSelected(String),
-    DeleteSelected,
-    DeleteUserResponse(Result<delete_user_query::ResponseData>, String), // (response, user_id)
     CreateOuError(String),
 }
 
@@ -150,8 +148,6 @@ impl CommonComponent<UserTable> for UserTable {
                 Ok(true)
             }
             Msg::ChangeOuForSelected(_new_ou) => {
-                // Child already ran the mutation successfully.
-                // Clear selection and force a full user-list reload so OU column updates live.
                 self.selected_users.clear();
                 self.common.call_graphql::<ListUsersQuery, _>(
                     ctx,
@@ -159,41 +155,6 @@ impl CommonComponent<UserTable> for UserTable {
                     Msg::ListUsersResponse,
                     "Error trying to fetch users after OU change",
                 );
-                Ok(true)
-            }
-            Msg::DeleteSelected => {
-                if self.selected_users.is_empty() {
-                    return Ok(true);
-                }
-                let count = self.selected_users.len();
-                web_sys::console::log_1(&format!("Bulk deleting {} users via custom modal: {:?}", count, self.selected_users).into());
-
-                // Use the correct variable name from the delete_user query
-                for user_id in self.selected_users.clone() {
-                    self.common.call_graphql::<DeleteUserQuery, _>(
-                        ctx,
-                        delete_user_query::Variables { user: user_id.clone() },
-                        move |response| Msg::DeleteUserResponse(response, user_id.clone()),  // ← add "move"
-                        "Error trying to delete user",
-                    );
-                }
-
-                // Frontend cleanup happens in the existing DeleteUserResponse handler
-                Ok(true)
-            }
-            Msg::DeleteUserResponse(response, user_id) => {
-                match response {
-                    Ok(_) => {
-                        if let Some(users) = &mut self.users {
-                            users.retain(|u| u.id != user_id);
-                        }
-                        self.selected_users.retain(|id| id != &user_id);
-                        //info!("Successfully deleted user {}", user_id);
-                    }
-                    Err(e) => {
-                        ctx.link().send_message(Msg::OnError(e));
-                    }
-                }
                 Ok(true)
             }
         }
@@ -313,15 +274,13 @@ impl Component for UserTable {
             {self.view_users(ctx)}
 
             <div class="row justify-content-start mt-3">
-            <div class="col-auto">
-            <button
-            class="btn btn-danger"
-            disabled={self.selected_users.is_empty() || self.common.is_task_running()}
-            onclick={ctx.link().callback(|_| Msg::DeleteSelected)}>
-            <i class="bi-x-circle-fill me-2"></i>
-            {format!("Delete {} Selected", self.selected_users.len())}
-            </button>
-            </div>
+                <div class="col-auto">
+                    <DeleteUser
+                        selected_users={self.selected_users.clone()}
+                        on_user_deleted={ctx.link().callback(Msg::OnUserDeleted)}
+                        on_error={ctx.link().callback(Msg::OnError)}
+                    />
+                </div>
             </div>
 
             {self.view_errors()}
