@@ -64,26 +64,15 @@ impl CommonComponent<ChangeUserOu> for ChangeUserOu {
                 if self.selected_ou == "All" || self.selected_ou.is_empty() {
                     return Ok(true);
                 }
-                let count = ctx.props().selected_users.len();
-                let confirm_msg = format!(
-                    "Change {} selected user(s) to OU '{}'?\n\nThis cannot be undone.",
-                    count, self.selected_ou
+                self.common.call_graphql::<ChangeUserOuQuery, _>(
+                    ctx,
+                    change_user_ou_query::Variables {
+                        user_ids: ctx.props().selected_users.clone(),
+                        new_ou: self.selected_ou.clone(),
+                    },
+                    Msg::ChangeOuResponse,
+                    "Error changing OU",
                 );
-                if web_sys::window()
-                    .and_then(|w| w.confirm_with_message(&confirm_msg).ok())
-                    .unwrap_or(false)
-                {
-                    self.common.call_graphql::<ChangeUserOuQuery, _>(
-                        ctx,
-                        change_user_ou_query::Variables {
-                            user_ids: ctx.props().selected_users.clone(),
-                            new_ou: self.selected_ou.clone(),
-                        },
-                        Msg::ChangeOuResponse,
-                        "Error changing OU",
-                    );
-                }
-                self.modal.as_ref().expect("modal not initialized").hide();
                 Ok(true)
             }
             Msg::DismissModal => {
@@ -109,6 +98,7 @@ impl CommonComponent<ChangeUserOu> for ChangeUserOu {
                         let msg = format!("Successfully moved {} user(s) to OU: {}", count, self.selected_ou);
                         ctx.link().send_message(Msg::ShowStatus(msg, true));
                         ctx.props().on_ou_changed.emit(self.selected_ou.clone());
+                        self.selected_ou = "people".to_string();
                     }
                     Err(e) => {
                         let err_msg = e.to_string();
@@ -116,6 +106,7 @@ impl CommonComponent<ChangeUserOu> for ChangeUserOu {
                         ctx.link().send_message(Msg::ShowStatus(err_msg, false));
                     }
                 }
+                self.modal.as_ref().expect("modal not initialized").hide();
                 Ok(true)
             }
         }
@@ -191,7 +182,6 @@ impl ChangeUserOu {
         let count = ctx.props().selected_users.len();
 
         let mut display_ous = vec![
-            ("All".to_string(), "All".to_string()),
             ("people".to_string(), "people".to_string()),
         ];
         let custom_ous: Vec<&String> = ctx.props().ous.iter().filter(|&o| o != "people").collect();
@@ -243,7 +233,7 @@ impl ChangeUserOu {
                     type="button"
                     onclick={link.callback(|_| Msg::ConfirmChangeOu)}
                     class="btn btn-primary"
-                    disabled={self.selected_ou == "All" || self.selected_ou.is_empty() || self.common.is_task_running()}>
+                    disabled={self.selected_ou.is_empty() || self.common.is_task_running()}>
                     <i class="bi-check-circle me-2"></i>
                     {"Change OU"}
                   </button>

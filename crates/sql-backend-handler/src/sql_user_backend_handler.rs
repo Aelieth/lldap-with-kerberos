@@ -201,65 +201,52 @@ impl UserListerBackendHandler for SqlBackendHandler {
 
 impl SqlBackendHandler {
         fn compute_user_attribute_changes(
-            user_id: &UserId,
-            insert_attributes: Vec<Attribute>,
-            delete_attributes: Vec<AttributeName>,
-            schema: &PublicSchema,
-        ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
-            let mut update_user_attributes = Vec::new();
-            let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
-            let mut kerb_sync_enabled: Option<bool> = None;
+        user_id: &UserId,
+        insert_attributes: Vec<Attribute>,
+        delete_attributes: Vec<AttributeName>,
+        schema: &PublicSchema,
+    ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
+        let mut update_user_attributes = Vec::new();
+        let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
+        let mut kerb_sync_enabled: Option<bool> = None;
 
-            // === NEW: Enforce ou from global UserOUs list (admin only) ===
-            let _user_ous = schema.user_attributes()
-            .get_by_name_or_alias("userous")
-            .and_then(|s| {
-                // We'll read the actual value later in the transaction
-                Some(s.name.clone())
-            });
-
-            for attribute in insert_attributes {
-                let canonical_name = schema
+        for attribute in insert_attributes {
+            let canonical_name = schema
                 .user_attributes()
                 .get_by_name_or_alias(attribute.name.as_str())
                 .map(|s| s.name.clone().into())
                 .unwrap_or_else(|| attribute.name.clone());
 
-                if attribute.name.as_str() == "kerberossync" {
-                    kerb_sync_enabled = match &attribute.value {
-                        AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
-                                      AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
-                                      _ => Some(false),
-                    };
-                }
-
-                // Special handling for ou: always override with value from UserOUs list
-                if canonical_name.as_str() == "ou" {
-                    continue;
-                }
-
-                if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
-                    let db_value = attribute_value_to_db_bytes(&attribute.value);
-
-                    update_user_attributes.push(model::user_attributes::ActiveModel {
-                        user_id: Set(user_id.clone()),
-                                                attribute_name: Set(canonical_name.clone()),
-                                                value: Set(Serialized(db_value)),
-                    });
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "User attribute name {} doesn't exist in the schema",
-                        &attribute.name
-                    )));
-                }
+            if attribute.name.as_str() == "kerberossync" {
+                kerb_sync_enabled = match &attribute.value {
+                    AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
+                    AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
+                    _ => Some(false),
+                };
             }
 
-            remove_user_attributes.retain(|name| {
-                !update_user_attributes.iter().any(|u| u.attribute_name == Set(name.clone()))
-            });
+            if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
 
-            Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
+                update_user_attributes.push(model::user_attributes::ActiveModel {
+                    user_id: Set(user_id.clone()),
+                    attribute_name: Set(canonical_name.clone()),
+                    value: Set(Serialized(db_value)),
+                });
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "User attribute name {} doesn't exist in the schema",
+                    &attribute.name
+                )));
+            }
         }
+
+        remove_user_attributes.retain(|name| {
+            !update_user_attributes.iter().any(|u| u.attribute_name == Set(name.clone()))
+        });
+
+        Ok((update_user_attributes, remove_user_attributes, kerb_sync_enabled))
+    }
 
     async fn update_user_with_transaction(
         transaction: &DatabaseTransaction,
@@ -354,7 +341,6 @@ impl UserBackendHandler for SqlBackendHandler {
                 schema.user_attributes(),
             )?;
 
-            // === SAFE READ PATH LOGGING ===
             if attr.name.as_str() == "avatar" {
                 debug!("GET_USER_DETAILS: avatar attribute found in EAV");
             }

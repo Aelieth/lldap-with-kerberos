@@ -3,7 +3,7 @@ use crate::{
         router::{AppRoute, Link},
         user_ou_table::UserOuTable,
         change_user_ou::ChangeUserOu,
-        delete_user::DeleteUser,
+        delete_user::{DeleteUser, DeleteUserQuery, delete_user_query},
     },
     infra::common_component::{CommonComponent, CommonComponentParts},
 };
@@ -59,11 +59,12 @@ pub enum Msg {
     CreateNewUser,
     ChangeOuForSelected(String),
     DeleteSelected,
+    DeleteUserResponse(Result<delete_user_query::ResponseData>, String), // (response, user_id)
     CreateOuError(String),
 }
 
 impl CommonComponent<UserTable> for UserTable {
-    fn handle_msg(&mut self, _ctx: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
+    fn handle_msg(&mut self, ctx: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
         match msg {
             Msg::ListUsersResponse(users) => {
                 self.users = Some(users?.users.into_iter().collect());
@@ -115,11 +116,11 @@ impl CommonComponent<UserTable> for UserTable {
                         let term = self.search_term.to_lowercase();
                         filtered.retain(|u| match self.search_field.as_str() {
                             "User ID" => u.id.to_lowercase().contains(&term),
-                            "Email" => u.email.to_lowercase().contains(&term),
-                            "Display Name" => u.display_name.to_lowercase().contains(&term),
-                            "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
-                            "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
-                            _ => true,
+                                        "Email" => u.email.to_lowercase().contains(&term),
+                                        "Display Name" => u.display_name.to_lowercase().contains(&term),
+                                        "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
+                                        "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
+                                        _ => true,
                         });
                     }
                     let filtered_ids: Vec<String> = filtered.iter().map(|u| u.id.clone()).collect();
@@ -148,22 +149,16 @@ impl CommonComponent<UserTable> for UserTable {
                 web_sys::console::log_1(&"Creating new user - navigate to create form".into());
                 Ok(true)
             }
-            Msg::ChangeOuForSelected(new_ou) => {
-                if self.selected_users.is_empty() || new_ou == "All" {
-                    return Ok(true);
-                }
-                let confirm_msg = format!(
-                    "Change {} selected user(s) to OU '{}'?\n\nThis cannot be undone.",
-                    self.selected_users.len(),
-                    new_ou
+            Msg::ChangeOuForSelected(_new_ou) => {
+                // Child already ran the mutation successfully.
+                // Clear selection and force a full user-list reload so OU column updates live.
+                self.selected_users.clear();
+                self.common.call_graphql::<ListUsersQuery, _>(
+                    ctx,
+                    list_users_query::Variables { filters: None },
+                    Msg::ListUsersResponse,
+                    "Error trying to fetch users after OU change",
                 );
-                if web_sys::window()
-                    .and_then(|w| w.confirm_with_message(&confirm_msg).ok())
-                    .unwrap_or(false)
-                {
-                    web_sys::console::log_1(&format!("Moving {} users to OU: {}", self.selected_users.len(), new_ou).into());
-                    self.selected_users.clear();
-                }
                 Ok(true)
             }
             Msg::DeleteSelected => {
@@ -171,19 +166,33 @@ impl CommonComponent<UserTable> for UserTable {
                     return Ok(true);
                 }
                 let count = self.selected_users.len();
-                let confirm_msg = format!(
-                    "Are you sure you want to delete {} selected user(s)?\n\nThis cannot be undone.",
-                    count
-                );
-                if web_sys::window()
-                    .and_then(|w| w.confirm_with_message(&confirm_msg).ok())
-                    .unwrap_or(false)
-                {
-                    web_sys::console::log_1(&format!("Bulk deleting {} users: {:?}", count, self.selected_users).into());
-                    if let Some(users) = &mut self.users {
-                        users.retain(|u| !self.selected_users.contains(&u.id));
+                web_sys::console::log_1(&format!("Bulk deleting {} users via custom modal: {:?}", count, self.selected_users).into());
+
+                // Use the correct variable name from the delete_user query
+                for user_id in self.selected_users.clone() {
+                    self.common.call_graphql::<DeleteUserQuery, _>(
+                        ctx,
+                        delete_user_query::Variables { user: user_id.clone() },
+                        move |response| Msg::DeleteUserResponse(response, user_id.clone()),  // ← add "move"
+                        "Error trying to delete user",
+                    );
+                }
+
+                // Frontend cleanup happens in the existing DeleteUserResponse handler
+                Ok(true)
+            }
+            Msg::DeleteUserResponse(response, user_id) => {
+                match response {
+                    Ok(_) => {
+                        if let Some(users) = &mut self.users {
+                            users.retain(|u| u.id != user_id);
+                        }
+                        self.selected_users.retain(|id| id != &user_id);
+                        //info!("Successfully deleted user {}", user_id);
                     }
-                    self.selected_users.clear();
+                    Err(e) => {
+                        ctx.link().send_message(Msg::OnError(e));
+                    }
                 }
                 Ok(true)
             }
@@ -273,7 +282,7 @@ impl Component for UserTable {
             <div class="col-auto">
             <ChangeUserOu
             selected_users={self.selected_users.clone()}
-            ous={self.ous.clone()}                     // ← add this line
+            ous={self.ous.clone()}
             on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
             on_error={Callback::noop()} />
             </div>
@@ -305,10 +314,13 @@ impl Component for UserTable {
 
             <div class="row justify-content-start mt-3">
             <div class="col-auto">
-            <DeleteUser
-            username={format!("{} selected users", self.selected_users.len())}
-            on_user_deleted={ctx.link().callback(|_| Msg::DeleteSelected)}
-            on_error={Callback::noop()} />
+            <button
+            class="btn btn-danger"
+            disabled={self.selected_users.is_empty() || self.common.is_task_running()}
+            onclick={ctx.link().callback(|_| Msg::DeleteSelected)}>
+            <i class="bi-x-circle-fill me-2"></i>
+            {format!("Delete {} Selected", self.selected_users.len())}
+            </button>
             </div>
             </div>
 
