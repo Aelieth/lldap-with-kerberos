@@ -32,6 +32,13 @@ fn attribute_value_to_db_bytes(value: &AttributeValue) -> Vec<u8> {
     }
 }
 
+fn is_backend_writable_readonly_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "ou" | "kerberossync" | "allowedous" | "krb_principal_name"
+    )
+}
+
 fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> Cond {
     Expr::in_subquery(
         Expr::col(GroupColumn::GroupId.as_column_ref()),
@@ -228,28 +235,31 @@ impl GroupBackendHandler for SqlBackendHandler {
                 Box::pin(async move {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
 
-                    // === NEW: Enforce ou from global GroupOUs list ===
-                    let default_ou = schema.group_attributes()
-                        .get_by_name_or_alias("groupous")
-                        .and_then(|_| Some("groups".to_string()))
-                        .unwrap_or_else(|| "groups".to_string());
+        let default_ou = schema.group_attributes()
+            .get_by_name_or_alias("allowedous")
+            .and_then(|_| Some("groups".to_string()))
+            .unwrap_or_else(|| "groups".to_string());
 
-                    let mut final_attributes = request.attributes;
-                    if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
-                        final_attributes.push(Attribute {
-                            name: "ou".into(),
-                            value: AttributeValue::String(Cardinality::Singleton(default_ou)),
-                        });
-                    }
+        let mut final_attributes = request.attributes;
+        if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
+            final_attributes.push(Attribute {
+                name: "ou".into(),
+                value: AttributeValue::String(Cardinality::Singleton(default_ou)),
+            });
+        }
 
                     let group_id = new_group.insert(transaction).await?.group_id;
                     let mut new_group_attributes = Vec::new();
 
                     for attribute in final_attributes {
+                        let attr_name = attribute.name.as_str();
+
+                        // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
                         if schema
                             .group_attributes()
-                            .get_attribute_type(attribute.name.as_str())
+                            .get_attribute_type(attr_name)
                             .is_some()
+                            || is_backend_writable_readonly_attribute(attr_name)
                         {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_group_attributes.push(model::group_attributes::ActiveModel {
@@ -259,7 +269,7 @@ impl GroupBackendHandler for SqlBackendHandler {
                             });
                         } else {
                             return Err(DomainError::InternalError(format!(
-                                "Attribute name {} doesn't exist in the group schema",
+                                "Group attribute name {} doesn't exist in the schema",
                                 &attribute.name
                             )));
                         }
@@ -296,9 +306,9 @@ impl SqlBackendHandler {
         transaction: &DatabaseTransaction,
     ) -> Result<()> {
         let lower_display_name = request
-        .display_name
-        .as_ref()
-        .map(|s| s.as_str().to_lowercase());
+            .display_name
+            .as_ref()
+            .map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
         let update_group = model::groups::ActiveModel {
             group_id: Set(request.group_id),
@@ -311,57 +321,68 @@ impl SqlBackendHandler {
         let schema = Self::get_schema_with_transaction(transaction).await?;
         let mut update_group_attributes = Vec::new();
         let mut remove_group_attributes = Vec::new();
+
         for attribute in request.insert_attributes {
+            let attr_name = attribute.name.as_str();
+
+            // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
             if schema
                 .group_attributes()
-                .get_attribute_type(attribute.name.as_str())
+                .get_attribute_type(attr_name)
                 .is_some()
-                {
-                    let db_value = attribute_value_to_db_bytes(&attribute.value);
-                    update_group_attributes.push(model::group_attributes::ActiveModel {
-                        group_id: Set(request.group_id),
-                                                 attribute_name: Set(attribute.name.to_owned()),
-                                                 value: Set(Serialized(db_value)),
-                    });
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
-                        &attribute.name
-                    )));
-                }
+                || is_backend_writable_readonly_attribute(attr_name)
+            {
+                let db_value = attribute_value_to_db_bytes(&attribute.value);
+                update_group_attributes.push(model::group_attributes::ActiveModel {
+                    group_id: Set(request.group_id),
+                    attribute_name: Set(attribute.name.to_owned()),
+                    value: Set(Serialized(db_value)),
+                });
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
+                    &attribute.name
+                )));
+            }
         }
+
         for attribute in request.delete_attributes {
+            let attr_name = attribute.as_str();
+
+            // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
             if schema
                 .group_attributes()
-                .get_attribute_type(attribute.as_str())
+                .get_attribute_type(attr_name)
                 .is_some()
-                {
-                    remove_group_attributes.push(attribute);
-                } else {
-                    return Err(DomainError::InternalError(format!(
-                        "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
-                    )));
-                }
+                || is_backend_writable_readonly_attribute(attr_name)
+            {
+                remove_group_attributes.push(attribute);
+            } else {
+                return Err(DomainError::InternalError(format!(
+                    "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                )));
+            }
         }
+
         if !remove_group_attributes.is_empty() {
             model::GroupAttributes::delete_many()
-            .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
-            .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
-            .exec(transaction)
-            .await?;
+                .filter(model::GroupAttributesColumn::GroupId.eq(request.group_id))
+                .filter(model::GroupAttributesColumn::AttributeName.is_in(remove_group_attributes))
+                .exec(transaction)
+                .await?;
         }
         if !update_group_attributes.is_empty() {
             model::GroupAttributes::insert_many(update_group_attributes)
-            .on_conflict(
-                OnConflict::columns([
-                    model::GroupAttributesColumn::GroupId,
-                    model::GroupAttributesColumn::AttributeName,
-                ])
-                .update_column(model::GroupAttributesColumn::Value)
-                .to_owned(),
-            )
-            .exec(transaction)
-            .await?;
+                .on_conflict(
+                    OnConflict::columns([
+                        model::GroupAttributesColumn::GroupId,
+                        model::GroupAttributesColumn::AttributeName,
+                    ])
+                    .update_column(model::GroupAttributesColumn::Value)
+                    .to_owned(),
+                )
+                .exec(transaction)
+                .await?;
         }
         Ok(())
     }

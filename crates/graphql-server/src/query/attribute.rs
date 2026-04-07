@@ -1,4 +1,3 @@
-// crates/graphql-server/src/query/attribute.rs  ← EXACT FILE FOR THIS STEP (serialize_avatar path)
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_domain::types::{

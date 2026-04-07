@@ -202,53 +202,35 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         context: &Context<Handler>,
     ) -> FieldResult<Vec<String>> {
         let span = debug_span!("[GraphQL query] user_ous");
-        span.in_scope(|| debug!("Fetching global UserOUs list"));
+        span.in_scope(|| debug!("Fetching global allowedous list (single source of truth)"));
 
-        tracing::info!("user_ous: START - getting admin handler");
         let handler = context
-        .get_admin_handler()
-        .ok_or_else(field_error_callback(&span, "Unauthorized to read OUs"))?;
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized to read OUs"))?;
 
         let admin_id = UserId::new("admin");
-        tracing::info!("user_ous: Looking up user: {}", admin_id);
 
         let admin_user = handler.get_user_details(&admin_id).await
-        .map_err(|e| FieldError::new(
-            "Failed to load admin user for OU list",
-            graphql_value!({ "details": (e.to_string()) }),
-        ))?;
-
-        tracing::info!("user_ous: Admin user loaded successfully. Total attributes: {}", admin_user.attributes.len());
+            .map_err(|e| FieldError::new(
+                "Failed to load admin user for OU list",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
 
         let ous: Vec<String> = admin_user.attributes.iter()
-        .find(|a| a.name.as_str() == "userous")
-        .and_then(|a| {
-            tracing::info!("user_ous: Found userous attribute, raw type: {:?}", std::any::type_name_of_val(&a.value));
-            match &a.value {
-                lldap_domain::types::AttributeValue::String(
-                    lldap_domain::types::Cardinality::Singleton(s),
-                ) => {
-                    tracing::info!("user_ous: Singleton String case, JSON: {}", s);
-                    serde_json::from_str(s.as_str()).ok()
+            .find(|a| a.name.as_str() == "allowedous")
+            .and_then(|a| {
+                match &a.value {
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(s),
+                    ) => serde_json::from_str(s.as_str()).ok(),
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Unbounded(list),
+                    ) => Some(list.clone()),
+                    _ => None,
                 }
-                lldap_domain::types::AttributeValue::String(
-                    lldap_domain::types::Cardinality::Unbounded(list),
-                ) => {
-                    tracing::info!("user_ous: Unbounded String list case: {:?}", list);
-                    Some(list.clone())
-                }
-                _ => {
-                    tracing::info!("user_ous: userous attribute found but unsupported type");
-                    None
-                }
-            }
-        })
-        .unwrap_or_else(|| {
-            tracing::info!("user_ous: No userous attribute found, falling back to ['people']");
-            vec!["people".to_string()]
-        });
+            })
+            .unwrap_or_else(|| vec!["people".to_string()]);
 
-        tracing::info!("user_ous: FINAL list being returned to frontend: {:?}", ous);
         Ok(ous)
     }
 }

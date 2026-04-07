@@ -189,7 +189,7 @@ impl PublicSchema {
                      is_readonly: false,
                     },
 
-                    // ==================== ORGANIZATIONAL UNIT (now readonly — controlled by global lists) ====================
+                    // ==================== ORGANIZATIONAL UNIT (readonly — controlled by global list) ====================
                     AttributeSchema {
                         name: "ou".into(),
                      aliases: vec!["organizationalunit".into(), "organizationalUnit".into()],
@@ -201,21 +201,22 @@ impl PublicSchema {
                      is_readonly: true,
                     },
 
-                    // ==================== GLOBAL ALLOWED OU LISTS (admin-only control) ====================
+                    // ==================== SINGLE SOURCE OF TRUTH FOR ALLOWED OUs ====================
                     AttributeSchema {
-                        name: "userous".into(),
-                     aliases: vec!["userOUs".into(), "UserOUs".into()],
+                        name: "allowedous".into(),
+                     aliases: vec!["allowedOUs".into(), "AllowedOUs".into()],
                      attribute_type: AttributeType::String,
                      is_list: true,
                      is_visible: false,
                      is_editable: false,
                      is_hardcoded: true,
-                     is_readonly: false,
+                     is_readonly: true,
                     },
                 ],
             },
             group_attributes: AttributeList {
                 attributes: vec![
+                    // ==================== CORE GROUP ATTRIBUTES ====================
                     AttributeSchema {
                         name: "groupid".into(),
                      aliases: vec!["group_id".into()],
@@ -267,7 +268,7 @@ impl PublicSchema {
                      is_readonly: false,
                     },
 
-                    // ==================== ORGANIZATIONAL UNIT (now readonly — controlled by global lists) ====================
+                    // ==================== ORGANIZATIONAL UNIT (readonly — controlled by global list) ====================
                     AttributeSchema {
                         name: "ou".into(),
                      aliases: vec!["organizationalunit".into(), "organizationalUnit".into()],
@@ -279,16 +280,16 @@ impl PublicSchema {
                      is_readonly: true,
                     },
 
-                    // ==================== GLOBAL ALLOWED OU LISTS (admin-only control) ====================
+                    // ==================== SINGLE SOURCE OF TRUTH FOR ALLOWED OUs (shared with users) ====================
                     AttributeSchema {
-                        name: "groupous".into(),
-                     aliases: vec!["groupOUs".into(), "GroupOUs".into()],
+                        name: "allowedous".into(),
+                     aliases: vec!["allowedOUs".into(), "AllowedOUs".into()],
                      attribute_type: AttributeType::String,
                      is_list: true,
                      is_visible: false,
                      is_editable: false,
                      is_hardcoded: true,
-                     is_readonly: false,
+                     is_readonly: true,
                     },
                 ],
             },

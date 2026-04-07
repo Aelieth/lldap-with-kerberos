@@ -1180,60 +1180,60 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
 
     // 1. Clear both schema tables completely (guarantees fresh enum strings on every fresh DB)
     transaction
-    .execute(backend.build(Query::delete().from_table(UserAttributeSchema::Table)))
-    .await?;
+        .execute(backend.build(Query::delete().from_table(UserAttributeSchema::Table)))
+        .await?;
     transaction
-    .execute(backend.build(Query::delete().from_table(GroupAttributeSchema::Table)))
-    .await?;
+        .execute(backend.build(Query::delete().from_table(GroupAttributeSchema::Table)))
+        .await?;
 
     // 2. Ensure aliases + is_readonly columns exist (safe idempotent add for SQLite)
     let _ = transaction
-    .execute(backend.build(
-        Table::alter()
-        .table(UserAttributeSchema::Table)
-        .add_column_if_not_exists(
-            ColumnDef::new(UserAttributeSchema::Aliases)
-            .string_len(1024)
-            .default("[]"),
-        ),
-    ))
-    .await;
+        .execute(backend.build(
+            Table::alter()
+                .table(UserAttributeSchema::Table)
+                .add_column_if_not_exists(
+                    ColumnDef::new(UserAttributeSchema::Aliases)
+                        .string_len(1024)
+                        .default("[]"),
+                ),
+        ))
+        .await;
     let _ = transaction
-    .execute(backend.build(
-        Table::alter()
-        .table(UserAttributeSchema::Table)
-        .add_column_if_not_exists(
-            ColumnDef::new(UserAttributeSchema::UserAttributeSchemaIsReadonly)
-            .boolean()
-            .not_null()
-            .default(false),
-        ),
-    ))
-    .await;
+        .execute(backend.build(
+            Table::alter()
+                .table(UserAttributeSchema::Table)
+                .add_column_if_not_exists(
+                    ColumnDef::new(UserAttributeSchema::UserAttributeSchemaIsReadonly)
+                        .boolean()
+                        .not_null()
+                        .default(false),
+                ),
+        ))
+        .await;
 
     let _ = transaction
-    .execute(backend.build(
-        Table::alter()
-        .table(GroupAttributeSchema::Table)
-        .add_column_if_not_exists(
-            ColumnDef::new(GroupAttributeSchema::Aliases)
-            .string_len(1024)
-            .default("[]"),
-        ),
-    ))
-    .await;
+        .execute(backend.build(
+            Table::alter()
+                .table(GroupAttributeSchema::Table)
+                .add_column_if_not_exists(
+                    ColumnDef::new(GroupAttributeSchema::Aliases)
+                        .string_len(1024)
+                        .default("[]"),
+                ),
+        ))
+        .await;
     let _ = transaction
-    .execute(backend.build(
-        Table::alter()
-        .table(GroupAttributeSchema::Table)
-        .add_column_if_not_exists(
-            ColumnDef::new(GroupAttributeSchema::GroupAttributeSchemaIsReadonly)
-            .boolean()
-            .not_null()
-            .default(false),
-        ),
-    ))
-    .await;
+        .execute(backend.build(
+            Table::alter()
+                .table(GroupAttributeSchema::Table)
+                .add_column_if_not_exists(
+                    ColumnDef::new(GroupAttributeSchema::GroupAttributeSchemaIsReadonly)
+                        .boolean()
+                        .not_null()
+                        .default(false),
+                ),
+        ))
+        .await;
 
     let public_schema = lldap_schema::PublicSchema::get();
     let schema = public_schema.get_schema();
@@ -1248,31 +1248,31 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
         transaction
-        .execute(backend.build(
-            Query::insert()
-            .into_table(UserAttributeSchema::Table)
-            .columns([
-                UserAttributeSchema::UserAttributeSchemaName,
-                UserAttributeSchema::UserAttributeSchemaType,
-                UserAttributeSchema::UserAttributeSchemaIsList,
-                UserAttributeSchema::UserAttributeSchemaIsUserVisible,
-                UserAttributeSchema::UserAttributeSchemaIsUserEditable,
-                UserAttributeSchema::UserAttributeSchemaIsHardcoded,
-                UserAttributeSchema::UserAttributeSchemaIsReadonly,
-                UserAttributeSchema::Aliases,
-            ])
-            .values_panic([
-                name.into(),
-                          attr.attribute_type.into(),
-                          attr.is_list.into(),
-                          attr.is_visible.into(),
-                          attr.is_editable.into(),
-                          true.into(),
-                          attr.is_readonly.into(),
-                          aliases_json.into(),
-            ]),
-        ))
-        .await?;
+            .execute(backend.build(
+                Query::insert()
+                    .into_table(UserAttributeSchema::Table)
+                    .columns([
+                        UserAttributeSchema::UserAttributeSchemaName,
+                        UserAttributeSchema::UserAttributeSchemaType,
+                        UserAttributeSchema::UserAttributeSchemaIsList,
+                        UserAttributeSchema::UserAttributeSchemaIsUserVisible,
+                        UserAttributeSchema::UserAttributeSchemaIsUserEditable,
+                        UserAttributeSchema::UserAttributeSchemaIsHardcoded,
+                        UserAttributeSchema::UserAttributeSchemaIsReadonly,
+                        UserAttributeSchema::Aliases,
+                    ])
+                    .values_panic([
+                        name.into(),
+                        attr.attribute_type.into(),
+                        attr.is_list.into(),
+                        attr.is_visible.into(),
+                        attr.is_editable.into(),
+                        true.into(),
+                        attr.is_readonly.into(),
+                        aliases_json.into(),
+                    ]),
+            ))
+            .await?;
         user_count += 1;
     }
 
@@ -1285,31 +1285,31 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         let aliases_json = serde_json::to_string(&attr.aliases).unwrap_or_else(|_| "[]".to_string());
 
         transaction
-        .execute(backend.build(
-            Query::insert()
-            .into_table(GroupAttributeSchema::Table)
-            .columns([
-                GroupAttributeSchema::GroupAttributeSchemaName,
-                GroupAttributeSchema::GroupAttributeSchemaType,
-                GroupAttributeSchema::GroupAttributeSchemaIsList,
-                GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
-                GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
-                GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
-                GroupAttributeSchema::GroupAttributeSchemaIsReadonly,
-                GroupAttributeSchema::Aliases,
-            ])
-            .values_panic([
-                name.into(),
-                          attr.attribute_type.into(),
-                          attr.is_list.into(),
-                          attr.is_visible.into(),
-                          attr.is_editable.into(),
-                          true.into(),
-                          attr.is_readonly.into(),
-                          aliases_json.into(),
-            ]),
-        ))
-        .await?;
+            .execute(backend.build(
+                Query::insert()
+                    .into_table(GroupAttributeSchema::Table)
+                    .columns([
+                        GroupAttributeSchema::GroupAttributeSchemaName,
+                        GroupAttributeSchema::GroupAttributeSchemaType,
+                        GroupAttributeSchema::GroupAttributeSchemaIsList,
+                        GroupAttributeSchema::GroupAttributeSchemaIsGroupVisible,
+                        GroupAttributeSchema::GroupAttributeSchemaIsGroupEditable,
+                        GroupAttributeSchema::GroupAttributeSchemaIsHardcoded,
+                        GroupAttributeSchema::GroupAttributeSchemaIsReadonly,
+                        GroupAttributeSchema::Aliases,
+                    ])
+                    .values_panic([
+                        name.into(),
+                        attr.attribute_type.into(),
+                        attr.is_list.into(),
+                        attr.is_visible.into(),
+                        attr.is_editable.into(),
+                        true.into(),
+                        attr.is_readonly.into(),
+                        aliases_json.into(),
+                    ]),
+            ))
+            .await?;
         group_count += 1;
     }
 
@@ -1325,48 +1325,63 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         WHERE ua.{} = u.{}
         AND ua.{} = 'kerberossync'
     )",
-    UserAttributes::Table.to_string(),
-                                  UserAttributes::UserAttributeUserId.to_string(),
-                                  UserAttributes::UserAttributeName.to_string(),
-                                  UserAttributes::UserAttributeValue.to_string(),
-                                  Users::UserId.to_string(),
-                                  Users::Table.to_string(),
-                                  UserAttributes::Table.to_string(),
-                                  UserAttributes::UserAttributeUserId.to_string(),
-                                  Users::UserId.to_string(),
-                                  UserAttributes::UserAttributeName.to_string()
+        UserAttributes::Table.to_string(),
+        UserAttributes::UserAttributeUserId.to_string(),
+        UserAttributes::UserAttributeName.to_string(),
+        UserAttributes::UserAttributeValue.to_string(),
+        Users::UserId.to_string(),
+        Users::Table.to_string(),
+        UserAttributes::Table.to_string(),
+        UserAttributes::UserAttributeUserId.to_string(),
+        Users::UserId.to_string(),
+        UserAttributes::UserAttributeName.to_string()
     );
 
     let _ = transaction
-    .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
-    .await;
+        .execute(sea_orm::Statement::from_string(backend, insert_sync_sql))
+        .await;
 
     // 5. Add krbPrincipalName column to main users table (protected like creation_date)
     let _ = transaction
-    .execute(backend.build(
-        Table::alter()
-        .table(Users::Table)
-        .add_column_if_not_exists(
-            ColumnDef::new(Alias::new("krb_principal_name"))
-            .string_len(255)
-            .null(),
-        ),
-    ))
-    .await;
+        .execute(backend.build(
+            Table::alter()
+                .table(Users::Table)
+                .add_column_if_not_exists(
+                    ColumnDef::new(Alias::new("krb_principal_name"))
+                        .string_len(255)
+                        .null(),
+                ),
+        ))
+        .await;
 
     // 6. Default empty krbPrincipalName for existing users (idempotent)
     let insert_krb_sql = format!(
         "UPDATE {} u
         SET krb_principal_name = ''
     WHERE krb_principal_name IS NULL",
-    Users::Table.to_string()
+        Users::Table.to_string()
     );
 
     let _ = transaction
-    .execute(sea_orm::Statement::from_string(backend, insert_krb_sql))
-    .await;
+        .execute(sea_orm::Statement::from_string(backend, insert_krb_sql))
+        .await;
 
-    // 7. Default ou values for existing records (idempotent)
+    // 7. NEW: Seed the single allowedous list (default ["people", "groups"])
+    // This is the new source of truth for all OUs (users and groups)
+    let insert_allowedous_sql = r#"
+    INSERT INTO user_attributes (user_id, attribute_name, value)
+    SELECT 'lldap_admin', 'allowedous', '["people", "groups"]'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM user_attributes ua
+        WHERE ua.user_id = 'lldap_admin'
+        AND ua.attribute_name = 'allowedous'
+    )"#;
+
+    let _ = transaction
+        .execute(sea_orm::Statement::from_string(backend, insert_allowedous_sql))
+        .await;
+
+    // 8. Default ou values for existing records (idempotent) — unchanged
     let insert_ou_users_sql = format!(
         "INSERT INTO {} ({}, {}, {})
     SELECT u.{}, 'ou', 'people'
@@ -1376,21 +1391,21 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         WHERE ua.{} = u.{}
         AND ua.{} = 'ou'
     )",
-    UserAttributes::Table.to_string(),
-                                      UserAttributes::UserAttributeUserId.to_string(),
-                                      UserAttributes::UserAttributeName.to_string(),
-                                      UserAttributes::UserAttributeValue.to_string(),
-                                      Users::UserId.to_string(),
-                                      Users::Table.to_string(),
-                                      UserAttributes::Table.to_string(),
-                                      UserAttributes::UserAttributeUserId.to_string(),
-                                      Users::UserId.to_string(),
-                                      UserAttributes::UserAttributeName.to_string()
+        UserAttributes::Table.to_string(),
+        UserAttributes::UserAttributeUserId.to_string(),
+        UserAttributes::UserAttributeName.to_string(),
+        UserAttributes::UserAttributeValue.to_string(),
+        Users::UserId.to_string(),
+        Users::Table.to_string(),
+        UserAttributes::Table.to_string(),
+        UserAttributes::UserAttributeUserId.to_string(),
+        Users::UserId.to_string(),
+        UserAttributes::UserAttributeName.to_string()
     );
 
     let _ = transaction
-    .execute(sea_orm::Statement::from_string(backend, insert_ou_users_sql))
-    .await;
+        .execute(sea_orm::Statement::from_string(backend, insert_ou_users_sql))
+        .await;
 
     let insert_ou_groups_sql = format!(
         "INSERT INTO {} ({}, {}, {})
@@ -1401,56 +1416,25 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         WHERE ga.{} = g.{}
         AND ga.{} = 'ou'
     )",
-    GroupAttributes::Table.to_string(),
-                                       GroupAttributes::GroupAttributeGroupId.to_string(),
-                                       GroupAttributes::GroupAttributeName.to_string(),
-                                       GroupAttributes::GroupAttributeValue.to_string(),
-                                       Groups::GroupId.to_string(),
-                                       Groups::Table.to_string(),
-                                       GroupAttributes::Table.to_string(),
-                                       GroupAttributes::GroupAttributeGroupId.to_string(),
-                                       Groups::GroupId.to_string(),
-                                       GroupAttributes::GroupAttributeName.to_string()
+        GroupAttributes::Table.to_string(),
+        GroupAttributes::GroupAttributeGroupId.to_string(),
+        GroupAttributes::GroupAttributeName.to_string(),
+        GroupAttributes::GroupAttributeValue.to_string(),
+        Groups::GroupId.to_string(),
+        Groups::Table.to_string(),
+        GroupAttributes::Table.to_string(),
+        GroupAttributes::GroupAttributeGroupId.to_string(),
+        Groups::GroupId.to_string(),
+        GroupAttributes::GroupAttributeName.to_string()
     );
 
     let _ = transaction
-    .execute(sea_orm::Statement::from_string(backend, insert_ou_groups_sql))
-    .await;
-
-    // 8. NEW: Seed global allowed OU lists (admin-only control) — both stored on lldap_admin user
-    // UserOUs default = ["people"]
-    let insert_userous_sql = r#"
-    INSERT INTO user_attributes (user_id, attribute_name, value)
-    SELECT 'lldap_admin', 'userous', '["people"]'
-    WHERE NOT EXISTS (
-        SELECT 1 FROM user_attributes ua
-        WHERE ua.user_id = 'lldap_admin'
-        AND ua.attribute_name = 'userous'
-        )
-        "#;
-
-        let _ = transaction
-        .execute(sea_orm::Statement::from_string(backend, insert_userous_sql))
+        .execute(sea_orm::Statement::from_string(backend, insert_ou_groups_sql))
         .await;
 
-        // GroupOUs default = ["groups"]
-        let insert_groupous_sql = r#"
-        INSERT INTO user_attributes (user_id, attribute_name, value)
-        SELECT 'lldap_admin', 'groupous', '["groups"]'
-        WHERE NOT EXISTS (
-            SELECT 1 FROM user_attributes ua
-            WHERE ua.user_id = 'lldap_admin'
-            AND ua.attribute_name = 'groupous'
-            )
-            "#;
+    info!("Seeded single allowedous = [\"people\", \"groups\"] as new source of truth");
 
-            let _ = transaction
-            .execute(sea_orm::Statement::from_string(backend, insert_groupous_sql))
-            .await;
-
-            info!("Seeded global UserOUs = [\"people\"] and GroupOUs = [\"groups\"] + protected ou (readonly)");
-
-            Ok(transaction)
+    Ok(transaction)
 }
 
 // This is needed to make an array of async functions.

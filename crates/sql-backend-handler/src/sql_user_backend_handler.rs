@@ -136,6 +136,13 @@ fn to_value(opt_name: &Option<String>) -> ActiveValue<Option<String>> {
     }
 }
 
+fn is_backend_writable_readonly_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "ou" | "kerberossync" | "allowedous" | "krb_principal_name"
+    )
+}
+
 #[async_trait]
 impl UserListerBackendHandler for SqlBackendHandler {
     #[instrument(skip(self), level = "debug", ret, err)]
@@ -200,7 +207,7 @@ impl UserListerBackendHandler for SqlBackendHandler {
 }
 
 impl SqlBackendHandler {
-        fn compute_user_attribute_changes(
+    fn compute_user_attribute_changes(
         user_id: &UserId,
         insert_attributes: Vec<Attribute>,
         delete_attributes: Vec<AttributeName>,
@@ -225,7 +232,11 @@ impl SqlBackendHandler {
                 };
             }
 
-            if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
+            // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
+            let attr_name = attribute.name.as_str();
+            if schema.user_attributes().get_attribute_type(attr_name).is_some()
+                || is_backend_writable_readonly_attribute(attr_name)
+            {
                 let db_value = attribute_value_to_db_bytes(&attribute.value);
 
                 update_user_attributes.push(model::user_attributes::ActiveModel {
@@ -374,11 +385,11 @@ impl UserBackendHandler for SqlBackendHandler {
         let uuid = Uuid::from_name_and_date(request.user_id.as_str(), &now);
         let lower_email = request.email.as_str().to_lowercase();
 
-        // === NEW: Enforce ou from global UserOUs list ===
+        // === Enforce ou from global allowedous list (single source of truth) ===
         let schema = self.get_schema().await?;
         let default_ou = schema.user_attributes()
-            .get_by_name_or_alias("userous")
-            .and_then(|_| Some("people".to_string())) // fallback, real value read in transaction
+            .get_by_name_or_alias("allowedous")
+            .and_then(|_| Some("people".to_string())) // fallback — real list read at runtime
             .unwrap_or_else(|| "people".to_string());
 
         if !request.attributes.iter().any(|a| a.name.as_str() == "ou") {

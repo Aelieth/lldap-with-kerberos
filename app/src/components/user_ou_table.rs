@@ -1,6 +1,5 @@
-use crate::components::{create_user_ou::CreateUserOu, delete_user_ou::DeleteUserOu};
+use crate::components::{create_user_ou::CreateUserOu, delete_user_ou::DeleteUserOu, ou_selector::OuSelector};
 use yew::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
@@ -14,30 +13,16 @@ pub struct Props {
 
 #[function_component(UserOuTable)]
 pub fn user_ou_table(props: &Props) -> Html {
-    let mut display_ous = vec![
-        ("All".to_string(), "All".to_string()),
-        ("people".to_string(), "people".to_string()),
-    ];
-
-    let custom_ous: Vec<&String> = props.ous.iter().filter(|&o| o != "people").collect();
-
-    for (i, ou) in custom_ous.iter().enumerate() {
-        let prefix = if i == custom_ous.len() - 1 { "└── " } else { "├── " };
-        display_ous.push((format!("{}{}", prefix, ou), (*ou).clone()));
-    }
-
     html! {
         <div class="row g-3 align-items-end mb-3">
             <div class="col-md-3">
                 <label class="form-label">{"Organizational Unit"}</label>
-                <select class="form-select" onchange={props.on_ou_changed.reform(|e: Event| {
-                    let value = e.target().unwrap().dyn_into::<web_sys::HtmlSelectElement>().unwrap().value();
-                    value
-                })}>
-                    { for display_ous.iter().map(|(display, value)| html! {
-                        <option value={value.clone()} selected={value == &props.ou_filter}>{display}</option>
-                    }) }
-                </select>
+                <OuSelector
+                    ous={props.ous.clone()}
+                    current_ou={props.ou_filter.clone()}
+                    on_ou_changed={props.on_ou_changed.clone()}
+                    label={None::<String>}
+                    hide_all={false} />
             </div>
 
             { if let Some(err) = &props.error {
@@ -52,6 +37,7 @@ pub fn user_ou_table(props: &Props) -> Html {
 
             <div class="col-auto">
                 <CreateUserOu
+                    ous={props.ous.clone()}                     // ← pass the list
                     on_ou_created={props.on_ou_created.clone()}
                     on_error={Callback::noop()}
                 />

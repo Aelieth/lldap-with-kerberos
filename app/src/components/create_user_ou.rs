@@ -2,6 +2,7 @@ use crate::infra::{
     common_component::{CommonComponent, CommonComponentParts},
     modal::Modal,
 };
+use crate::components::ou_selector::OuSelector;
 use crate::components::status_modal::StatusModal;
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
@@ -21,7 +22,9 @@ pub struct CreateUserOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
-    new_ou_name: String,
+    is_primary: bool,
+    selected_primary: String,
+    secondary_name: String,
     status_message: Option<(String, bool)>,
 }
 
@@ -29,6 +32,7 @@ pub struct CreateUserOu {
 pub struct CreateUserOuProps {
     pub on_ou_created: Callback<String>,
     pub on_error: Callback<Error>,
+    pub ous: Vec<String>,
 }
 
 pub enum Msg {
@@ -36,7 +40,9 @@ pub enum Msg {
     ConfirmCreateOu,
     DismissModal,
     CreateOuResponse(Result<create_ou_query::ResponseData>),
-    NewOuNameChanged(String),
+    ToggleMode(bool),
+    PrimarySelected(String),
+    SecondaryNameChanged(String),
     ShowStatus(String, bool),
     DismissStatus,
 }
@@ -50,21 +56,25 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
         match msg {
             Msg::ClickedCreateOu => {
                 self.common.error = None;
-                self.new_ou_name = String::new();
+                self.is_primary = true;
+                self.selected_primary = String::new();
+                self.secondary_name = String::new();
                 self.status_message = None;
                 self.modal.as_ref().expect("modal not initialized").show();
                 Ok(true)
             }
             Msg::ConfirmCreateOu => {
-                if self.new_ou_name.trim().is_empty() {
+                let final_name = if self.is_primary {
+                    self.selected_primary.clone()
+                } else {
+                    format!("{}\\{}", self.selected_primary, self.secondary_name)
+                };
+                if final_name.trim().is_empty() {
                     return Ok(true);
                 }
-                // ANY non-empty name now reaches the backend (including "all", "people", duplicates)
                 self.common.call_graphql::<CreateOuQuery, _>(
                     ctx,
-                    create_ou_query::Variables {
-                        name: self.new_ou_name.clone(),
-                    },
+                    create_ou_query::Variables { name: final_name.clone() },
                     Msg::CreateOuResponse,
                     "Error trying to create OU",
                 );
@@ -77,9 +87,15 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
             Msg::CreateOuResponse(response) => {
                 match response {
                     Ok(_) => {
-                        let msg = format!("Successfully created OU: {}", self.new_ou_name);
-                        ctx.props().on_ou_created.emit(self.new_ou_name.clone());
-                        self.new_ou_name = String::new();
+                        let final_name = if self.is_primary {
+                            self.selected_primary.clone()
+                        } else {
+                            format!("{}\\{}", self.selected_primary, self.secondary_name)
+                        };
+                        let msg = format!("Successfully created OU: {}", final_name);
+                        ctx.props().on_ou_created.emit(final_name);
+                        self.selected_primary = String::new();
+                        self.secondary_name = String::new();
                         ctx.link().send_message(Msg::ShowStatus(msg, true));
                     }
                     Err(e) => {
@@ -91,8 +107,19 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
                 self.modal.as_ref().expect("modal not initialized").hide();
                 Ok(true)
             }
-            Msg::NewOuNameChanged(name) => {
-                self.new_ou_name = name;
+            Msg::ToggleMode(is_primary) => {
+                self.is_primary = is_primary;
+                if !is_primary && self.selected_primary.is_empty() {
+                    self.selected_primary = "people".to_string();
+                }
+                Ok(true)
+            }
+            Msg::PrimarySelected(ou) => {
+                self.selected_primary = ou;
+                Ok(true)
+            }
+            Msg::SecondaryNameChanged(name) => {
+                self.secondary_name = name;
                 Ok(true)
             }
             Msg::ShowStatus(message, is_success) => {
@@ -120,7 +147,9 @@ impl Component for CreateUserOu {
             common: CommonComponentParts::<Self>::create(),
             node_ref: NodeRef::default(),
             modal: None,
-            new_ou_name: String::new(),
+            is_primary: true,
+            selected_primary: String::new(),
+            secondary_name: String::new(),
             status_message: None,
         }
     }
@@ -146,14 +175,6 @@ impl Component for CreateUserOu {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
-        let on_input = link.callback(|e: InputEvent| {
-            let value = e.target()
-                .unwrap()
-                .dyn_into::<web_sys::HtmlInputElement>()
-                .unwrap()
-                .value();
-            Msg::NewOuNameChanged(value)
-        });
 
         let status_html = if let Some((msg, is_success)) = &self.status_message {
             let on_dismiss = link.callback(|_| Msg::DismissStatus);
@@ -166,12 +187,12 @@ impl Component for CreateUserOu {
           <>
           <button
             class="btn btn-primary"
-            disabled={self.common.is_task_running()}   // ← ONLY this line changed
+            disabled={self.common.is_task_running()}
             onclick={link.callback(|_| Msg::ClickedCreateOu)}>
             <i class="bi-people-fill me-2" aria-label="Create OU" />
             {"Create OU"}
           </button>
-          {self.show_create_modal(ctx, on_input)}
+          {self.show_create_modal(ctx)}
           {status_html}
           </>
         }
@@ -179,8 +200,89 @@ impl Component for CreateUserOu {
 }
 
 impl CreateUserOu {
-    fn show_create_modal(&self, ctx: &Context<Self>, on_input: Callback<InputEvent>) -> Html {
+        fn show_create_modal(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+
+        let mode_selector = html! {
+            <div class="mb-3">
+                <div class="form-check form-check-inline">
+                    <input
+                        class="form-check-input"
+                        type="radio"
+                        id="primary-mode"
+                        name="ou-mode"
+                        checked={self.is_primary}
+                        onchange={link.callback(|_| Msg::ToggleMode(true))} />
+                    <label class="form-check-label" for="primary-mode">{"Primary OU"}</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input
+                        class="form-check-input"
+                        type="radio"
+                        id="secondary-mode"
+                        name="ou-mode"
+                        checked={!self.is_primary}
+                        onchange={link.callback(|_| Msg::ToggleMode(false))} />
+                    <label class="form-check-label" for="secondary-mode">{"Secondary OU"}</label>
+                </div>
+            </div>
+        };
+
+        let primary_selector = if !self.is_primary {
+            let primaries: Vec<String> = ctx.props().ous.iter()
+                .filter(|o| !o.contains('\\'))
+                .cloned()
+                .collect();
+
+            html! {
+                <div class="mb-3">
+                    <label class="form-label">{"Primary OU"}</label>
+                    <OuSelector
+                        ous={primaries}
+                        current_ou={self.selected_primary.clone()}
+                        on_ou_changed={link.callback(Msg::PrimarySelected)}
+                        label={None::<String>}
+                        hide_all={true} />
+                </div>
+            }
+        } else {
+            html! {}
+        };
+
+        let name_input = if self.is_primary {
+            html! {
+                <input
+                    type="text"
+                    class="form-control"
+                    placeholder="Enter primary OU name (e.g. office)"
+                    value={self.selected_primary.clone()}
+                    oninput={link.callback(|e: InputEvent| {
+                        let value = e.target()
+                            .unwrap()
+                            .dyn_into::<web_sys::HtmlInputElement>()
+                            .unwrap()
+                            .value();
+                        Msg::PrimarySelected(value)
+                    })} />
+            }
+        } else {
+            html! {
+                <input
+                    type="text"
+                    class="form-control"
+                    placeholder="Enter secondary OU name (e.g. accounting)"
+                    value={self.secondary_name.clone()}
+                    oninput={link.callback(|e: InputEvent| {
+                        let value = e.target()
+                            .unwrap()
+                            .dyn_into::<web_sys::HtmlInputElement>()
+                            .unwrap()
+                            .value();
+                        Msg::SecondaryNameChanged(value)
+                    })} />
+            }
+        };
+
         html! {
           <div
             class="modal fade"
@@ -200,12 +302,12 @@ impl CreateUserOu {
                     onclick={link.callback(|_| Msg::DismissModal)} />
                 </div>
                 <div class="modal-body">
-                  <input
-                    type="text"
-                    class="form-control"
-                    placeholder="Enter OU name (e.g. office)"
-                    value={self.new_ou_name.clone()}
-                    oninput={on_input} />
+                  {mode_selector}
+                  {primary_selector}
+                  <label class="form-label">
+                    {if self.is_primary { "Primary OU name" } else { "Secondary OU name" }}
+                  </label>
+                  {name_input}
                 </div>
                 <div class="modal-footer">
                   <button
@@ -219,7 +321,9 @@ impl CreateUserOu {
                     type="button"
                     onclick={link.callback(|_| Msg::ConfirmCreateOu)}
                     class="btn btn-primary"
-                    disabled={self.common.is_task_running() || self.new_ou_name.trim().is_empty()}>
+                    disabled={self.common.is_task_running() ||
+                              (self.is_primary && self.selected_primary.trim().is_empty()) ||
+                              (!self.is_primary && (self.selected_primary.trim().is_empty() || self.secondary_name.trim().is_empty()))}>
                     <i class="bi-check-circle me-2"></i>
                     {"Create OU"}
                   </button>

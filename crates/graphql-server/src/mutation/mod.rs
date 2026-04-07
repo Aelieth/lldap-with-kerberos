@@ -496,6 +496,41 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot delete built-in OU 'people' or 'All'".into());
         }
 
+        // === SAFETY: Cannot delete primary OU if it still has secondary OUs ===
+        let admin_id = UserId::new("admin");
+        let admin_user = handler.get_user_details(&admin_id).await.map_err(|e| {
+            FieldError::new(
+                "Failed to load admin user for OU list",
+                graphql_value!({ "details": (e.to_string()) }),
+            )
+        })?;
+
+        let allowedous: Vec<String> = admin_user.attributes
+            .iter()
+            .find(|a| a.name.as_str() == "allowedous")
+            .and_then(|a| match &a.value {
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(s),
+                ) => serde_json::from_str(s.as_str()).ok(),
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(list),
+                ) => Some(list.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| vec!["people".to_string()]);
+
+        let has_children = allowedous.iter().any(|ou| {
+            let parts: Vec<&str> = ou.splitn(2, '\\').collect();
+            parts.len() == 2 && parts[0].to_lowercase() == name_lower
+        });
+
+        if has_children {
+            return Err(FieldError::new(
+                format!("Cannot delete primary OU '{}' because it still contains secondary OUs. Delete the secondary OUs first.", name),
+                juniper::Value::null(),
+            ));
+        }
+
         // === 1. Reassign all users in this OU to "people" (readonly bypass) ===
         let users = handler.list_users(None, false).await.map_err(|e| {
             FieldError::new(
@@ -518,7 +553,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 .unwrap_or_else(|| "people".to_string());
 
             if user_ou.to_lowercase() == name_lower {
-                // === EXACT SAME READONLY BYPASS AS change_user_ou & create_user ===
                 let insert_attributes = vec![lldap_domain::types::Attribute {
                     name: lldap_domain::types::AttributeName::from("ou"),
                     value: lldap_domain::types::AttributeValue::String(
@@ -544,18 +578,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             }
         }
 
-        // === 2. Remove OU from global userous list on admin user (unchanged) ===
-        let admin_id = lldap_domain::types::UserId::new("admin");
-        let admin_user = handler.get_user_details(&admin_id).await.map_err(|e| {
-            FieldError::new(
-                "Failed to load admin user for OU list",
-                graphql_value!({ "details": (e.to_string()) }),
-            )
-        })?;
-
+        // === 2. Remove OU from global allowedous list ===
         let current_ous: Vec<String> = admin_user.attributes
             .iter()
-            .find(|a| a.name == AttributeName::from("userous"))
+            .find(|a| a.name.as_str() == "allowedous")
             .and_then(|a| match &a.value {
                 lldap_domain::types::AttributeValue::String(
                     lldap_domain::types::Cardinality::Singleton(s),
@@ -579,7 +605,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             display_name: None,
             delete_attributes: vec![],
             insert_attributes: vec![lldap_domain::types::Attribute {
-                name: AttributeName::from("userous"),
+                name: AttributeName::from("allowedous"),
                 value: lldap_domain::types::AttributeValue::String(
                     lldap_domain::types::Cardinality::Unbounded(new_ous),
                 ),
@@ -611,14 +637,40 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Invalid OU name (cannot be empty or built-in)".into());
         }
 
-        if name.len() < 2 || name.len() > 64 ||
-           !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
-           name.starts_with('-') || name.starts_with('_') ||
-           name.ends_with('-') || name.ends_with('_') {
+        // === NEW: Secondary OU validation with exactly one "\" separator ===
+        let parts: Vec<&str> = name.splitn(2, '\\').collect();
+        let (primary, secondary) = match parts.len() {
+            1 => (name.as_str(), None),           // Primary only
+            2 => (parts[0], Some(parts[1])),      // Primary\Secondary
+            _ => return Err(FieldError::new(
+                "Invalid OU format: only one level of secondary OU allowed (primary\\secondary)",
+                juniper::Value::null(),
+            )),
+        };
+
+        // Validate primary part
+        if primary.len() < 2 || primary.len() > 64 ||
+           !primary.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
+           primary.starts_with('-') || primary.starts_with('_') ||
+           primary.ends_with('-') || primary.ends_with('_') {
             return Err(FieldError::new(
-                "Invalid OU name: 2-64 characters, only a-z A-Z 0-9 - _ allowed. No spaces or special characters.",
+                "Invalid primary OU name: 2-64 characters, only a-z A-Z 0-9 - _ allowed. No spaces or special characters.",
                 juniper::Value::null(),
             ));
+        }
+
+        // Validate secondary part (if present)
+        if let Some(sec) = secondary {
+            if sec.trim().is_empty() ||
+               sec.len() < 2 || sec.len() > 64 ||
+               !sec.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
+               sec.starts_with('-') || sec.starts_with('_') ||
+               sec.ends_with('-') || sec.ends_with('_') {
+                return Err(FieldError::new(
+                    "Invalid secondary OU name: 2-64 characters, only a-z A-Z 0-9 - _ allowed. No spaces or special characters.",
+                    juniper::Value::null(),
+                ));
+            }
         }
 
         let admin_id = UserId::new("admin");
@@ -630,7 +682,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             ))?;
 
         let current_ous: Vec<String> = admin_user.attributes.iter()
-            .find(|a| a.name.as_str() == "userous")
+            .find(|a| a.name.as_str() == "allowedous")
             .and_then(|a| match &a.value {
                 lldap_domain::types::AttributeValue::String(
                     lldap_domain::types::Cardinality::Singleton(s),
@@ -650,8 +702,16 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             ));
         }
 
+        // Primary must exist in allowedous for secondary creation
+        if secondary.is_some() && !current_ous.iter().any(|p| p.to_lowercase() == primary.to_lowercase()) {
+            return Err(FieldError::new(
+                format!("Primary OU '{}' does not exist. Create it first before adding a secondary.", primary),
+                juniper::Value::null(),
+            ));
+        }
+
         let mut new_ous = current_ous;
-        new_ous.push(name.clone());  // keep original case for display
+        new_ous.push(name.clone());  // keep original case (primary\secondary)
         new_ous.sort();
 
         handler.update_user(UpdateUserRequest {
@@ -660,7 +720,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             display_name: None,
             delete_attributes: vec![],
             insert_attributes: vec![lldap_domain::types::Attribute {
-                name: AttributeName::from("userous"),
+                name: AttributeName::from("allowedous"),
                 value: lldap_domain::types::AttributeValue::String(
                     lldap_domain::types::Cardinality::Unbounded(new_ous),
                 ),

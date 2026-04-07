@@ -2,11 +2,10 @@ use crate::infra::{
     common_component::{CommonComponent, CommonComponentParts},
     modal::Modal,
 };
-use crate::components::status_modal::StatusModal;
+use crate::components::{ou_selector::OuSelector, status_modal::StatusModal};
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -189,15 +188,6 @@ impl ChangeUserOu {
         let link = &ctx.link();
         let count = ctx.props().selected_users.len();
 
-        let mut display_ous = vec![
-            ("people".to_string(), "people".to_string()),
-        ];
-        let custom_ous: Vec<&String> = ctx.props().ous.iter().filter(|&o| o != "people").collect();
-        for (i, ou) in custom_ous.iter().enumerate() {
-            let prefix = if i == custom_ous.len() - 1 { "└── " } else { "├── " };
-            display_ous.push((format!("{}{}", prefix, ou), (*ou).clone()));
-        }
-
         html! {
           <div
             class="modal fade"
@@ -218,16 +208,12 @@ impl ChangeUserOu {
                 </div>
                 <div class="modal-body">
                   <label class="form-label">{"New Organizational Unit"}</label>
-                  <select class="form-select" onchange={link.callback(|e: Event| {
-                      let value = e.target().unwrap()
-                          .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
-                          .value();
-                      Msg::NewOuSelected(value)
-                  })}>
-                    { for display_ous.iter().map(|(display, value)| html! {
-                        <option value={value.clone()} selected={value == &self.selected_ou}>{display}</option>
-                    }) }
-                  </select>
+                  <OuSelector
+                    ous={ctx.props().ous.clone()}
+                    current_ou={self.selected_ou.clone()}
+                    on_ou_changed={link.callback(Msg::NewOuSelected)}
+                    label={None::<String>}
+                    hide_all={true} />
                 </div>
                 <div class="modal-footer">
                   <button
