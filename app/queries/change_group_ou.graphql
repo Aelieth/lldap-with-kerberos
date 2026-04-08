@@ -1,0 +1,5 @@
+mutation ChangeGroupOuQuery($groupIds: [Int!]!, $newOu: String!) {
+  changeGroupOu(groupIds: $groupIds, newOu: $newOu) {
+    ok
+  }
+}

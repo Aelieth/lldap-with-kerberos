@@ -16,16 +16,17 @@ use yew::prelude::*;
 )]
 pub struct DeleteOuQuery;
 
-pub struct DeleteUserOu {
+pub struct DeleteOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
-    status_message: Option<(String, bool)>,  // (message, is_success)
+    status_message: Option<(String, bool)>,
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
-pub struct DeleteUserOuProps {
+pub struct DeleteOuProps {
     pub ou: String,
+    pub reassign_to: String,           // "people" or "groups"
     pub on_ou_deleted: Callback<String>,
     pub on_error: Callback<Error>,
 }
@@ -39,7 +40,7 @@ pub enum Msg {
     DismissStatus,
 }
 
-impl CommonComponent<DeleteUserOu> for DeleteUserOu {
+impl CommonComponent<DeleteOu> for DeleteOu {
     fn handle_msg(
         &mut self,
         ctx: &Context<Self>,
@@ -47,8 +48,11 @@ impl CommonComponent<DeleteUserOu> for DeleteUserOu {
     ) -> Result<bool> {
         match msg {
             Msg::ClickedDeleteOu => {
-                if ctx.props().ou == "people" || ctx.props().ou == "All" {
-                    ctx.link().send_message(Msg::ShowStatus("Cannot delete built-in OU 'people' or 'All'".to_string(), false));
+                if ctx.props().ou == "people" || ctx.props().ou == "groups" || ctx.props().ou == "All" {
+                    ctx.link().send_message(Msg::ShowStatus(
+                        "Cannot delete built-in OU 'people', 'groups', or 'All'".to_string(),
+                        false
+                    ));
                     return Ok(true);
                 }
                 self.common.error = None;
@@ -103,9 +107,9 @@ impl CommonComponent<DeleteUserOu> for DeleteUserOu {
     }
 }
 
-impl Component for DeleteUserOu {
+impl Component for DeleteOu {
     type Message = Msg;
-    type Properties = DeleteUserOuProps;
+    type Properties = DeleteOuProps;
 
     fn create(_: &Context<Self>) -> Self {
         Self {
@@ -149,7 +153,10 @@ impl Component for DeleteUserOu {
           <>
           <button
             class="btn btn-danger"
-            disabled={self.common.is_task_running() || ctx.props().ou == "people" || ctx.props().ou == "All"}
+            disabled={self.common.is_task_running()
+                || ctx.props().ou == "people"
+                || ctx.props().ou == "groups"
+                || ctx.props().ou == "All"}
             onclick={link.callback(|_| Msg::ClickedDeleteOu)}>
             <i class="bi-x-circle-fill me-2" aria-label="Delete OU" />
             {"Delete OU"}
@@ -161,9 +168,15 @@ impl Component for DeleteUserOu {
     }
 }
 
-impl DeleteUserOu {
+impl DeleteOu {
     fn show_modal(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+        let reassign_text = if ctx.props().reassign_to == "people" {
+            "people"
+        } else {
+            "groups"
+        };
+
         html! {
           <div
             class="modal fade"
@@ -186,7 +199,7 @@ impl DeleteUserOu {
                   <span>
                     {"Are you sure you want to delete Organizational Unit "}
                     <b>{&ctx.props().ou}</b>{"?"}<br />
-                    {"All users in this OU will be reassigned to 'people'. This cannot be undone."}
+                    {format!("All items in this OU will be reassigned to '{}'. This cannot be undone.", reassign_text)}
                   </span>
                 </div>
                 <div class="modal-footer">

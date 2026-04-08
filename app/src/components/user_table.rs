@@ -1,7 +1,7 @@
 use crate::{
     components::{
         router::{AppRoute, Link},
-        user_ou_table::UserOuTable,
+        ou_table::OuTable,
         change_user_ou::ChangeUserOu,
         delete_user::DeleteUser,
     },
@@ -223,13 +223,14 @@ impl Component for UserTable {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div>
-            <UserOuTable
+            <OuTable
             ou_filter={self.ou_filter.clone()}
             ous={self.ous.clone()}
             on_ou_changed={ctx.link().callback(Msg::OuFilterChanged)}
             on_ou_created={ctx.link().callback(Msg::OuCreated)}
             on_ou_deleted={ctx.link().callback(Msg::OuDeleted)}
             error={self.common.error.as_ref().map(|e| e.to_string())}
+            default_primary={"people".to_string()}
             />
             <hr class="my-4" />
 

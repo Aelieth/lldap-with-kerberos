@@ -480,7 +480,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(Success::new())
     }
 
-    async fn delete_ou(
+async fn delete_ou(
         context: &Context<Handler>,
         name: String,
     ) -> FieldResult<Success> {
@@ -492,8 +492,8 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
 
         let name_lower = name.trim().to_lowercase();
-        if name_lower == "people" || name_lower == "all" {
-            return Err("Cannot delete built-in OU 'people' or 'All'".into());
+        if name_lower == "people" || name_lower == "groups" || name_lower == "all" {
+            return Err("Cannot delete built-in OU 'people', 'groups', or 'All'".into());
         }
 
         // === SAFETY: Cannot delete primary OU if it still has secondary OUs ===
@@ -517,7 +517,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 ) => Some(list.clone()),
                 _ => None,
             })
-            .unwrap_or_else(|| vec!["people".to_string()]);
+            .unwrap_or_else(|| vec!["people".to_string(), "groups".to_string()]);
 
         let has_children = allowedous.iter().any(|ou| {
             let parts: Vec<&str> = ou.splitn(2, '\\').collect();
@@ -578,7 +578,52 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             }
         }
 
-        // === 2. Remove OU from global allowedous list ===
+        // === 2. Reassign all groups in this OU to "groups" (symmetric to users) ===
+        let groups = handler.list_groups(None).await.map_err(|e| {
+            FieldError::new(
+                "Failed to list groups for OU reassignment",
+                graphql_value!({ "details": (e.to_string()) }),
+            )
+        })?;
+
+        for group in groups {
+            let group_ou = group.attributes
+                .iter()
+                .find(|a| a.name.as_str() == "ou")
+                .and_then(|a| match &a.value {
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(s),
+                    ) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "groups".to_string());
+
+            if group_ou.to_lowercase() == name_lower {
+                let insert_attributes = vec![lldap_domain::types::Attribute {
+                    name: lldap_domain::types::AttributeName::from("ou"),
+                    value: lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton("groups".to_string()),
+                    ),
+                }];
+
+                let update_req = lldap_domain::requests::UpdateGroupRequest {
+                    group_id: group.id,
+                    display_name: None,
+                    delete_attributes: vec![],
+                    insert_attributes,
+                };
+
+                handler.update_group(update_req).await.map_err(|e| {
+                    FieldError::new(
+                        format!("Failed to reassign group '{}' to 'groups'", group.display_name),
+                        graphql_value!({ "details": (e.to_string()) }),
+                    )
+                })?;
+                info!("Reassigned group '{}' from OU '{}' to 'groups'", group.display_name, name);
+            }
+        }
+
+        // === 3. Remove OU from global allowedous list ===
         let current_ous: Vec<String> = admin_user.attributes
             .iter()
             .find(|a| a.name.as_str() == "allowedous")
@@ -617,7 +662,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             )
         })?;
 
-        info!("Organizational Unit '{}' deleted and users reassigned to 'people'", name);
+        info!("Organizational Unit '{}' deleted. Users reassigned to 'people' and groups reassigned to 'groups'.", name);
         Ok(Success::new())
     }
 
@@ -633,15 +678,15 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .ok_or_else(field_error_callback(&span, "Unauthorized OU creation"))?;
 
         let name_lower = name.trim().to_lowercase();
-        if name_lower.is_empty() || name_lower == "all" || name_lower == "people" {
+        if name_lower.is_empty() || name_lower == "all" || name_lower == "people" || name_lower == "groups" {
             return Err("Invalid OU name (cannot be empty or built-in)".into());
         }
 
-        // === NEW: Secondary OU validation with exactly one "\" separator ===
+        // === Secondary OU validation with exactly one "\" separator ===
         let parts: Vec<&str> = name.splitn(2, '\\').collect();
         let (primary, secondary) = match parts.len() {
-            1 => (name.as_str(), None),           // Primary only
-            2 => (parts[0], Some(parts[1])),      // Primary\Secondary
+            1 => (name.as_str(), None),
+            2 => (parts[0], Some(parts[1])),
             _ => return Err(FieldError::new(
                 "Invalid OU format: only one level of secondary OU allowed (primary\\secondary)",
                 juniper::Value::null(),
@@ -692,9 +737,9 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 ) => Some(list.clone()),
                 _ => None,
             })
-            .unwrap_or_else(|| vec!["people".to_string()]);
+            .unwrap_or_else(|| vec!["people".to_string(), "groups".to_string()]);
 
-        // Case-insensitive duplicate check (real LDAP/AD behavior)
+        // Case-insensitive duplicate check
         if current_ous.iter().any(|existing| existing.to_lowercase() == name_lower) {
             return Err(FieldError::new(
                 format!("Organizational Unit '{}' already exists", name),
@@ -702,7 +747,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             ));
         }
 
-        // Primary must exist in allowedous for secondary creation
+        // Primary must exist for secondary creation (now includes "groups")
         if secondary.is_some() && !current_ous.iter().any(|p| p.to_lowercase() == primary.to_lowercase()) {
             return Err(FieldError::new(
                 format!("Primary OU '{}' does not exist. Create it first before adding a secondary.", primary),
@@ -711,7 +756,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         }
 
         let mut new_ous = current_ous;
-        new_ous.push(name.clone());  // keep original case (primary\secondary)
+        new_ous.push(name.clone());
         new_ous.sort();
 
         handler.update_user(UpdateUserRequest {
@@ -778,6 +823,53 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 )
             })?;
             info!("Changed OU for user {} to '{}'", user_id_str, new_ou);
+        }
+
+        Ok(Success::new())
+    }
+
+    async fn change_group_ou(
+        context: &Context<Handler>,
+        group_ids: Vec<i32>,
+        new_ou: String,
+    ) -> FieldResult<Success> {
+        let span = debug_span!("[GraphQL mutation] change_group_ou");
+        span.in_scope(|| debug!(?group_ids, ?new_ou));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized OU change"))?;
+
+        let name_lower = new_ou.trim().to_lowercase();
+        if name_lower == "all" {
+            return Err("Cannot move groups to built-in OU 'All'".into());
+        }
+
+        for group_id in group_ids {
+            let group_id_typed = GroupId(group_id);
+
+            // === EXACT SAME READONLY BYPASS USED IN sql_group_backend_handler.rs ===
+            let insert_attributes = vec![lldap_domain::types::Attribute {
+                name: lldap_domain::types::AttributeName::from("ou"),
+                value: lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(new_ou.clone()),
+                ),
+            }];
+
+            let update_req = lldap_domain::requests::UpdateGroupRequest {
+                group_id: group_id_typed,
+                display_name: None,
+                delete_attributes: vec![],
+                insert_attributes,
+            };
+
+            handler.update_group(update_req).await.map_err(|e| {
+                FieldError::new(
+                    format!("Failed to change OU for group {}", group_id),
+                    graphql_value!({ "details": (e.to_string()) }),
+                )
+            })?;
+            info!("Changed OU for group {} to '{}'", group_id, new_ou);
         }
 
         Ok(Success::new())

@@ -13,14 +13,11 @@ pub struct OuSelectorProps {
 
 #[function_component(OuSelector)]
 pub fn ou_selector(props: &OuSelectorProps) -> Html {
-    // Parse OUs into primary → list of secondaries
     let mut tree: HashMap<String, Vec<String>> = HashMap::new();
     let mut primaries: Vec<String> = vec![];
 
     for ou in &props.ous {
-        if ou.trim().is_empty() {
-            continue;
-        }
+        if ou.trim().is_empty() { continue; }
         let parts: Vec<&str> = ou.splitn(2, '\\').collect();
         if parts.len() == 2 {
             let primary = parts[0].to_string();
@@ -37,17 +34,25 @@ pub fn ou_selector(props: &OuSelectorProps) -> Html {
         }
     }
 
-    primaries.sort();
+    // Force both built-in primaries to always appear (like people)
+    for built_in in &["people".to_string(), "groups".to_string()] {
+        if !primaries.contains(built_in) {
+            primaries.push(built_in.clone());
+        }
+    }
+
+    primaries.sort_by(|a, b| {
+        if a == "people" { std::cmp::Ordering::Less }
+        else if b == "people" { std::cmp::Ordering::Greater }
+        else if a == "groups" { std::cmp::Ordering::Less }
+        else if b == "groups" { std::cmp::Ordering::Greater }
+        else { a.cmp(b) }
+    });
 
     let mut display_ous = vec![];
 
     if !props.hide_all {
         display_ous.push(("All".to_string(), "All".to_string()));
-    }
-
-    // Always ensure "people" appears first as primary
-    if !primaries.contains(&"people".to_string()) {
-        primaries.insert(0, "people".to_string());
     }
 
     for primary in &primaries {
@@ -66,19 +71,17 @@ pub fn ou_selector(props: &OuSelectorProps) -> Html {
     }
 
     html! {
-        <div class="mb-3">
-            <select class="form-select" onchange={props.on_ou_changed.reform(|e: Event| {
-                let value = e.target().unwrap()
-                    .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
-                    .value();
-                value
-            })}>
-                { for display_ous.iter().map(|(display, value)| html! {
-                    <option value={value.clone()} selected={value == &props.current_ou}>
-                        {display}
-                    </option>
-                }) }
-            </select>
-        </div>
+        <select class="form-select" onchange={props.on_ou_changed.reform(|e: Event| {
+            let value = e.target().unwrap()
+                .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
+                .value();
+            value
+        })}>
+            { for display_ous.iter().map(|(display, value)| html! {
+                <option value={value.clone()} selected={value == &props.current_ou}>
+                    {display}
+                </option>
+            }) }
+        </select>
     }
 }

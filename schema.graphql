@@ -24,6 +24,7 @@ type Mutation {
   deleteOu(name: String!): Success!
   createOu(name: String!): Success!
   changeUserOu(userIds: [String!]!, newOu: String!): Success!
+  changeGroupOu(groupIds: [Int!]!, newOu: String!): Success!
   addUserAttribute(name: String!, attributeType: AttributeType!, isList: Boolean!, isVisible: Boolean!, isEditable: Boolean!): Success!
   addGroupAttribute(name: String!, attributeType: AttributeType!, isList: Boolean!, isVisible: Boolean!, isEditable: Boolean!): Success!
   deleteUserAttribute(name: String!): Success!

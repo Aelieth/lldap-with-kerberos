@@ -12,7 +12,7 @@ use crate::{
         login::LoginForm,
         reset_password_step1::ResetPasswordStep1Form,
         reset_password_step2::ResetPasswordStep2Form,
-        router::{AppRoute, Link, Redirect},
+        router::{AppRoute, Redirect},
         user_details::UserDetails,
         user_schema_table::ListUserSchema,
         user_table::UserTable,
@@ -212,20 +212,8 @@ impl App {
                 <CreateGroupAttributeForm/>
             },
             AppRoute::ListGroups => {
-                let group_button = |key| {
-                    html! {
-                      <Link classes="btn btn-primary" key={key} to={AppRoute::CreateGroup}>
-                        <i class="bi-plus-circle me-2"></i>
-                        {"Create a group"}
-                      </Link>
-                    }
-                };
                 html! {
-                  <div>
-                    { group_button("top-create-group") }
                     <GroupTable />
-                    { group_button("bottom-create-group") }
-                  </div>
                 }
             }
             AppRoute::ListUserSchema => html! {

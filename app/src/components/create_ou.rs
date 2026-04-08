@@ -18,7 +18,7 @@ use wasm_bindgen::JsCast;
 )]
 pub struct CreateOuQuery;
 
-pub struct CreateUserOu {
+pub struct CreateOu {
     common: CommonComponentParts<Self>,
     node_ref: NodeRef,
     modal: Option<Modal>,
@@ -29,10 +29,11 @@ pub struct CreateUserOu {
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
-pub struct CreateUserOuProps {
+pub struct CreateOuProps {
     pub on_ou_created: Callback<String>,
     pub on_error: Callback<Error>,
     pub ous: Vec<String>,
+    pub default_primary: String,   // "people" or "groups"
 }
 
 pub enum Msg {
@@ -47,7 +48,7 @@ pub enum Msg {
     DismissStatus,
 }
 
-impl CommonComponent<CreateUserOu> for CreateUserOu {
+impl CommonComponent<CreateOu> for CreateOu {
     fn handle_msg(
         &mut self,
         ctx: &Context<Self>,
@@ -57,7 +58,7 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
             Msg::ClickedCreateOu => {
                 self.common.error = None;
                 self.is_primary = true;
-                self.selected_primary = String::new();
+                self.selected_primary = ctx.props().default_primary.clone();
                 self.secondary_name = String::new();
                 self.status_message = None;
                 self.modal.as_ref().expect("modal not initialized").show();
@@ -94,8 +95,6 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
                         };
                         let msg = format!("Successfully created OU: {}", final_name);
                         ctx.props().on_ou_created.emit(final_name);
-                        self.selected_primary = String::new();
-                        self.secondary_name = String::new();
                         ctx.link().send_message(Msg::ShowStatus(msg, true));
                     }
                     Err(e) => {
@@ -110,7 +109,7 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
             Msg::ToggleMode(is_primary) => {
                 self.is_primary = is_primary;
                 if !is_primary && self.selected_primary.is_empty() {
-                    self.selected_primary = "people".to_string();
+                    self.selected_primary = ctx.props().default_primary.clone();
                 }
                 Ok(true)
             }
@@ -138,17 +137,17 @@ impl CommonComponent<CreateUserOu> for CreateUserOu {
     }
 }
 
-impl Component for CreateUserOu {
+impl Component for CreateOu {
     type Message = Msg;
-    type Properties = CreateUserOuProps;
+    type Properties = CreateOuProps;
 
-    fn create(_: &Context<Self>) -> Self {
+    fn create(ctx: &Context<Self>) -> Self {
         Self {
             common: CommonComponentParts::<Self>::create(),
             node_ref: NodeRef::default(),
             modal: None,
             is_primary: true,
-            selected_primary: String::new(),
+            selected_primary: ctx.props().default_primary.clone(),
             secondary_name: String::new(),
             status_message: None,
         }
@@ -189,7 +188,7 @@ impl Component for CreateUserOu {
             class="btn btn-primary"
             disabled={self.common.is_task_running()}
             onclick={link.callback(|_| Msg::ClickedCreateOu)}>
-            <i class="bi-people-fill me-2" aria-label="Create OU" />
+            <i class="bi-plus-circle me-2" aria-label="Create OU" />
             {"Create OU"}
           </button>
           {self.show_create_modal(ctx)}
@@ -199,8 +198,8 @@ impl Component for CreateUserOu {
     }
 }
 
-impl CreateUserOu {
-        fn show_create_modal(&self, ctx: &Context<Self>) -> Html {
+impl CreateOu {
+    fn show_create_modal(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
 
         let mode_selector = html! {
