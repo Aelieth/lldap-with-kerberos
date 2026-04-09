@@ -122,16 +122,19 @@ impl SqlBackendHandler {
             group_attributes: AttributeList {
                 attributes: Self::get_group_attributes(transaction).await?,
             },
+            system_attributes: AttributeList {
+                attributes: vec![],  // system attributes are hardcoded in PublicSchema::get()
+            },
             extra_user_object_classes: Self::get_user_object_classes(transaction)
-            .await?
-            .into_iter()
-            .map(|oc| oc.into_string())
-            .collect(),
+                .await?
+                .into_iter()
+                .map(|oc| oc.into_string())
+                .collect(),
             extra_group_object_classes: Self::get_group_object_classes(transaction)
-            .await?
-            .into_iter()
-            .map(|oc| oc.into_string())
-            .collect(),
+                .await?
+                .into_iter()
+                .map(|oc| oc.into_string())
+                .collect(),
         };
         Ok(PublicSchema(schema))
     }

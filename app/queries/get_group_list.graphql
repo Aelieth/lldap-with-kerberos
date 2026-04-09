@@ -3,5 +3,9 @@ query GetGroupList {
     id
     displayName
     creationDate
+    attributes {
+      name
+      value
+    }
   }
 }

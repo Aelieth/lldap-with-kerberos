@@ -10,11 +10,11 @@ use lldap_domain::{
 };
 use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
-    ReadSchemaBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
+    ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
-    model::{self, GroupColumn, UserColumn, deserialize},
+    model::{self, GroupColumn, UserColumn, deserialize, system_config},
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait,
@@ -323,6 +323,38 @@ impl SqlBackendHandler {
 
         Ok(())
     }
+
+}
+
+#[async_trait]
+impl SystemConfigBackendHandler for SqlBackendHandler {
+    async fn get_allowed_ous(&self) -> Result<Vec<String>> {
+        let config = system_config::Entity::find()
+        .filter(system_config::Column::Key.eq("allowedous"))
+        .one(&self.sql_pool)
+        .await?;
+
+        let json_str = config.map(|c| c.value).unwrap_or_else(|| "[]".to_string());
+        Ok(serde_json::from_str(&json_str).unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]))
+    }
+
+    async fn set_system_config(&self, key: &str, value: String) -> Result<()> {
+        let config = system_config::ActiveModel {
+            key: Set(key.to_string()),
+            value: Set(value),
+        };
+
+        system_config::Entity::insert(config)
+        .on_conflict(
+            OnConflict::column(system_config::Column::Key)
+            .update_column(system_config::Column::Value)
+            .to_owned(),
+        )
+        .exec(&self.sql_pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -386,10 +418,9 @@ impl UserBackendHandler for SqlBackendHandler {
         let lower_email = request.email.as_str().to_lowercase();
 
         // === Enforce ou from global allowedous list (single source of truth) ===
-        let schema = self.get_schema().await?;
-        let default_ou = schema.user_attributes()
-            .get_by_name_or_alias("allowedous")
-            .and_then(|_| Some("people".to_string())) // fallback — real list read at runtime
+        let default_ou = self.get_allowed_ous().await?
+            .into_iter()
+            .next()
             .unwrap_or_else(|| "people".to_string());
 
         if !request.attributes.iter().any(|a| a.name.as_str() == "ou") {

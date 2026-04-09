@@ -5,7 +5,7 @@ use lldap_domain::{
     types::{Attribute, AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
 };
 use lldap_domain_handlers::handler::{
-    GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler,
+    GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler, SystemConfigBackendHandler,
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
@@ -229,24 +229,25 @@ impl GroupBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
 
+        // Get default OU from system_config BEFORE entering the transaction
+        let default_ou = self.get_allowed_ous().await?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "groups".to_string());
+
         Ok(self
             .sql_pool
             .transaction::<_, GroupId, DomainError>(|transaction| {
                 Box::pin(async move {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
 
-        let default_ou = schema.group_attributes()
-            .get_by_name_or_alias("allowedous")
-            .and_then(|_| Some("groups".to_string()))
-            .unwrap_or_else(|| "groups".to_string());
-
-        let mut final_attributes = request.attributes;
-        if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
-            final_attributes.push(Attribute {
-                name: "ou".into(),
-                value: AttributeValue::String(Cardinality::Singleton(default_ou)),
-            });
-        }
+                    let mut final_attributes = request.attributes;
+                    if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
+                        final_attributes.push(Attribute {
+                            name: "ou".into(),
+                            value: AttributeValue::String(Cardinality::Singleton(default_ou)),
+                        });
+                    }
 
                     let group_id = new_group.insert(transaction).await?.group_id;
                     let mut new_group_attributes = Vec::new();

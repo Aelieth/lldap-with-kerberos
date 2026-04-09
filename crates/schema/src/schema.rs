@@ -5,21 +5,21 @@ use derive_more::Display;
 
 // ==================== ATTRIBUTE TYPE (SINGLE SOURCE OF TRUTH) ====================
 #[derive(
-Clone,
-Copy,
-Debug,
-PartialEq,
-Eq,
-Serialize,
-Deserialize,
-sea_orm::DeriveActiveEnum, // ← SeaORM can now read/write this enum from DB columns
-EnumIter,                  // ← required by DeriveActiveEnum
-EnumString,
-IntoStaticStr,
-GraphQLEnum,
-Display,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    sea_orm::DeriveActiveEnum,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+    GraphQLEnum,
+    Display,
 )]
-#[sea_orm(rs_type = "String", db_type = "Text")] // Text = simple VARCHAR/TEXT, avoids StringLen constructor conflict
+#[sea_orm(rs_type = "String", db_type = "Text")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[display("{_0}")]
@@ -28,7 +28,7 @@ pub enum AttributeType {
     String,
     #[sea_orm(string_value = "Integer")]
     Integer,
-    #[sea_orm(string_value = "Avatar")] // ← renamed from JpegPhoto (full multi-format support: JPG/PNG/BMP)
+    #[sea_orm(string_value = "Avatar")]
     Avatar,
     #[sea_orm(string_value = "DateTime")]
     DateTime,
@@ -40,6 +40,7 @@ pub enum AttributeType {
 pub struct Schema {
     pub user_attributes: AttributeList,
     pub group_attributes: AttributeList,
+    pub system_attributes: AttributeList,   // NEW: dedicated section for system-only attributes
     pub extra_user_object_classes: Vec<String>,
     pub extra_group_object_classes: Vec<String>,
 }
@@ -64,28 +65,26 @@ pub struct AttributeList {
 }
 
 impl AttributeList {
-    /// Find by exact name OR any alias (used by LDAP, GraphQL, frontend, etc.)
     pub fn get_by_name_or_alias(&self, name: &str) -> Option<&AttributeSchema> {
         self.attributes.iter().find(|a| {
             a.name == name || a.aliases.iter().any(|alias| alias == name)
         })
     }
 
-    /// Compatibility for old domain code
     pub fn get_attribute_schema(&self, name: &str) -> Option<&AttributeSchema> {
         self.get_by_name_or_alias(name)
     }
 
     pub fn get_attribute_type(&self, name: &str) -> Option<(AttributeType, bool)> {
         self.get_by_name_or_alias(name)
-        .map(|a| (a.attribute_type, a.is_list))
+            .map(|a| (a.attribute_type, a.is_list))
     }
 
     pub fn format_for_ldap_schema_description(&self) -> String {
         self.attributes
-        .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join(" $ ")
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" $ ")
     }
 }

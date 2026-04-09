@@ -1,4 +1,3 @@
-// crates/sql-backend-handler/src/sql_migrations.rs
 use crate::sql_tables::{DbConnection, LAST_SCHEMA_VERSION, SchemaVersion};
 use itertools::Itertools;
 use lldap_domain::types::{Avatar, GroupId, UserId, Uuid};
@@ -1235,6 +1234,34 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         ))
         .await;
 
+    // === NEW: system_config table for allowedous + future system-wide settings ===
+    // Raw SQL (matches style used in v1, v5, v6, etc. in this file)
+    let _ = transaction
+        .execute(backend.build(
+            Table::create()
+                .table(Alias::new("system_config"))
+                .if_not_exists()
+                .col(ColumnDef::new(Alias::new("key")).string().not_null().primary_key())
+                .col(ColumnDef::new(Alias::new("value")).text().not_null()),
+        ))
+        .await?;
+
+    // Seed default allowedous if not exists (idempotent)
+    let _ = transaction
+        .execute(backend.build(
+            Query::insert()
+                .into_table(Alias::new("system_config"))
+                .columns([Alias::new("key"), Alias::new("value")])
+                .values_panic([
+                    "allowedous".into(),
+                    serde_json::to_string(&serde_json::json!(["people", "groups"])).unwrap().into(),
+                ]),
+        ))
+        .await
+        .ok();  // ignore duplicate-key error on re-run
+
+    info!("Created system_config table and seeded default allowedous = [\"people\", \"groups\"]");
+
     let public_schema = lldap_schema::PublicSchema::get();
     let schema = public_schema.get_schema();
 
@@ -1366,22 +1393,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .execute(sea_orm::Statement::from_string(backend, insert_krb_sql))
         .await;
 
-    // 7. NEW: Seed the single allowedous list (default ["people", "groups"])
-    // This is the new source of truth for all OUs (users and groups)
-    let insert_allowedous_sql = r#"
-    INSERT INTO user_attributes (user_id, attribute_name, value)
-    SELECT 'lldap_admin', 'allowedous', '["people", "groups"]'
-    WHERE NOT EXISTS (
-        SELECT 1 FROM user_attributes ua
-        WHERE ua.user_id = 'lldap_admin'
-        AND ua.attribute_name = 'allowedous'
-    )"#;
-
-    let _ = transaction
-        .execute(sea_orm::Statement::from_string(backend, insert_allowedous_sql))
-        .await;
-
-    // 8. Default ou values for existing records (idempotent) — unchanged
+    // 7. Default ou values for existing records (idempotent) — unchanged
     let insert_ou_users_sql = format!(
         "INSERT INTO {} ({}, {}, {})
     SELECT u.{}, 'ou', 'people'
@@ -1432,7 +1444,7 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .execute(sea_orm::Statement::from_string(backend, insert_ou_groups_sql))
         .await;
 
-    info!("Seeded single allowedous = [\"people\", \"groups\"] as new source of truth");
+    info!("Seeded system_config.allowedous = [\"people\", \"groups\"] as new single source of truth");
 
     Ok(transaction)
 }

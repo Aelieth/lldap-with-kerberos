@@ -3,6 +3,7 @@ use crate::{
         router::{AppRoute, Link},
         ou_table::OuTable,
         change_group_ou::ChangeGroupOu,
+        delete_group::DeleteGroup,
     },
     infra::common_component::{CommonComponent, CommonComponentParts},
 };
@@ -106,7 +107,11 @@ impl CommonComponent<GroupTable> for GroupTable {
                     }
                     if !self.search_term.is_empty() {
                         let term = self.search_term.to_lowercase();
-                        filtered.retain(|g| g.display_name.to_lowercase().contains(&term));
+                        filtered.retain(|g| match self.search_field.as_str() {
+                            "Group Name" => g.display_name.to_lowercase().contains(&term),
+                            "OU" => Self::get_ou(g).to_lowercase().contains(&term),
+                            _ => true,
+                        });
                     }
                     let filtered_ids: Vec<i64> = filtered.iter().map(|g| g.id).collect();
                     if self.selected_groups.len() == filtered_ids.len() && !filtered_ids.is_empty() {
@@ -149,8 +154,15 @@ impl CommonComponent<GroupTable> for GroupTable {
 }
 
 impl GroupTable {
-    fn get_ou(_group: &Group) -> String {
-        "groups".to_string()
+    fn get_attribute_value(group: &Group, name: &str) -> Option<String> {
+        group.attributes
+            .iter()
+            .find(|a| a.name == name)
+            .and_then(|a| a.value.first().cloned())
+    }
+
+    fn get_ou(group: &Group) -> String {
+        Self::get_attribute_value(group, "ou").unwrap_or_else(|| "groups".to_string())
     }
 }
 
@@ -204,7 +216,6 @@ impl Component for GroupTable {
             />
             <hr class="my-4" />
 
-            // SINGLE ROW — exactly like user_table.rs
             <div class="row g-3 align-items-end mb-3">
                 <div class="col-auto">
                     <Link classes="btn btn-primary" to={AppRoute::CreateGroup}>
@@ -220,7 +231,6 @@ impl Component for GroupTable {
                         on_error={Callback::noop()} />
                 </div>
 
-                // Inline search exactly like user_table.rs
                 <div class="col-md-2 ms-auto">
                     <select class="form-select" onchange={ctx.link().callback(|e: Event| {
                         let value = e.target().unwrap()
@@ -228,7 +238,7 @@ impl Component for GroupTable {
                             .value();
                         Msg::SearchFieldChanged(value)
                     })}>
-                        { for vec!["Group Name".to_string()].iter().map(|f| html! {
+                        { for vec!["Group Name".to_string(), "OU".to_string()].iter().map(|f| html! {
                             <option value={f.clone()} selected={f == &self.search_field}>{f}</option>
                         }) }
                     </select>
@@ -248,7 +258,7 @@ impl Component for GroupTable {
 
             <div class="row justify-content-start mt-3">
                 <div class="col-auto">
-                    // Bulk delete can be added later
+                    // Bulk delete can be added later (next turtle step)
                 </div>
             </div>
 
@@ -267,7 +277,11 @@ impl GroupTable {
             }
             if !self.search_term.is_empty() {
                 let term = self.search_term.to_lowercase();
-                filtered.retain(|g| g.display_name.to_lowercase().contains(&term));
+                filtered.retain(|g| match self.search_field.as_str() {
+                    "Group Name" => g.display_name.to_lowercase().contains(&term),
+                    "OU" => Self::get_ou(g).to_lowercase().contains(&term),
+                    _ => true,
+                });
             }
             filtered
         });
@@ -312,7 +326,11 @@ impl GroupTable {
             <td>{Self::get_ou(group)}</td>
             <td>{group.creation_date.naive_local().date()}</td>
             <td>
-                // DeleteGroup per-row can be added later
+                <DeleteGroup
+                    group={group.clone()}
+                    on_group_deleted={ctx.link().callback(Msg::OnGroupDeleted)}
+                    on_error={ctx.link().callback(Msg::OnError)}
+                />
             </td>
             </tr>
         }

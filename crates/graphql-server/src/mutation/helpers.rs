@@ -1,4 +1,3 @@
-// crates/graphql-server/src/mutation/helpers.rs
 use anyhow::anyhow;
 use juniper::FieldResult;
 use lldap_access_control::{AdminBackendHandler, ReadonlyBackendHandler};
@@ -29,32 +28,32 @@ pub fn unpack_attributes(
     let user_schema = schema.user_attributes();
 
     let email = attributes
-    .iter()
-    .find(|attr| attr.name == "mail")
-    .cloned()
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .transpose()?
-    .map(|attr| attr.value.into_string().unwrap())
-    .map(Email::from);
+        .iter()
+        .find(|attr| attr.name == "mail")
+        .cloned()
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .transpose()?
+        .map(|attr| attr.value.into_string().unwrap())
+        .map(Email::from);
 
     let display_name = attributes
-    .iter()
-    .find(|attr| attr.name == "display_name")
-    .cloned()
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .transpose()?
-    .map(|attr| attr.value.into_string().unwrap());
+        .iter()
+        .find(|attr| attr.name == "display_name")
+        .cloned()
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .transpose()?
+        .map(|attr| attr.value.into_string().unwrap());
 
     let attributes = attributes
-    .into_iter()
-    .filter(|attr| attr.name != "mail" && attr.name != "display_name")
-    .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
-    .collect::<Result<Vec<_>, _>>()?;
+        .into_iter()
+        .filter(|attr| attr.name != "mail" && attr.name != "display_name")
+        .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(UnpackedAttributes {
         email,
-       display_name,
-       attributes,
+        display_name,
+        attributes,
     })
 }
 
@@ -65,17 +64,17 @@ pub fn consolidate_attributes(
     avatar: Option<String>,
 ) -> Vec<AttributeValue> {
     let mut provided_attributes: BTreeMap<AttributeName, AttributeValue> = attributes
-    .into_iter()
-    .map(|x| {
-        (
-            x.name.clone().into(),
-         AttributeValue {
-             name: x.name.to_ascii_lowercase(),
-         value: x.value,
-         },
-        )
-    })
-    .collect::<BTreeMap<_, _>>();
+        .into_iter()
+        .map(|x| {
+            (
+                x.name.clone().into(),
+                AttributeValue {
+                    name: x.name.to_ascii_lowercase(),
+                    value: x.value,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let field_attrs = [
         ("first_name", first_name),
@@ -89,11 +88,11 @@ pub fn consolidate_attributes(
             }
             let attr_name: AttributeName = name.into();
             provided_attributes
-            .entry(attr_name)
-            .or_insert_with(|| AttributeValue {
-                name: name.to_string(),
-                            value: vec![val],
-            });
+                .entry(attr_name)
+                .or_insert_with(|| AttributeValue {
+                    name: name.to_string(),
+                    value: vec![val],
+                });
         }
     }
     provided_attributes.into_values().collect()
@@ -105,23 +104,44 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
     span: Span,
 ) -> FieldResult<crate::query::Group<Handler>> {
     let handler = context
-    .get_admin_handler()
-    .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized group creation"))?;
 
-    // handler.get_schema() now returns PublicSchema directly (live from DB)
     let schema = handler.get_schema().await?;
 
-    let attributes = request
-    .attributes
-    .unwrap_or_default()
-    .into_iter()
-    .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
-    .collect::<Result<Vec<_>, _>>()?;
+    let raw_attributes = request.attributes.unwrap_or_default();
+
+    // === EXACT SAME OU BYPASS PATTERN AS create_user ===
+    let ou_value = raw_attributes
+        .iter()
+        .find(|a| a.name == "ou")
+        .and_then(|a| a.value.first().cloned())
+        .unwrap_or_else(|| "groups".to_string());
+
+    let attributes_for_unpack: Vec<_> = raw_attributes
+        .into_iter()
+        .filter(|a| a.name != "ou")
+        .collect();
+
+    let attributes = attributes_for_unpack
+        .into_iter()
+        .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Add the OU back as a proper typed attribute (backend is allowed to set readonly fields on create)
+    let mut final_attributes = attributes;
+    final_attributes.push(DomainAttribute {
+        name: AttributeName::from("ou"),
+        value: lldap_domain::types::AttributeValue::String(
+            lldap_domain::types::Cardinality::Singleton(ou_value),
+        ),
+    });
 
     let request = CreateGroupRequest {
         display_name: request.display_name.into(),
-        attributes,
+        attributes: final_attributes,
     };
+
     let group_id = handler.create_group(request).await?;
     let group_details = handler.get_group_details(group_id).instrument(span).await?;
     crate::query::Group::<Handler>::from_group_details(group_details, Arc::new(schema))
@@ -135,8 +155,8 @@ pub fn deserialize_attribute(
     let attribute_name = AttributeName::from(attribute.name.as_str());
 
     let attr_schema = attribute_schema
-    .get_attribute_schema(attribute_name.as_str())
-    .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
+        .get_attribute_schema(attribute_name.as_str())
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", attribute.name))?;
 
     if attr_schema.is_readonly {
         return Err(anyhow!(
@@ -166,6 +186,6 @@ pub fn deserialize_attribute(
 
     Ok(DomainAttribute {
         name: attribute_name,
-       value,
+        value,
     })
 }

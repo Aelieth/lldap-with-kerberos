@@ -15,5 +15,7 @@ pub mod user_object_classes;
 pub mod group_attribute_schema;
 pub mod group_attributes;
 pub mod group_object_classes;
+pub mod system_config;
 
 pub use prelude::*;
+pub use system_config::Model as SystemConfig;

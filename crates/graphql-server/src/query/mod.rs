@@ -12,7 +12,7 @@ pub use schema::{AttributeList, ObjectClassInfo, Schema};
 pub use user::User;
 
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
-use lldap_access_control::{ReadonlyBackendHandler, UserReadableBackendHandler};
+use lldap_access_control::{AdminBackendHandler, ReadonlyBackendHandler, UserReadableBackendHandler};
 use lldap_domain::types::{GroupId, UserId};
 use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use std::sync::Arc;
@@ -208,28 +208,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             .get_admin_handler()
             .ok_or_else(field_error_callback(&span, "Unauthorized to read OUs"))?;
 
-        let admin_id = UserId::new("admin");
-
-        let admin_user = handler.get_user_details(&admin_id).await
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+        let ous = inner.get_allowed_ous().await
             .map_err(|e| FieldError::new(
-                "Failed to load admin user for OU list",
+                "Failed to load allowedous",
                 graphql_value!({ "details": (e.to_string()) }),
             ))?;
-
-        let ous: Vec<String> = admin_user.attributes.iter()
-            .find(|a| a.name.as_str() == "allowedous")
-            .and_then(|a| {
-                match &a.value {
-                    lldap_domain::types::AttributeValue::String(
-                        lldap_domain::types::Cardinality::Singleton(s),
-                    ) => serde_json::from_str(s.as_str()).ok(),
-                    lldap_domain::types::AttributeValue::String(
-                        lldap_domain::types::Cardinality::Unbounded(list),
-                    ) => Some(list.clone()),
-                    _ => None,
-                }
-            })
-            .unwrap_or_else(|| vec!["people".to_string()]);
 
         Ok(ous)
     }
