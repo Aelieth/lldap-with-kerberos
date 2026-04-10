@@ -1,116 +1,60 @@
 # Frequently Asked Questions
 
 - [I can't login](#i-cant-log-in)
-- [Discord Integration](#discord-integration)
 - [Migrating from SQLite](#migrating-from-sqlite)
-- How does LLDAP compare [with OpenLDAP](#how-does-lldap-compare-with-openldap)? [With FreeIPA](#how-does-lldap-compare-with-freeipa)? [With Kanidm](#how-does-lldap-compare-with-kanidm)?
-- [Does LLDAP support vhosts?](#does-lldap-support-vhosts)
-- [Does LLDAP provide commercial support contracts?](#does-lldap-provide-commercial-support-contracts)
-- [Can I make a donation to fund development?](#can-i-make-a-donation-to-fund-development)
-- [Is LLDAP sustainable? Can we depend on it for our infrastructure?](#is-lldap-sustainable-can-we-depend-on-it-for-our-infrastructure)
+- How does KLLDAP compare [with OpenLDAP](#how-does-kllldap-compare-with-openldap)? [With FreeIPA](#how-does-kllldap-compare-with-freeipa)? [With Kanidm](#how-does-kllldap-compare-with-kanidm)?
+- [Does KLLDAP support vhosts?](#does-kllldap-support-vhosts)
+- [Does KLLDAP provide commercial support contracts?](#does-kllldap-provide-commercial-support-contracts)
+- [Is KLLDAP sustainable? Can we depend on it for our infrastructure?](#is-kllldap-sustainable-can-we-depend-on-it-for-our-infrastructure)
 
 ## I can't log in!
 
-If you just set up the server, can get to the login page but the password you
-set isn't working, try the following:
+If you just set up the server, can get to the login page but the password you set isn't working, try the following:
 
-- If you have changed the admin password in the config after the first run, it
-  won't be used (unless you force its use with `force_ldap_user_pass_reset`).
-  The config password is only for the initial admin creation.
-- (For docker): Make sure that the `/data` folder is persistent, either to a
-  docker volume or mounted from the host filesystem.
-- Check if there is a `lldap_config.toml` file (either in `/data` for docker
-  or in the current directory). If there isn't, copy
-  `lldap_config.docker_template.toml` there, and fill in the various values
-  (passwords, secrets, ...).
-- Check if there is a `users.db` file (either in `/data` for docker or where
-  you specified the DB URL, which defaults to the current directory). If
-  there isn't, check that the user running the command (user with ID 10001
-  for docker) has the rights to write to the `/data` folder. If in doubt, you
-  can `chmod 777 /data` (or whatever the folder) to make it world-writeable.
-- Make sure you restart the server.
-- If it's still not working, join the
-  [Discord server](https://discord.gg/h5PEdRMNyP) to ask for help.
-
-## Discord Integration
-
-[Use this bot](https://github.com/JaidenW/LLDAP-Discord) to Automate discord role synchronization for paid memberships.
-- Allows users with the Subscriber role to self-serve create an LLDAP account based on their Discord username, using the `/register` command.
+- The config password (`LLDAP_LDAP_USER_PASS`) is only used for the initial admin creation. Changing it later has no effect unless you reset the admin user.
+- For Docker: Make sure the `/data` volume is persistent (docker volume or host mount).
+- Check that `lldap_config.toml` exists in `/data` (or the working directory). If missing, copy the template and fill in the required values.
+- Check that `users.db` (or your chosen database) exists and the container user (UID 10001) has write access to `/data`.
+- Restart the container after any config changes.
+- Verify `LLDAP_LDAP_BASE_DN` is set (required for Kerberos realm derivation).
 
 ## Migrating from SQLite
 
-If you started with an SQLite database and would like to migrate to
-MySQL/MariaDB or PostgreSQL, check out the [DB
-migration docs](/docs/database_migration.md).
+If you started with an SQLite database and would like to migrate to MySQL/MariaDB or PostgreSQL, check out the [DB migration docs](/docs/database_migration.md). Note that KLLDAP v12 migration also seeds the new `system_config` table and `allowedous`.
 
-## How does LLDAP compare with OpenLDAP?
+## How does KLLDAP compare with OpenLDAP?
 
-[OpenLDAP](https://www.openldap.org) is a monster of a service that implements
-all of LDAP and all of its extensions, plus some of its own. That said, if you
-need all that flexibility, it might be what you need! Note that installation
-can be a bit painful (figuring out how to use `slapd`) and people have mixed
-experiences following tutorials online. If you don't configure it properly, you
-might end up storing passwords in clear, so a breach of your server would
-reveal all the stored passwords!
+[OpenLDAP](https://www.openldap.org) is a full-featured, highly configurable LDAP server. It is very powerful but complex to set up and maintain.
 
-OpenLDAP doesn't come with a UI: if you want a web interface, you'll have to
-install one (not that many look nice) and configure it.
+KLLDAP is a lightweight fork focused on simplicity and modern features (integrated MIT Kerberos KDC, admin-controlled OUs, Keycloak federation). It is much easier to run and includes a purpose-built web UI, but it is intentionally less flexible than OpenLDAP.
 
-LLDAP is much simpler to setup, has a much smaller image (10x smaller, 20x if
-you add PhpLdapAdmin), and comes packed with its own purpose-built web UI.
-However, it's not as flexible as OpenLDAP.
+## How does KLLDAP compare with FreeIPA?
 
-## How does LLDAP compare with FreeIPA?
+[FreeIPA](http://www.freeipa.org) is a complete identity management solution (LDAP + Kerberos + DNS + more).
 
-[FreeIPA](http://www.freeipa.org) is the one-stop shop for identity management:
-LDAP, Kerberos, NTP, DNS, Samba, you name it, it has it. In addition to user
-management, it also does security policies, single sign-on, certificate
-management, linux account management and so on.
+KLLDAP is a much lighter alternative: integrated Kerberos KDC + Keycloak federation + OU system in a single small Docker container. It does not include DNS, certificate management, or full policy engines. Perfect for home/lab SSO where you want Kerberos and Keycloak without the full FreeIPA stack.
 
-If you need all of that, go for it! Keep in mind that a more complex system is
-more complex to maintain, though.
+## How does KLLDAP compare with Kanidm?
 
-LLDAP is much lighter to run (<10 MB RAM including the DB), easier to
-configure (no messing around with DNS or security policies) and simpler to
-use. It also comes conveniently packed in a docker container.
+[Kanidm](https://kanidm.com) is a modern Rust-based identity platform with OAuth, WebAuthn, and a read-only LDAPS server.
 
-## How does LLDAP compare with kanidm?
+KLLDAP keeps full read-write LDAP support plus an integrated MIT Kerberos KDC and one-click Keycloak federation. It is a direct evolution of the original LLDAP code rather than a from-scratch rewrite.
 
-[Kanidm](https://kanidm.com) is an up-and-coming Rust identity management
-platform, covering all your bases: OAuth, Linux accounts, SSH keys, Radius,
-WebAuthn. It comes with a (read-only) LDAPS server.
+## Does KLLDAP support vhosts?
 
-It's fairly easy to install and does much more; but their LDAP server is
-read-only, and by having more moving parts it is inherently more complex. If
-you don't need to modify the users through LDAP and you're planning on
-installing something like [KeyCloak](https://www.keycloak.org) to provide
-modern identity protocols, check out Kanidm.
+KLLDAP does not natively support virtualhosts / multi-tenancy:
 
-## Does LLDAP support vhosts?
+- All users share the same base DN.
+- Multiple domains can be handled via fully-qualified email addresses as usernames, but permissions and OUs are global.
 
-LLDAP does not natively support virtualhosts, sometimes known as multi-tenancy:
+If you need true multi-tenancy, run multiple isolated KLLDAP instances.
 
-- users are all part of the same base DN (`ou=people,dc=example,dc=com`)
-- you may support multiple domains by using fully-qualified email addresses as usernames (eg. `user@example.com` and `user@example.org`); however, you can't have more fine-grained permissions than what is provided by default (which applies across all users)
+## Does KLLDAP provide commercial support contracts?
 
-LLDAP is very lightweight (~15MiB RAM on startup) and it's therefore possible to run one instance per virtualhost if you need to properly support multiple domains.
+No. KLLDAP is a personal hobby project and completely separate fork from the original LLDAP. It is developed on a best-effort basis by one person. There is no commercial support, Discord server, or official community.
 
-## Does LLDAP provide commercial support contracts?
+## Is KLLDAP sustainable? Can we depend on it for our infrastructure?
 
-LLDAP does not provide commercial support. It's provided as volunteer-developed free-software on a best-effort basis. If that's not ideal for you, you should probably consider using a professional all-in-one solution such as OpenLDAP, FreeIPA, or Kanidm.
+KLLDAP is a personal project — a “half-brother” to the original LLDAP. It shares the same foundational LDAP + web UI code but has been heavily modified with Kerberos KDC, OU system, Keycloak federation, and a single-source-of-truth schema.
 
-LLDAP is free-software (under a copyleft GPL 3.0 license) and anyone can provide consultancy and support contracts for the software. However, the LLDAP project currently does not endorse any 3rd party to provide such services in an official manner. This may be revised in the future if developers from the community step up and provide amazing services.
-
-## Can I make a donation to fund development?
-
-You can make a donation on [buymeacoffee.com/nitnelave](https://buymeacoffee.com/nitnelave) to personally support @nitnelave, the maintainer and main developer of the project.
-
-It's not a goal for them to raise enough money to be employed to work on LLDAP. As of July 2025, the donations (<100€/month) are not sufficient anyway to employ people to work on LLDAP, even part-time.
-
-## Is LLDAP sustainable? Can we depend on it for our infrastructure?
-
-LLDAP is hobbyist software developed in good will by volunteers. LLDAP is not sustainable, as only @nitnelave knows the entire codebase (bus factor = 1).
-
-The project is not too complex and is even kept minimalist on purpose. However, unless you'd like to audit and maintain the codebase in the foreseeable future, it's not recommended to adopt LLDAP for the infrastructure of your big organization.
-
-You are free to use LLDAP for any purpose, as long as you respect the copyleft. However, please do not complain if feature X is not implemented, or if the volunteers are not fixing problems fast enough for your taste. LLDAP is a project born of love and adventure, not a commercial endeavour.
+It is built for my own home/lab use and shared as-is. Bus factor is 1. You are free to use it (AGPL-3.0), but treat it as hobbyist software. Do not rely on it for critical production infrastructure unless you are prepared to maintain or fork it yourself.

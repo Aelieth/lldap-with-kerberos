@@ -49,14 +49,17 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB  size
 - #401 [FEATURE REQUEST] Avatar supports JPG, JPEG, BMP, and PNG formats now with 1024x1024 resolution and <2MB
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
-- 
 
 ## TODOs before release
-- POSIX automatic attribute fill (uidNumber, gidNumber, homeDirectory, loginShell)
-- #712 SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure.
-- #750 Ability to disable LDAP users
-- #739 SSSD integration support
-- #756 / #847 Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
+- Custom [FEATURE] POSIX automatic attribute fill (uidNumber, gidNumber, homeDirectory, loginShell)
+- #712 [FEATURE]  SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure.
+- #750 [FEATURE]  Ability to disable LDAP users
+- #739 [FEATURE]  SSSD integration support
+- #756 / #847 [BUG]   Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
+- #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings
+- ldap specific testing for OU's, user account modification, etc
+- Cleanup: Logging
+- Cleanup: Code pass / Tests
 
 ## Architecture Highlights
 - Single source of truth for all schema, OU, and system settings
