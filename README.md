@@ -1,72 +1,96 @@
 # LLDAP with Kerberos
 
 DISCLAIMER:
-WORK IN PROGRESS and my first foray into Rust. Use with optimistic caution!
-This is a lightweight LDAP server (LLDAP) with integrated MIT Kerberos KDC, designed for home/lab SSO federation.
+WORK IN PROGRESS / PERSONAL PROJECT and my first foray into Rust. Use at your own risk with optimistic caution!
+While you may report issues don't expect me to be on top of them as this is a hobby project.
+Built with aid of Grok / xAI - Thanks Grok!
+-----------
 
-This Docker image combines LLDAP 0.6.2 (simple LDAP auth) with a local Kerberos realm, enabling seamless single sign-on for Linux desktops (KDE/Gnome via SSSD), apps such as Nextcloud, and federation with Keycloak.
+# KLLDAP – Lightweight LDAP with Kerberos
 
-Based on the original containers-kerberos, heavily customized for LLDAP integration:
-- Automatic schema extensions for POSIX attributes (uidNumber, gidNumber, loginShell).
-- Kerberos principal sync on user create/password change (revokes old tickets immediately).
-- Principal deletion on user delete.
-- Configurable realm/domain derived from LDAP base DN.
-- Multi-arch support (AMD64/ARM64, tested on ZimaBlade/ZimaOS).
+Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
 
-## Features
+~11,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
 
-- Lightweight Alpine-based image.
-- Based off of LLDAP for user/group management.
-- MIT Kerberos KDC + admin server in one container.
-- One-time schema extension for POSIX/Kerberos compatibility.
-- Environment-driven config.
-- Persistence via volumes (/data for LLDAP, /var/lib/krb5kdc for Kerberos DB).
-- In memory obfuscation of PW during user creation
-- aes256 encryption between LLDAP and Kerberos
+## Schema System – Single Source of Truth
+- All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`
+- `PublicSchema::get()` is the live, canonical definition used everywhere (GraphQL, SQL, LDAP, frontend, Kerberos sync)
+- Three clean categories:
+  - User attributes (core + POSIX + Kerberos + SSH + ou)
+  - Group attributes
+  - System attributes (new section for allowedous and future settings)
+- Every attribute carries full metadata: name, aliases, type, list support, visibility, editability, hardcoded flag, and readonly status
+- Database migration v12 clears old tables and re-seeds everything directly from `PublicSchema::get()`
+- Runtime code always pulls from the database but stays 100% consistent with the PublicSchema definition
 
-## Quick Start
+## Kerberos Integration – MIT KDC
+- Full MIT Kerberos Key Distribution Center (krb5kdc + kadmind) runs inside the Docker container via FFI bindings to libkadm5 and krb5
+- Automatic principal management: on every user create / password change / delete, principals are created / updated / deleted in the KDC
+- Secure password handling: RSA 2048 OAEP+SHA-256 encryption between frontend and backend kerberos
+- Password-less operation after bootstrap: uses kadm5.keytab for all admin actions
+- Realm and domain are automatically derived from LLDAP_LDAP_BASE_DN — zero manual configuration needed
+- Bootstrap handled by `crates/kerberos/src/bin/kerberos_manager.rs` on first container start (creates DB, configs, keytab, starts daemons)
 
-Run with these common switches (adjust values!):
-      
-      docker run -d --name lldap-kerberos \
-        -p 3890:3890 -p 17170:17170 -p 88:88/tcp -p 88:88/udp -p 749:749/tcp \
-        -e LLDAP_JWT_SECRET="SuperSafeJWT1234567890abcdefABCDEF1234" \
-        -e LLDAP_KEY_SEED="SuperSafeKeySeed4567890ghijklMNOP1234" \
-        -e ENCODE_KEY="my-super-secret-shared-key-123!" \
-        -e LLDAP_LDAP_BASE_DN="dc=testlab,dc=com" \
-        -e MASTER_PASS="your-strong-master-pass!" \
-        -e ADMIN_PASS="your-strong-admin-pass!" \
-        -e LLDAP_LDAP_USER_PASS="adminpassword123!" \
-        -v /tmp/data:/data -v /tmp/krb5kdc:/var/lib/krb5kdc \
-        ghcr.io/aelieth/lldap-with-kerberos:latest
+## Federation – Keycloak Configuration
+- Dedicated “Federation” tab in the web UI (`app/src/components/federation.rs`) for Keycloak + Kerberos integration
+- Loads and saves `keycloak_config.toml` via GraphQL
+- One-click “Test Settings” button validates admin credentials
+- “Push To Keycloak” button (enabled after successful test + sync password) auto-creates realm, LDAP+Kerberos provider, and lldap-web client
+- “Export keytab” button generates ready-to-use keytab for Keycloak HTTP principal
+- Suggested config auto-populated from backend with sensible defaults
 
-Access UI at http://localhost:17170 (admin / your LLDAP_LDAP_USER_PASS). Realm auto-derives as TESTLAB.COM.
+## Frontend – Quality of Life Improvements
+- Reusable OuSelector component renders tree-style dropdowns for 1-level hierarchical OUs using “\” separator
+- OuTable header combines OU filtering, Create OU, and Delete OU actions in one row
+- User table features real-time OU filtering, multi-field search, bulk selection with intelligent Select All, bulk Change OU, and bulk delete
+- Fully modular design — same OuSelector and OuTable will be reused for the Group table
+
+## Other improvements / Bugfixes
+- #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB  size
+- #401 [FEATURE REQUEST] Avatar supports JPG, JPEG, BMP, and PNG formats now with 1024x1024 resolution and <2MB
+- #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
+- 
+
+## TODOs before release
+- POSIX automatic attribute fill (uidNumber, gidNumber, homeDirectory, loginShell)
+- #712 SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure.
+- #750 Ability to disable LDAP users
+- #739 SSSD integration support
+- #756 / #847 Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
+
+## Architecture Highlights
+- Single source of truth for all schema, OU, and system settings
+- Professional admin-controlled Organizational Unit system (1-layer hierarchy with “\” separator)
+- Readonly enforcement on protected fields (ou, userid, krbprincipalname, etc.)
+- Full GraphQL mutations and Bootstrap modals matching the rest of the UI
+
+## Future Plans
+- Continued integration of LLDAP features
+- Possible SMB integration with kerberos auth 
+- Long: Kerberos database directly integrated into LLDAP's
+
+---
+
+**KLLDAP** is built turtle-step style: one file at a time, full builds verified, security-first, and designed to be reliable - because I want to use it too!
 
 ## Environment Variables
 
-LLDAP vars use LLDAP_ prefix. Kerberos-specific use KERB_ prefix.
+Only the variables that are actually used. Everything else is either defaulted inside the container or configured via the new Federation tab or toml files.
 
-| Variable             | Required  | Default                                | Description                                                |
-|----------------------|-----------|----------------------------------------|------------------------------------------------------------|
-| LLDAP_JWT_SECRET     | Yes       | SuperSafeJWT1234567890abcdefABCDEF1234 | JWT signing secret for LLDAP sessions. 
-| LLDAP_LDAP_USER_PASS | Yes       | adminpassword123!                      | Initial admin password (change on first login). 
-| LLDAP_LDAP_BASE_DN   | No        | dc=testlab,dc=com                      | LDAP base DN. Used to derive realm/domain. 
-| ENCODE_KEY           | Yes       | my-super-secret-shared-key-123!        | Shared secret for password sync between LLDAP and Kerberos. 
-| KERB_MASTER_PASS     | Yes       | your-strong-master-pass!               | Kerberos database master password. 
-| KERB_ADMIN_PASS      | Yes       | your-strong-admin-pass!                | Password for Kerberos admin principal (admin/admin@REALM). 
-| KERB_REALM_NAME      | No        | Derived from BASE_DN                   | Override auto-derived realm. 
-| KERB_BASE_DN         | No        | Uses LLDAP_LDAP_BASE_DN                | Override base DN for realm derivation. 
-| KERB_KDC_PORT        | No        | 88                                     | Kerberos KDC port. 
-| KERB_ADMIN_PORT      | No        | 749                                    | Kerberos admin server port. 
-| KERB_TICKET_LIFETIME | No        | 24h                                    | Default ticket lifetime. 
-| KERB_RENEW_LIFETIME  | No        | 7d                                     | Ticket renewal lifetime. 
+| Variable                  | Required | Default                          | Description |
+|---------------------------|----------|----------------------------------|---------------------------------------------------|
+| LLDAP_JWT_SECRET          | Yes      | (must be set)                    | JWT signing secret for web sessions               |
+| LLDAP_LDAP_USER_PASS      | Yes      | (must be set)                    | Initial admin password                            |
+| LLDAP_LDAP_BASE_DN        | Yes      | dc=example,dc=com                | LDAP base DN — also used to derive Kerberos realm |
+| LLDAP_KEYCLOAK_ADMIN_PASS | No       | admin                            | Keycloak admin password (used by Federation tab)  |
+| LLDAP_KERB_REALM_NAME     | No       | Derived from LLDAP_LDAP_BASE_DN  | Optional override for Kerberos realm name         |
 
 Persisted non-secret config in /data/kerberos_config.toml on first run.
 
 ## Volumes
 
 - /data: LLDAP config, users, groups.
-- /var/lib/krb5kdc: Kerberos database (critical!).
+- /var/kerberos/krb5kdc: Kerberos database (critical!).
 
 ## Exposed Ports
 
@@ -81,9 +105,7 @@ AGPL-3.0 (matches upstream LLDAP). See LICENSE file.
 
 ## Credits
 
-- Base container and LDAP bootstrap logic: RobinR1/containers-kerberos
 - LLDAP server: lldap/lldap
-- lldap-cli tool: Zepmann/lldap-cli
 - Keycloak integration inspiration: keycloak/keycloak
 
 This repository is under active development. Built for home/lab SSO.
