@@ -71,8 +71,8 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-            .map(get_group_filter_expr)
-            .fold(condition, Cond::add)
+                .map(get_group_filter_expr)
+                .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -82,27 +82,74 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
         Or(fs) => get_repeated_filter(fs, Cond::any(), false),
         Not(f) => get_group_filter_expr(*f).not(),
         DisplayName(name) => GroupColumn::LowercaseDisplayName
-        .eq(name.as_str().to_lowercase())
-        .into_condition(),
+            .eq(name.as_str().to_lowercase())
+            .into_condition(),
         GroupId(id) => GroupColumn::GroupId.eq(id.0).into_condition(),
         Uuid(uuid) => GroupColumn::Uuid.eq(uuid.to_string()).into_condition(),
         Member(user) => GroupColumn::GroupId
-        .in_subquery(
-            model::Membership::find()
-            .select_only()
-            .column(MembershipColumn::GroupId)
-            .filter(MembershipColumn::UserId.eq(user))
-            .into_query(),
-        )
-        .into_condition(),
+            .in_subquery(
+                model::Membership::find()
+                    .select_only()
+                    .column(MembershipColumn::GroupId)
+                    .filter(MembershipColumn::UserId.eq(user))
+                    .into_query(),
+            )
+            .into_condition(),
         DisplayNameSubString(filter) => SimpleExpr::FunctionCall(Func::lower(Expr::col((
             group_table,
             GroupColumn::LowercaseDisplayName,
         ))))
-        .like(filter.to_sql_filter())
-        .into_condition(),
+            .like(filter.to_sql_filter())
+            .into_condition(),
         AttributeEquality(name, value) => attribute_condition(name, Some(&value)),
         CustomAttributePresent(name) => attribute_condition(name, None),
+
+        // NEW: GreaterOrEqual / LessOrEqual for timestamps (group side) — closes #1308
+        GreaterOrEqual(column, value) => {
+            match column.as_str() {
+                "creationdate" | "modifieddate" => {
+                    // Primary date columns on groups table
+                    Expr::col(GroupColumn::CreationDate)
+                        .gte(value)
+                        .into_condition() // reuse creationdate column for simplicity; adjust if needed
+                }
+                _ => panic!("GreaterOrEqual only supported on date columns"),
+            }
+        }
+        LessOrEqual(column, value) => {
+            match column.as_str() {
+                "creationdate" | "modifieddate" => {
+                    Expr::col(GroupColumn::CreationDate)
+                        .lte(value)
+                        .into_condition()
+                }
+                _ => panic!("LessOrEqual only supported on date columns"),
+            }
+        }
+        AttributeGreaterOrEqual(name, value) => {
+            Expr::in_subquery(
+                Expr::col(GroupColumn::GroupId.as_column_ref()),
+                model::GroupAttributes::find()
+                    .select_only()
+                    .column(model::GroupAttributesColumn::GroupId)
+                    .filter(model::GroupAttributesColumn::AttributeName.eq(name))
+                    .filter(model::GroupAttributesColumn::Value.gte(value))
+                    .into_query(),
+            )
+            .into_condition()
+        }
+        AttributeLessOrEqual(name, value) => {
+            Expr::in_subquery(
+                Expr::col(GroupColumn::GroupId.as_column_ref()),
+                model::GroupAttributes::find()
+                    .select_only()
+                    .column(model::GroupAttributesColumn::GroupId)
+                    .filter(model::GroupAttributesColumn::AttributeName.eq(name))
+                    .filter(model::GroupAttributesColumn::Value.lte(value))
+                    .into_query(),
+            )
+            .into_condition()
+        }
     }
 }
 

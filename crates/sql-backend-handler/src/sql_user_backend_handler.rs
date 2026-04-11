@@ -85,8 +85,8 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
             bool_to_expr(default_value)
         } else {
             fs.into_iter()
-            .map(get_user_filter_expr)
-            .fold(condition, Cond::add)
+                .map(get_user_filter_expr)
+                .fold(condition, Cond::add)
         }
     }
     match filter {
@@ -101,7 +101,7 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
                 panic!("User id should be wrapped")
             } else if column == UserColumn::Email {
                 ColumnTrait::eq(&UserColumn::LowercaseEmail, value.as_str().to_lowercase())
-                .into_condition()
+                    .into_condition()
             } else {
                 ColumnTrait::eq(&column, value).into_condition()
             }
@@ -109,23 +109,66 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
         AttributeEquality(column, value) => attribute_condition(column, Some(&value)),
         MemberOf(group) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::LowercaseDisplayName))
-            .eq(group.as_str().to_lowercase())
-            .into_condition(),
+                .eq(group.as_str().to_lowercase())
+                .into_condition(),
         ),
         MemberOfId(group_id) => user_id_subcondition(
             Expr::col((group_table, GroupColumn::GroupId))
-            .eq(group_id)
-            .into_condition(),
+                .eq(group_id)
+                .into_condition(),
         ),
         UserIdSubString(filter) => UserColumn::UserId
-        .like(filter.to_sql_filter())
-        .into_condition(),
+            .like(filter.to_sql_filter())
+            .into_condition(),
         SubString(col, filter) => {
             SimpleExpr::FunctionCall(Func::lower(Expr::col(col.as_column_ref())))
-            .like(filter.to_sql_filter())
-            .into_condition()
+                .like(filter.to_sql_filter())
+                .into_condition()
         }
         CustomAttributePresent(name) => attribute_condition(name, None),
+
+        // NEW: GreaterOrEqual / LessOrEqual for timestamps (user side) — closes #1308
+        GreaterOrEqual(column, value) => {
+            match column {
+                UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate => {
+                    ColumnTrait::gte(&column, value).into_condition()
+                }
+                _ => panic!("GreaterOrEqual only supported on date columns"),
+            }
+        }
+        LessOrEqual(column, value) => {
+            match column {
+                UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate => {
+                    ColumnTrait::lte(&column, value).into_condition()
+                }
+                _ => panic!("LessOrEqual only supported on date columns"),
+            }
+        }
+        AttributeGreaterOrEqual(name, value) => {
+            // Custom DateTime attributes are stored as generalized-time strings (sortable)
+            Expr::in_subquery(
+                Expr::col(UserColumn::UserId.as_column_ref()),
+                model::UserAttributes::find()
+                    .select_only()
+                    .column(model::UserAttributesColumn::UserId)
+                    .filter(model::UserAttributesColumn::AttributeName.eq(name))
+                    .filter(model::UserAttributesColumn::Value.gte(value))
+                    .into_query(),
+            )
+            .into_condition()
+        }
+        AttributeLessOrEqual(name, value) => {
+            Expr::in_subquery(
+                Expr::col(UserColumn::UserId.as_column_ref()),
+                model::UserAttributes::find()
+                    .select_only()
+                    .column(model::UserAttributesColumn::UserId)
+                    .filter(model::UserAttributesColumn::AttributeName.eq(name))
+                    .filter(model::UserAttributesColumn::Value.lte(value))
+                    .into_query(),
+            )
+            .into_condition()
+        }
     }
 }
 

@@ -312,6 +312,44 @@ fn convert_user_filter(
                 }
             }
         }
+        LdapFilter::GreaterOrEqual(field, value) => {
+            let field = AttributeName::from(field.as_str());
+            match map_user_field(&field, schema) {
+                UserFieldType::PrimaryField(f)
+                    if matches!(f, UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate) =>
+                {
+                    Ok(UserRequestFilter::GreaterOrEqual(f, value.to_string()))
+                }
+                UserFieldType::Attribute(name, typ, _)
+                    if typ == AttributeType::DateTime =>
+                {
+                    Ok(UserRequestFilter::AttributeGreaterOrEqual(name, value.to_string()))
+                }
+                _ => Err(LdapError {
+                    code: LdapResultCode::UnwillingToPerform,
+                    message: format!("GreaterOrEqual not supported on this attribute: {}", field),
+                }),
+            }
+        }
+        LdapFilter::LessOrEqual(field, value) => {
+            let field = AttributeName::from(field.as_str());
+            match map_user_field(&field, schema) {
+                UserFieldType::PrimaryField(f)
+                    if matches!(f, UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate) =>
+                {
+                    Ok(UserRequestFilter::LessOrEqual(f, value.to_string()))
+                }
+                UserFieldType::Attribute(name, typ, _)
+                    if typ == AttributeType::DateTime =>
+                {
+                    Ok(UserRequestFilter::AttributeLessOrEqual(name, value.to_string()))
+                }
+                _ => Err(LdapError {
+                    code: LdapResultCode::UnwillingToPerform,
+                    message: format!("LessOrEqual not supported on this attribute: {}", field),
+                }),
+            }
+        }
         LdapFilter::Present(field) => {
             let field = AttributeName::from(field.as_str());
             Ok(match map_user_field(&field, schema) {

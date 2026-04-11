@@ -269,6 +269,52 @@ fn convert_group_filter(
                 }),
             }
         }
+        LdapFilter::GreaterOrEqual(field, value) => {
+            let field = AttributeName::from(field.as_str());
+            match map_group_field(&field, schema) {
+                GroupFieldType::CreationDate | GroupFieldType::ModifiedDate => {
+                    Ok(GroupRequestFilter::GreaterOrEqual(
+                        field.as_str().to_string(),
+                        value.to_string(),
+                    ))
+                }
+                GroupFieldType::Attribute(name, typ, _)
+                    if typ == AttributeType::DateTime =>
+                {
+                    Ok(GroupRequestFilter::AttributeGreaterOrEqual(
+                        name,
+                        value.to_string(),
+                    ))
+                }
+                _ => Err(LdapError {
+                    code: LdapResultCode::UnwillingToPerform,
+                    message: format!("GreaterOrEqual not supported on this attribute: {}", field),
+                }),
+            }
+        }
+        LdapFilter::LessOrEqual(field, value) => {
+            let field = AttributeName::from(field.as_str());
+            match map_group_field(&field, schema) {
+                GroupFieldType::CreationDate | GroupFieldType::ModifiedDate => {
+                    Ok(GroupRequestFilter::LessOrEqual(
+                        field.as_str().to_string(),
+                        value.to_string(),
+                    ))
+                }
+                GroupFieldType::Attribute(name, typ, _)
+                    if typ == AttributeType::DateTime =>
+                {
+                    Ok(GroupRequestFilter::AttributeLessOrEqual(
+                        name,
+                        value.to_string(),
+                    ))
+                }
+                _ => Err(LdapError {
+                    code: LdapResultCode::UnwillingToPerform,
+                    message: format!("LessOrEqual not supported on this attribute: {}", field),
+                }),
+            }
+        }
         LdapFilter::And(filters) => {
             let res = filters
                 .iter()

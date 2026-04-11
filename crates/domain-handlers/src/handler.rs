@@ -84,12 +84,10 @@ pub enum UserRequestFilter {
     MemberOf(GroupName),
     MemberOfId(GroupId),
     CustomAttributePresent(AttributeName),
-}
-
-impl From<bool> for UserRequestFilter {
-    fn from(val: bool) -> Self {
-        if val { Self::True } else { Self::False }
-    }
+    GreaterOrEqual(UserColumn, String),
+    LessOrEqual(UserColumn, String),
+    AttributeGreaterOrEqual(AttributeName, String),
+    AttributeLessOrEqual(AttributeName, String),
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -106,6 +104,10 @@ pub enum GroupRequestFilter {
     Member(UserId),
     AttributeEquality(AttributeName, AttributeValue),
     CustomAttributePresent(AttributeName),
+    GreaterOrEqual(String, String),
+    LessOrEqual(String, String),
+    AttributeGreaterOrEqual(AttributeName, String),
+    AttributeLessOrEqual(AttributeName, String),
 }
 
 impl From<bool> for GroupRequestFilter {
