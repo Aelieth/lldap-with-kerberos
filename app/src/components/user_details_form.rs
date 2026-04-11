@@ -125,11 +125,17 @@ impl Component for UserDetailsForm {
             Msg::Update => true,
             Msg::SubmitClicked => self.submit_user_update_form(ctx),
             Msg::UserUpdated(response) => {
-                if response.is_ok() {
-                    self.just_updated = true;
-                    self.show_kerberos_banner = false;
-                    // Sync original value so next edit is clean
-                    self.original_kerberossync_enabled = self.kerberossync_enabled;
+                match response {
+                    Ok(_) => {
+                        self.just_updated = true;
+                        self.show_kerberos_banner = false;
+                        // Sync original value so next edit is clean
+                        self.original_kerberossync_enabled = self.kerberossync_enabled;
+                    }
+                    Err(e) => {
+                        // ← NEW: surface the GraphQL FieldError (validation etc.)
+                        self.common.error = Some(e.into());
+                    }
                 }
                 true
             }

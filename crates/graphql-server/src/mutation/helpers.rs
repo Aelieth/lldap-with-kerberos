@@ -20,6 +20,32 @@ pub struct UnpackedAttributes {
     pub attributes: Vec<DomainAttribute>,
 }
 
+fn validate_ssh_public_key(key: &str) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("SSH public key cannot be empty".to_string());
+    }
+    // Must start with a recognized OpenSSH key type prefix
+    if !(trimmed.starts_with("ssh-")
+        || trimmed.starts_with("ecdsa-")
+        || trimmed.starts_with("sk-")
+        || trimmed.starts_with("ssh-ed25519")) {
+        return Err(format!(
+            "Invalid SSH public key format. Expected to start with ssh-, ecdsa-, sk-, or ssh-ed25519. Got: '{}'",
+            trimmed.split_whitespace().next().unwrap_or(trimmed)
+        ));
+        }
+        // Must contain at least one space (key type + base64)
+        if !trimmed.contains(' ') {
+            return Err("Invalid SSH public key: missing space after key type".to_string());
+        }
+        // Reasonable length guard (prevents accidental huge pastes)
+        if trimmed.len() > 4096 {
+            return Err("SSH public key is too long (max 4096 characters)".to_string());
+        }
+        Ok(())
+}
+
 pub fn unpack_attributes(
     attributes: Vec<AttributeValue>,
     schema: &PublicSchema,
@@ -169,6 +195,16 @@ pub fn deserialize_attribute(
             "Permission denied: Attribute {} is not editable by regular users",
             attribute.name
         ).into());
+    }
+
+    if attribute.name.to_ascii_lowercase() == "sshpublickey" && attr_schema.is_list {
+        for key in &attribute.value {
+            if let Err(err_msg) = validate_ssh_public_key(key) {
+                return Err(anyhow!(
+                    "Invalid SSH public key: {}", err_msg
+                ).into());
+            }
+        }
     }
 
     let serialized = if attr_schema.is_list {

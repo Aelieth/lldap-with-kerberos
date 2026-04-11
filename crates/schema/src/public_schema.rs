@@ -275,8 +275,11 @@ impl PublicSchema {
             extra_user_object_classes: vec![
                 "inetOrgPerson".into(),
                 "posixAccount".into(),
+                "ldapPublicKey".into(),
             ],
-            extra_group_object_classes: vec![],
+            extra_group_object_classes: vec![
+                "posixGroup".into(),
+            ],
         })
     }
 
@@ -292,7 +295,6 @@ impl PublicSchema {
         &self.0.group_attributes
     }
 
-    // NEW: system attributes accessor
     pub fn system_attributes(&self) -> &AttributeList {
         &self.0.system_attributes
     }
