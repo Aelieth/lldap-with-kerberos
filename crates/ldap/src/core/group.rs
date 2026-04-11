@@ -205,6 +205,15 @@ fn convert_group_filter(
 ) -> LdapResult<GroupRequestFilter> {
     let rec = |f| convert_group_filter(ldap_info, f, schema);
     match filter {
+        LdapFilter::Equality(field, value) if field.eq_ignore_ascii_case("objectclass") => {
+            let v = value.to_ascii_lowercase();
+            if v == "person" || v == "inetorgperson" || v == "posixaccount" || v == "mailaccount" {
+                Ok(GroupRequestFilter::False) // silently skip group search
+            } else {
+                Ok(GroupRequestFilter::False)
+            }
+        }
+
         LdapFilter::Equality(field, value) => {
             let field = AttributeName::from(field.as_str());
             let value_lc = value.to_ascii_lowercase();
