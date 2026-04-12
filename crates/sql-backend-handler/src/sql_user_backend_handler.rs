@@ -471,7 +471,66 @@ impl SqlBackendHandler {
 
         Ok(max_gid + 1)
     }
+
+    #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_gid_numbers(&self) -> Result<()> {
+        let posix = self.get_posix_config().await?;
+        if !posix.auto_gid_enabled {
+            return Ok(());
+        }
+
+        self.sql_pool
+            .transaction::<_, (), DomainError>(|transaction| {
+                Box::pin(async move {
+                    let groups = model::Group::find()
+                        .order_by_asc(model::groups::Column::CreationDate)
+                        .all(transaction)
+                        .await?;
+
+                    let mut next_gid = posix.gid_start;
+
+                    for group in groups {
+                        let gid_value = next_gid.to_string().into_bytes();
+
+                        let attr = model::group_attributes::ActiveModel {
+                            group_id: Set(group.group_id),
+                            attribute_name: Set(AttributeName::from("gidnumber")),
+                            value: Set(Serialized(gid_value)),
+                        };
+
+                        model::GroupAttributes::insert(attr)
+                            .on_conflict(
+                                OnConflict::columns([
+                                    model::group_attributes::Column::GroupId,
+                                    model::group_attributes::Column::AttributeName,
+                                ])
+                                .update_column(model::group_attributes::Column::Value)
+                                .to_owned(),
+                            )
+                            .exec(transaction)
+                            .await?;
+
+                        let now = chrono::Utc::now().naive_utc();
+                        let update = model::groups::ActiveModel {
+                            group_id: Set(group.group_id),
+                            modified_date: Set(now),
+                            ..Default::default()
+                        };
+                        update.update(transaction).await?;
+
+                        next_gid += 1;
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
 }
+
+
 
 #[async_trait]
 impl UserBackendHandler for SqlBackendHandler {
@@ -690,11 +749,11 @@ impl UserBackendHandler for SqlBackendHandler {
 #[async_trait]
 impl PosixBackendHandler for SqlBackendHandler {
     async fn get_posix_config(&self) -> Result<PosixConfig> {
-        self.get_posix_config().await
+        Self::get_posix_config(self).await
     }
 
     async fn set_posix_config(&self, config: PosixConfig) -> Result<()> {
-        self.set_posix_config(config).await
+        Self::set_posix_config(self, config).await
     }
 
     async fn reassign_gid_numbers(&self) -> Result<()> {
