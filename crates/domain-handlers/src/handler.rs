@@ -29,6 +29,12 @@ pub struct SubStringFilter {
     pub final_: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PosixConfig {
+    pub auto_gid_enabled: bool,
+    pub gid_start: i64,
+}
+
 impl SubStringFilter {
     pub fn to_sql_filter(&self) -> String {
         let mut filter = String::with_capacity(
@@ -197,8 +203,17 @@ pub trait BackendHandler:
     + ReadSchemaBackendHandler
     + SchemaBackendHandler
     + SystemConfigBackendHandler
+    + PosixBackendHandler
 {
     async fn ensure_kerberos_principal_consistency(&self, user_id: &UserId, enabled: bool) -> Result<()>;
+}
+
+#[async_trait]
+pub trait PosixBackendHandler: Send + Sync {
+    /// Get current POSIX configuration (auto-assign + starting gidNumber)
+    async fn get_posix_config(&self) -> Result<PosixConfig>;
+    async fn set_posix_config(&self, config: PosixConfig) -> Result<()>;
+    async fn reassign_gid_numbers(&self) -> Result<()>;
 }
 
 #[cfg(test)]

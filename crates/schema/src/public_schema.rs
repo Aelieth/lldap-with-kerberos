@@ -255,6 +255,17 @@ impl PublicSchema {
                         is_hardcoded: true,
                         is_readonly: true,
                     },
+                     // POSIX
+                     AttributeSchema {
+                         name: "gidnumber".into(),
+                     aliases: vec!["gid_number".into(), "gidNumber".into()],
+                     attribute_type: AttributeType::Integer,
+                     is_list: false,
+                     is_visible: true,
+                     is_editable: false,
+                     is_hardcoded: true,
+                     is_readonly: false,
+                     },
                 ],
             },
             // ==================== NEW SYSTEM SECTION ====================

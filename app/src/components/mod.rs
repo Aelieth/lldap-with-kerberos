@@ -38,3 +38,4 @@ pub mod change_user_ou;
 pub mod change_group_ou;
 pub mod status_modal;
 pub mod ou_selector;
+pub mod posix_options;

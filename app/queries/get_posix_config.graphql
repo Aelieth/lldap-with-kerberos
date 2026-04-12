@@ -1,0 +1,6 @@
+query GetPosixConfig {
+  posixConfig {
+    autoGidEnabled
+    gidStart
+  }
+}

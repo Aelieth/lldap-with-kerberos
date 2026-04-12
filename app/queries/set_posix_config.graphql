@@ -1,0 +1,6 @@
+mutation SetPosixConfig($input: PosixConfigInput!) {
+  setPosixConfig(input: $input) {
+    success
+    message
+  }
+}

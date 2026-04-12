@@ -11,6 +11,8 @@ use lldap_domain::{
 use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
     ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
+    PosixBackendHandler, PosixConfig,
+
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
@@ -373,9 +375,9 @@ impl SqlBackendHandler {
 impl SystemConfigBackendHandler for SqlBackendHandler {
     async fn get_allowed_ous(&self) -> Result<Vec<String>> {
         let config = system_config::Entity::find()
-        .filter(system_config::Column::Key.eq("allowedous"))
-        .one(&self.sql_pool)
-        .await?;
+            .filter(system_config::Column::Key.eq("allowedous"))
+            .one(&self.sql_pool)
+            .await?;
 
         let json_str = config.map(|c| c.value).unwrap_or_else(|| "[]".to_string());
         Ok(serde_json::from_str(&json_str).unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]))
@@ -388,15 +390,86 @@ impl SystemConfigBackendHandler for SqlBackendHandler {
         };
 
         system_config::Entity::insert(config)
-        .on_conflict(
-            OnConflict::column(system_config::Column::Key)
-            .update_column(system_config::Column::Value)
-            .to_owned(),
-        )
-        .exec(&self.sql_pool)
-        .await?;
+            .on_conflict(
+                OnConflict::column(system_config::Column::Key)
+                    .update_column(system_config::Column::Value)
+                    .to_owned(),
+            )
+            .exec(&self.sql_pool)
+            .await?;
 
         Ok(())
+    }
+}
+
+// === POSIX CONFIG METHODS (normal struct methods, called from GraphQL + create_group) ===
+impl SqlBackendHandler {
+    pub async fn get_posix_config(&self) -> Result<PosixConfig> {
+        let config = system_config::Entity::find()
+            .filter(system_config::Column::Key.eq("posix_config"))
+            .one(&self.sql_pool)
+            .await?;
+
+        let json_str = config.map(|c| c.value).unwrap_or_else(|| r#"{"auto_gid_enabled":false,"gid_start":3001}"#.to_string());
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .unwrap_or_else(|_| serde_json::json!({"auto_gid_enabled": false, "gid_start": 3001}));
+
+        Ok(PosixConfig {
+            auto_gid_enabled: parsed["auto_gid_enabled"].as_bool().unwrap_or(false),
+            gid_start: parsed["gid_start"].as_i64().unwrap_or(3001),
+        })
+    }
+
+    pub async fn set_posix_config(&self, config: PosixConfig) -> Result<()> {
+        let json = serde_json::json!({
+            "auto_gid_enabled": config.auto_gid_enabled,
+            "gid_start": config.gid_start,
+        });
+        self.set_system_config("posix_config", json.to_string()).await
+    }
+
+    // Private transaction-safe helpers (used by create_group and reassign_gid_numbers)
+    // Made pub(crate) so sql_group_backend_handler.rs can call them (same crate)
+    pub(crate) async fn get_posix_config_with_transaction(
+        transaction: &DatabaseTransaction,
+    ) -> Result<PosixConfig> {
+        let config = system_config::Entity::find()
+            .filter(system_config::Column::Key.eq("posix_config"))
+            .one(transaction)
+            .await?;
+
+        let json_str = config.map(|c| c.value).unwrap_or_else(|| r#"{"auto_gid_enabled":false,"gid_start":3001}"#.to_string());
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .unwrap_or_else(|_| serde_json::json!({"auto_gid_enabled": false, "gid_start": 3001}));
+
+        Ok(PosixConfig {
+            auto_gid_enabled: parsed["auto_gid_enabled"].as_bool().unwrap_or(false),
+            gid_start: parsed["gid_start"].as_i64().unwrap_or(3001),
+        })
+    }
+
+    pub(crate) async fn compute_next_gid_number(
+        transaction: &DatabaseTransaction,
+        start: i64,
+    ) -> Result<i64> {
+        let attributes = model::GroupAttributes::find()
+            .filter(model::group_attributes::Column::AttributeName.eq("gidnumber"))
+            .all(transaction)
+            .await?;
+
+        let max_gid = attributes
+            .into_iter()
+            .filter_map(|a| {
+                String::from_utf8(a.value.0)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+            })
+            .max()
+            .unwrap_or(start - 1);
+
+        Ok(max_gid + 1)
     }
 }
 
@@ -611,6 +684,21 @@ impl UserBackendHandler for SqlBackendHandler {
                  sea_orm::TransactionError::Transaction(e) => DomainError::DatabaseError(e),
         })?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl PosixBackendHandler for SqlBackendHandler {
+    async fn get_posix_config(&self) -> Result<PosixConfig> {
+        self.get_posix_config().await
+    }
+
+    async fn set_posix_config(&self, config: PosixConfig) -> Result<()> {
+        self.set_posix_config(config).await
+    }
+
+    async fn reassign_gid_numbers(&self) -> Result<()> {
+        self.reassign_gid_numbers().await
     }
 }
 

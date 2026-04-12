@@ -288,7 +288,18 @@ impl GroupBackendHandler for SqlBackendHandler {
                 Box::pin(async move {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
 
+                    // === POSIX gidNumber population hook (only when enabled) ===
+                    let posix = Self::get_posix_config_with_transaction(transaction).await?;
                     let mut final_attributes = request.attributes;
+
+                    if posix.auto_gid_enabled {
+                        let next_gid = Self::compute_next_gid_number(transaction, posix.gid_start).await?;
+                        final_attributes.push(Attribute {
+                            name: "gidnumber".into(),
+                            value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                        });
+                    }
+
                     if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
                         final_attributes.push(Attribute {
                             name: "ou".into(),
@@ -302,7 +313,6 @@ impl GroupBackendHandler for SqlBackendHandler {
                     for attribute in final_attributes {
                         let attr_name = attribute.name.as_str();
 
-                        // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
                         if schema
                             .group_attributes()
                             .get_attribute_type(attr_name)

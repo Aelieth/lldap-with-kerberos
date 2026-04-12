@@ -49,15 +49,17 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB  size
 - #401 [FEATURE REQUEST] Avatar supports JPG, JPEG, BMP, and PNG formats now with 1024x1024 resolution and <2MB
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
+
+## Reccently implemented - needs testing
 - #712 [FEATURE REQUEST] SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure. → ssHPublicKey added to public_schema with ldapsearch functionality. Admins may enter keys for users or users may modify their own keys.
 - #739 [FEATURE REQUEST] SSSD integration support → POSIX groups added. Extra user and group classes inetOrgPerson, posixAccount, and posixGroup mappings.
 - #1308 [FEATURE REQUEST] Implement GreaterOrEqual filter for builtin timestamps → extended ldap user.rs and group.rs with handler.rs extensions with appropriate GreaterOrEqual / LessOrEqual for timestamps
+- #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings → simple intercept fix inside of the convert_group_filter
 
 ## TODOs before release
 - [CUSTOM FEATURE] POSIX automatic attribute fill (uidNumber, gidNumber, homeDirectory, loginShell)
 - #750 [FEATURE REQUEST] Ability to disable LDAP users
 - #756 / #847 [BUG] Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
-- #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings
 - ldap specific testing for OU's, user account modification, etc
 - Cleanup: Logging
 - Cleanup: Code pass / Tests
@@ -70,8 +72,9 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 
 ## Future Plans
 - Continued integration of LLDAP features
-- Possible SMB integration with kerberos auth 
+- SMB integration with kerberos auth 
 - Long: Kerberos database directly integrated into LLDAP's
+- Very long: Integrate Kerberos or all FFI calls for dynamic custom integration, no docker required
 
 ---
 

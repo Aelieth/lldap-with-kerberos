@@ -4,7 +4,7 @@ pub(crate) mod sql_group_backend_handler;
 pub(crate) mod sql_opaque_handler;
 pub(crate) mod sql_schema_backend_handler;
 pub(crate) mod sql_user_backend_handler;
-
+pub use lldap_domain_handlers::handler::PosixConfig;
 pub use sql_backend_handler::SqlBackendHandler;
 pub use sql_opaque_handler::register_password;
 pub mod sql_migrations;

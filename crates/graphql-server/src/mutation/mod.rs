@@ -70,6 +70,19 @@ struct PushRealmResponse {
     message: String,
 }
 
+#[derive(juniper::GraphQLInputObject, Debug)]
+struct PosixConfigInput {
+    auto_gid_enabled: bool,
+    #[graphql(name = "gidStart")]
+    gid_start: i32,
+}
+
+#[derive(juniper::GraphQLObject)]
+struct PosixConfigResponse {
+    success: bool,
+    message: String,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
 pub struct Mutation<Handler: BackendHandler + OpaqueHandler> {
@@ -1064,6 +1077,60 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         .map_err(|e| juniper::FieldError::new(e.to_string(), juniper::Value::null()))?;
 
         Ok(PushRealmResponse { ok: true, message })
+    }
+
+    async fn set_posix_config(
+        context: &Context<Handler>,
+        input: PosixConfigInput,
+    ) -> FieldResult<PosixConfigResponse> {
+        let span = debug_span!("[GraphQL mutation] set_posix_config");
+        span.in_scope(|| debug!(?input));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized POSIX config change"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);  // concrete type, no dyn cast needed
+
+        let cfg = lldap_sql_backend_handler::PosixConfig {
+            auto_gid_enabled: input.auto_gid_enabled,
+            gid_start: input.gid_start as i64,
+        };
+
+        inner.set_posix_config(cfg).await
+            .map_err(|e| FieldError::new(
+                "Failed to save POSIX config",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixConfigResponse {
+            success: true,
+            message: "✅ POSIX configuration saved (gidNumber auto-assign updated)".to_string(),
+        })
+    }
+
+    async fn reassign_gid_numbers(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixConfigResponse> {
+        let span = debug_span!("[GraphQL mutation] reassign_gid_numbers");
+        span.in_scope(|| debug!("Reassigning all group gidNumbers"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized gidNumber reassign"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);  // concrete type, no dyn cast needed
+
+        inner.reassign_gid_numbers().await
+            .map_err(|e| FieldError::new(
+                "Failed to reassign gidNumbers",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixConfigResponse {
+            success: true,
+            message: "✅ All group gidNumbers have been reassigned from the new starting value".to_string(),
+        })
     }
 }
 

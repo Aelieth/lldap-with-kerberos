@@ -53,6 +53,13 @@ pub struct KeycloakConfigResponse {
     pub admin_user: String,
 }
 
+#[derive(GraphQLObject)]
+pub struct PosixConfig {
+    pub auto_gid_enabled: bool,
+    #[graphql(name = "gidStart")]
+    pub gid_start: i32,   // Juniper only supports i32 for integer fields
+}
+
 impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
     fn default() -> Self {
         Self::new()
@@ -216,6 +223,30 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             ))?;
 
         Ok(ous)
+    }
+
+    async fn posix_config(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixConfig> {
+        let span = debug_span!("[GraphQL query] posix_config");
+        span.in_scope(|| debug!("Fetching POSIX config (single source of truth)"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized to read POSIX config"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+
+        let cfg = inner.get_posix_config().await
+            .map_err(|e| FieldError::new(
+                "Failed to load posix_config",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixConfig {
+            auto_gid_enabled: cfg.auto_gid_enabled,
+            gid_start: cfg.gid_start as i32,   // safe cast for Juniper
+        })
     }
 }
 
