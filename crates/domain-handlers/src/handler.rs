@@ -29,12 +29,6 @@ pub struct SubStringFilter {
     pub final_: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PosixConfig {
-    pub auto_gid_enabled: bool,
-    pub gid_start: i64,
-}
-
 impl SubStringFilter {
     pub fn to_sql_filter(&self) -> String {
         let mut filter = String::with_capacity(
@@ -208,11 +202,32 @@ pub trait BackendHandler:
     async fn ensure_kerberos_principal_consistency(&self, user_id: &UserId, enabled: bool) -> Result<()>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PosixSettings {
+    // === Users ===
+    pub user_uidnumber_assign: bool,
+    pub user_uidnumber_start: i64,
+    pub user_uidnumber_max: i64,
+
+    pub user_gidnumber_assign: bool,
+    pub user_gidnumber_start: i64,
+
+    pub user_loginshell_assign: bool,
+    pub user_loginshell_default: String,
+
+    pub user_homedirectory_assign: bool,
+    pub user_homedirectory_prefix: String,
+
+    // === Groups ===
+    pub group_gidnumber_assign: bool,
+    pub group_gidnumber_start: i64,
+    pub group_gidnumber_max: i64,
+}
+
 #[async_trait]
 pub trait PosixBackendHandler: Send + Sync {
-    /// Get current POSIX configuration (auto-assign + starting gidNumber)
-    async fn get_posix_config(&self) -> Result<PosixConfig>;
-    async fn set_posix_config(&self, config: PosixConfig) -> Result<()>;
+    async fn get_posix_settings(&self) -> Result<PosixSettings>;
+    async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()>;
     async fn reassign_gid_numbers(&self) -> Result<()>;
 }
 

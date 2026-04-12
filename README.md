@@ -64,12 +64,6 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - Cleanup: Logging
 - Cleanup: Code pass / Tests
 
-## Architecture Highlights
-- Single source of truth for all schema, OU, and system settings
-- Professional admin-controlled Organizational Unit system (1-layer hierarchy with “\” separator)
-- Readonly enforcement on protected fields (ou, userid, krbprincipalname, etc.)
-- Full GraphQL mutations and Bootstrap modals matching the rest of the UI
-
 ## Future Plans
 - Continued integration of LLDAP features
 - SMB integration with kerberos auth 

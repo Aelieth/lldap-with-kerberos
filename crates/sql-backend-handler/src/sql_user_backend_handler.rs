@@ -10,16 +10,16 @@ use lldap_domain::{
 };
 use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
-    ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
-    PosixBackendHandler, PosixConfig,
-
+    PosixBackendHandler, PosixSettings,
+    ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler,
+    UserListerBackendHandler, UserRequestFilter,
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
     model::{self, GroupColumn, UserColumn, deserialize, system_config},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait,
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
     sea_query::{
         Alias, Cond, Expr, Func, IntoColumnRef, IntoCondition, SimpleExpr, query::OnConflict,
@@ -320,6 +320,46 @@ impl SqlBackendHandler {
         let lower_email = request.email.as_ref().map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
 
+        // === POSIX RANGE + DUPLICATE CHECKS (on any inserted uidnumber/gidnumber) ===
+        let _settings = Self::get_posix_settings_with_transaction(transaction).await?;
+
+        for attr in &update_user_attributes {
+            let name = match &attr.attribute_name {
+                ActiveValue::Set(n) => n.as_str(),
+                _ => continue,
+            };
+
+            let value = match &attr.value {
+                ActiveValue::Set(Serialized(bytes)) => {
+                    match String::from_utf8(bytes.clone()) {
+                        Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
+                        Err(_) => continue,
+                    }
+                }
+                _ => continue,
+            };
+
+            if name == "uidnumber" || name == "gidnumber" {
+                if value != 0 && (value < 3000 || value > 20000) {
+                    return Err(DomainError::InternalError(format!(
+                        "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                    )));
+                }
+
+                let taken = if name == "uidnumber" {
+                    Self::is_uidnumber_taken(transaction, value).await?
+                } else {
+                    Self::is_gidnumber_taken(transaction, value).await?
+                };
+
+                if taken {
+                    return Err(DomainError::InternalError(format!(
+                        "Number {} is already assigned to another user/group", value
+                    )));
+                }
+            }
+        }
+
         let update_user = model::users::ActiveModel {
             user_id: ActiveValue::Set(request.user_id.clone()),
             email: request.email.map(ActiveValue::Set).unwrap_or_default(),
@@ -402,52 +442,43 @@ impl SystemConfigBackendHandler for SqlBackendHandler {
     }
 }
 
-// === POSIX CONFIG METHODS (normal struct methods, called from GraphQL + create_group) ===
+// === FULL POSIX SETTINGS (single source of truth - matches PublicSchema) ===
 impl SqlBackendHandler {
-    pub async fn get_posix_config(&self) -> Result<PosixConfig> {
+    pub async fn get_posix_settings(&self) -> Result<PosixSettings> {
         let config = system_config::Entity::find()
-            .filter(system_config::Column::Key.eq("posix_config"))
+            .filter(system_config::Column::Key.eq("posix_settings"))
             .one(&self.sql_pool)
             .await?;
 
-        let json_str = config.map(|c| c.value).unwrap_or_else(|| r#"{"auto_gid_enabled":false,"gid_start":3001}"#.to_string());
-
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .unwrap_or_else(|_| serde_json::json!({"auto_gid_enabled": false, "gid_start": 3001}));
-
-        Ok(PosixConfig {
-            auto_gid_enabled: parsed["auto_gid_enabled"].as_bool().unwrap_or(false),
-            gid_start: parsed["gid_start"].as_i64().unwrap_or(3001),
-        })
-    }
-
-    pub async fn set_posix_config(&self, config: PosixConfig) -> Result<()> {
-        let json = serde_json::json!({
-            "auto_gid_enabled": config.auto_gid_enabled,
-            "gid_start": config.gid_start,
+        let json_str = config.map(|c| c.value).unwrap_or_else(|| {
+            serde_json::to_string(&PosixSettings::default()).unwrap()
         });
-        self.set_system_config("posix_config", json.to_string()).await
+
+        serde_json::from_str(&json_str)
+            .map_err(|e| DomainError::InternalError(format!("Failed to parse posix_settings JSON: {}", e)))
     }
 
-    // Private transaction-safe helpers (used by create_group and reassign_gid_numbers)
-    // Made pub(crate) so sql_group_backend_handler.rs can call them (same crate)
-    pub(crate) async fn get_posix_config_with_transaction(
+    pub async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()> {
+        let json = serde_json::to_string(&settings)
+            .map_err(|e| DomainError::InternalError(format!("Failed to serialize posix_settings: {}", e)))?;
+        self.set_system_config("posix_settings", json).await
+    }
+
+    // Private transaction-safe helpers
+    pub(crate) async fn get_posix_settings_with_transaction(
         transaction: &DatabaseTransaction,
-    ) -> Result<PosixConfig> {
+    ) -> Result<PosixSettings> {
         let config = system_config::Entity::find()
-            .filter(system_config::Column::Key.eq("posix_config"))
+            .filter(system_config::Column::Key.eq("posix_settings"))
             .one(transaction)
             .await?;
 
-        let json_str = config.map(|c| c.value).unwrap_or_else(|| r#"{"auto_gid_enabled":false,"gid_start":3001}"#.to_string());
+        let json_str = config.map(|c| c.value).unwrap_or_else(|| {
+            serde_json::to_string(&PosixSettings::default()).unwrap()
+        });
 
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .unwrap_or_else(|_| serde_json::json!({"auto_gid_enabled": false, "gid_start": 3001}));
-
-        Ok(PosixConfig {
-            auto_gid_enabled: parsed["auto_gid_enabled"].as_bool().unwrap_or(false),
-            gid_start: parsed["gid_start"].as_i64().unwrap_or(3001),
-        })
+        serde_json::from_str(&json_str)
+            .map_err(|e| DomainError::InternalError(format!("Failed to parse posix_settings JSON: {}", e)))
     }
 
     pub(crate) async fn compute_next_gid_number(
@@ -472,10 +503,41 @@ impl SqlBackendHandler {
         Ok(max_gid + 1)
     }
 
+    // === DUPLICATE NUMBER ENFORCEMENT HELPERS (used by create/update user/group) ===
+    pub(crate) async fn is_uidnumber_taken(
+        transaction: &DatabaseTransaction,
+        uid: i64,
+    ) -> Result<bool> {
+        if uid == 0 {
+            return Ok(false); // 0 means "not assigned"
+        }
+        let count = model::UserAttributes::find()
+        .filter(model::UserAttributesColumn::AttributeName.eq("uidnumber"))
+        .filter(model::UserAttributesColumn::Value.eq(uid.to_string().into_bytes()))
+        .count(transaction)
+        .await?;
+        Ok(count > 0)
+    }
+
+    pub(crate) async fn is_gidnumber_taken(
+        transaction: &DatabaseTransaction,
+        gid: i64,
+    ) -> Result<bool> {
+        if gid == 0 {
+            return Ok(false);
+        }
+        let count = model::GroupAttributes::find()
+        .filter(model::GroupAttributesColumn::AttributeName.eq("gidnumber"))
+        .filter(model::GroupAttributesColumn::Value.eq(gid.to_string().into_bytes()))
+        .count(transaction)
+        .await?;
+        Ok(count > 0)
+    }
+
     #[instrument(skip(self), level = "info", err)]
     pub async fn reassign_gid_numbers(&self) -> Result<()> {
-        let posix = self.get_posix_config().await?;
-        if !posix.auto_gid_enabled {
+        let settings = self.get_posix_settings().await?;
+        if !settings.group_gidnumber_assign {
             return Ok(());
         }
 
@@ -487,7 +549,7 @@ impl SqlBackendHandler {
                         .all(transaction)
                         .await?;
 
-                    let mut next_gid = posix.gid_start;
+                    let mut next_gid = settings.group_gidnumber_start;
 
                     for group in groups {
                         let gid_value = next_gid.to_string().into_bytes();
@@ -527,7 +589,6 @@ impl SqlBackendHandler {
 
         Ok(())
     }
-
 }
 
 
@@ -592,7 +653,6 @@ impl UserBackendHandler for SqlBackendHandler {
         let uuid = Uuid::from_name_and_date(request.user_id.as_str(), &now);
         let lower_email = request.email.as_str().to_lowercase();
 
-        // === Enforce ou from global allowedous list (single source of truth) ===
         let default_ou = self.get_allowed_ous().await?
             .into_iter()
             .next()
@@ -605,23 +665,56 @@ impl UserBackendHandler for SqlBackendHandler {
             });
         }
 
-        let new_user = model::users::ActiveModel {
-            user_id: Set(request.user_id.clone()),
-            email: Set(request.email),
-            lowercase_email: Set(lower_email),
-            display_name: to_value(&request.display_name),
-            creation_date: ActiveValue::Set(now),
-            uuid: ActiveValue::Set(uuid),
-            modified_date: ActiveValue::Set(now),
-            password_modified_date: ActiveValue::Set(now),
-            krb_principal_name: ActiveValue::Set(None),
-            ..Default::default()
-        };
-
         self.sql_pool
             .transaction::<_, (), DomainError>(|transaction| {
                 Box::pin(async move {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
+
+                    // === POSIX RANGE + DUPLICATE CHECKS ===
+                    let _settings = Self::get_posix_settings_with_transaction(transaction).await?;
+
+                    for attr in &request.attributes {
+                        let name = attr.name.as_str();
+                        let value = match &attr.value {
+                            AttributeValue::Integer(Cardinality::Singleton(v)) => *v,
+                            _ => continue,
+                        };
+
+                        if name == "uidnumber" || name == "gidnumber" {
+                            if value != 0 && (value < 3000 || value > 20000) {
+                                return Err(DomainError::InternalError(format!(
+                                    "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                                )));
+                            }
+
+                            let taken = if name == "uidnumber" {
+                                Self::is_uidnumber_taken(transaction, value).await?
+                            } else {
+                                Self::is_gidnumber_taken(transaction, value).await?
+                            };
+
+                            if taken {
+                                return Err(DomainError::InternalError(format!(
+                                    "Number {} is already assigned to another user/group", value
+                                )));
+                            }
+                        }
+                    }
+
+                    let new_user = model::users::ActiveModel {
+                        user_id: Set(request.user_id.clone()),
+                        email: Set(request.email),
+                        lowercase_email: Set(lower_email),
+                        display_name: to_value(&request.display_name),
+                        creation_date: ActiveValue::Set(now),
+                        uuid: ActiveValue::Set(uuid),
+                        modified_date: ActiveValue::Set(now),
+                        password_modified_date: ActiveValue::Set(now),
+                        krb_principal_name: ActiveValue::Set(None),
+                        ..Default::default()
+                    };
+
+                    let _group_id = new_user.insert(transaction).await?.user_id;
                     let mut new_user_attributes = Vec::new();
 
                     for attribute in request.attributes {
@@ -631,11 +724,7 @@ impl UserBackendHandler for SqlBackendHandler {
                             .map(|s| s.name.clone().into())
                             .unwrap_or_else(|| attribute.name.clone());
 
-                        if schema
-                            .user_attributes()
-                            .get_attribute_type(attribute.name.as_str())
-                            .is_some()
-                        {
+                        if schema.user_attributes().get_attribute_type(attribute.name.as_str()).is_some() {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_user_attributes.push(model::user_attributes::ActiveModel {
                                 user_id: Set(request.user_id.clone()),
@@ -645,7 +734,6 @@ impl UserBackendHandler for SqlBackendHandler {
                         }
                     }
 
-                    new_user.insert(transaction).await?;
                     if !new_user_attributes.is_empty() {
                         let _ = model::UserAttributes::insert_many(new_user_attributes)
                             .exec(transaction)
@@ -748,12 +836,12 @@ impl UserBackendHandler for SqlBackendHandler {
 
 #[async_trait]
 impl PosixBackendHandler for SqlBackendHandler {
-    async fn get_posix_config(&self) -> Result<PosixConfig> {
-        Self::get_posix_config(self).await
+    async fn get_posix_settings(&self) -> Result<PosixSettings> {
+        self.get_posix_settings().await
     }
 
-    async fn set_posix_config(&self, config: PosixConfig) -> Result<()> {
-        Self::set_posix_config(self, config).await
+    async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()> {
+        self.set_posix_settings(settings).await
     }
 
     async fn reassign_gid_numbers(&self) -> Result<()> {

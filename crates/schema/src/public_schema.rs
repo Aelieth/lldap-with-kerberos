@@ -1,4 +1,4 @@
-use crate::schema::{AttributeList, AttributeSchema, AttributeType, Schema};
+use crate::schema::{AttributeList, AttributeSchema, AttributeType, PosixSettings, Schema};
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -283,6 +283,22 @@ impl PublicSchema {
                     },
                 ],
             },
+            // === Full POSIX settings  ===
+            posix_settings: PosixSettings {
+                user_uidnumber_assign: false,
+                user_uidnumber_start: 3001,
+                user_uidnumber_max: 3999,
+                user_gidnumber_assign: false,
+                user_gidnumber_start: 3001,
+                user_loginshell_assign: false,
+                user_loginshell_default: "/bin/bash".to_string(),
+                user_homedirectory_assign: false,
+                user_homedirectory_prefix: "/home".to_string(),
+                group_gidnumber_assign: false,
+                group_gidnumber_start: 3001,
+                group_gidnumber_max: 3999,
+            },
+
             extra_user_object_classes: vec![
                 "inetOrgPerson".into(),
                 "posixAccount".into(),
@@ -308,5 +324,13 @@ impl PublicSchema {
 
     pub fn system_attributes(&self) -> &AttributeList {
         &self.0.system_attributes
+    }
+
+    pub fn posix_settings(&self) -> &PosixSettings {
+        &self.0.posix_settings
+    }
+
+    pub fn posix_settings_mut(&mut self) -> &mut PosixSettings {
+        &mut self.0.posix_settings
     }
 }

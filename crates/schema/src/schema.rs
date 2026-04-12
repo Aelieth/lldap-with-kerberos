@@ -40,7 +40,8 @@ pub enum AttributeType {
 pub struct Schema {
     pub user_attributes: AttributeList,
     pub group_attributes: AttributeList,
-    pub system_attributes: AttributeList,   // NEW: dedicated section for system-only attributes
+    pub system_attributes: AttributeList,
+    pub posix_settings: PosixSettings,   // ← NEW: full POSIX settings
     pub extra_user_object_classes: Vec<String>,
     pub extra_group_object_classes: Vec<String>,
 }
@@ -62,6 +63,29 @@ pub struct AttributeSchema {
 #[serde(rename_all = "camelCase")]
 pub struct AttributeList {
     pub attributes: Vec<AttributeSchema>,
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PosixSettings {
+    // === Users ===
+    pub user_uidnumber_assign: bool,
+    pub user_uidnumber_start: i64,
+    pub user_uidnumber_max: i64,
+
+    pub user_gidnumber_assign: bool,
+    pub user_gidnumber_start: i64,
+
+    pub user_loginshell_assign: bool,
+    pub user_loginshell_default: String,
+
+    pub user_homedirectory_assign: bool,
+    pub user_homedirectory_prefix: String,
+
+    // === Groups ===
+    pub group_gidnumber_assign: bool,
+    pub group_gidnumber_start: i64,
+    pub group_gidnumber_max: i64,
 }
 
 impl AttributeList {
@@ -88,3 +112,5 @@ impl AttributeList {
             .join(" $ ")
     }
 }
+
+

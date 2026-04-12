@@ -71,14 +71,29 @@ struct PushRealmResponse {
 }
 
 #[derive(juniper::GraphQLInputObject, Debug)]
-struct PosixConfigInput {
-    auto_gid_enabled: bool,
-    #[graphql(name = "gidStart")]
-    gid_start: i32,
+struct PosixSettingsInput {
+    // === Users ===
+    pub user_uidnumber_assign: bool,
+    pub user_uidnumber_start: i32,
+    pub user_uidnumber_max: i32,
+
+    pub user_gidnumber_assign: bool,
+    pub user_gidnumber_start: i32,
+
+    pub user_loginshell_assign: bool,
+    pub user_loginshell_default: String,
+
+    pub user_homedirectory_assign: bool,
+    pub user_homedirectory_prefix: String,
+
+    // === Groups ===
+    pub group_gidnumber_assign: bool,
+    pub group_gidnumber_start: i32,
+    pub group_gidnumber_max: i32,
 }
 
 #[derive(juniper::GraphQLObject)]
-struct PosixConfigResponse {
+struct PosixSettingsResponse {
     success: bool,
     message: String,
 }
@@ -1079,39 +1094,66 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(PushRealmResponse { ok: true, message })
     }
 
-    async fn set_posix_config(
+async fn set_posix_settings(
         context: &Context<Handler>,
-        input: PosixConfigInput,
-    ) -> FieldResult<PosixConfigResponse> {
-        let span = debug_span!("[GraphQL mutation] set_posix_config");
+        input: PosixSettingsInput,
+    ) -> FieldResult<PosixSettingsResponse> {
+        let span = debug_span!("[GraphQL mutation] set_posix_settings");
         span.in_scope(|| debug!(?input));
+
+        // === Backend range enforcement (3000-20000) ===
+        let ranges = [
+            ("user_uidnumber_start", input.user_uidnumber_start),
+            ("user_uidnumber_max", input.user_uidnumber_max),
+            ("user_gidnumber_start", input.user_gidnumber_start),
+            ("group_gidnumber_start", input.group_gidnumber_start),
+            ("group_gidnumber_max", input.group_gidnumber_max),
+        ];
+        for (name, val) in ranges {
+            if val != 0 && (val < 3000 || val > 20000) {
+                return Err(FieldError::new(
+                    format!("{} must be between 3000 and 20000 (or 0 for no limit)", name),
+                    juniper::Value::null(),
+                ));
+            }
+        }
 
         let handler = context
             .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized POSIX config change"))?;
+            .ok_or_else(field_error_callback(&span, "Unauthorized POSIX settings change"))?;
 
-        let inner = AdminBackendHandler::unsafe_get_handler(handler);  // concrete type, no dyn cast needed
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
 
-        let cfg = lldap_sql_backend_handler::PosixConfig {
-            auto_gid_enabled: input.auto_gid_enabled,
-            gid_start: input.gid_start as i64,
+        let settings = lldap_domain_handlers::handler::PosixSettings {
+            user_uidnumber_assign: input.user_uidnumber_assign,
+            user_uidnumber_start: input.user_uidnumber_start as i64,
+            user_uidnumber_max: input.user_uidnumber_max as i64,
+            user_gidnumber_assign: input.user_gidnumber_assign,
+            user_gidnumber_start: input.user_gidnumber_start as i64,
+            user_loginshell_assign: input.user_loginshell_assign,
+            user_loginshell_default: input.user_loginshell_default,
+            user_homedirectory_assign: input.user_homedirectory_assign,
+            user_homedirectory_prefix: input.user_homedirectory_prefix,
+            group_gidnumber_assign: input.group_gidnumber_assign,
+            group_gidnumber_start: input.group_gidnumber_start as i64,
+            group_gidnumber_max: input.group_gidnumber_max as i64,
         };
 
-        inner.set_posix_config(cfg).await
+        inner.set_posix_settings(settings).await
             .map_err(|e| FieldError::new(
-                "Failed to save POSIX config",
+                "Failed to save POSIX settings",
                 graphql_value!({ "details": (e.to_string()) }),
             ))?;
 
-        Ok(PosixConfigResponse {
+        Ok(PosixSettingsResponse {
             success: true,
-            message: "✅ POSIX configuration saved (gidNumber auto-assign updated)".to_string(),
+            message: "✅ Full POSIX settings saved (all toggles and ranges updated)".to_string(),
         })
     }
 
     async fn reassign_gid_numbers(
         context: &Context<Handler>,
-    ) -> FieldResult<PosixConfigResponse> {
+    ) -> FieldResult<PosixSettingsResponse> {
         let span = debug_span!("[GraphQL mutation] reassign_gid_numbers");
         span.in_scope(|| debug!("Reassigning all group gidNumbers"));
 
@@ -1119,7 +1161,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             .get_admin_handler()
             .ok_or_else(field_error_callback(&span, "Unauthorized gidNumber reassign"))?;
 
-        let inner = AdminBackendHandler::unsafe_get_handler(handler);  // concrete type, no dyn cast needed
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
 
         inner.reassign_gid_numbers().await
             .map_err(|e| FieldError::new(
@@ -1127,7 +1169,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 graphql_value!({ "details": (e.to_string()) }),
             ))?;
 
-        Ok(PosixConfigResponse {
+        Ok(PosixSettingsResponse {
             success: true,
             message: "✅ All group gidNumbers have been reassigned from the new starting value".to_string(),
         })

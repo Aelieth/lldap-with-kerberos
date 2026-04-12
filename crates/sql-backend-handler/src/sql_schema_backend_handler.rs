@@ -10,6 +10,7 @@ use lldap_domain_model::{
     model,
 };
 use lldap_schema::{AttributeList, AttributeSchema, PublicSchema, Schema};
+use lldap_schema::schema::PosixSettings;
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
@@ -125,6 +126,8 @@ impl SqlBackendHandler {
             system_attributes: AttributeList {
                 attributes: vec![],  // system attributes are hardcoded in PublicSchema::get()
             },
+            // === NEW: POSIX settings (use default for now — all auto-assign off) ===
+            posix_settings: PosixSettings::default(),
             extra_user_object_classes: Self::get_user_object_classes(transaction)
                 .await?
                 .into_iter()

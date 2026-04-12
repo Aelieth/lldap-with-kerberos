@@ -276,7 +276,6 @@ impl GroupBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
 
-        // Get default OU from system_config BEFORE entering the transaction
         let default_ou = self.get_allowed_ous().await?
             .into_iter()
             .next()
@@ -288,12 +287,42 @@ impl GroupBackendHandler for SqlBackendHandler {
                 Box::pin(async move {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
 
+                    // === POSIX RANGE + DUPLICATE CHECKS ===
+                    let settings = Self::get_posix_settings_with_transaction(transaction).await?;
+
+                    for attr in &request.attributes {
+                        let name = attr.name.as_str();
+                        let value = match &attr.value {
+                            AttributeValue::Integer(Cardinality::Singleton(v)) => *v,
+                            _ => continue,
+                        };
+
+                        if name == "uidnumber" || name == "gidnumber" {
+                            if value != 0 && (value < 3000 || value > 20000) {
+                                return Err(DomainError::InternalError(format!(
+                                    "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                                )));
+                            }
+
+                            let taken = if name == "uidnumber" {
+                                Self::is_uidnumber_taken(transaction, value).await?
+                            } else {
+                                Self::is_gidnumber_taken(transaction, value).await?
+                            };
+
+                            if taken {
+                                return Err(DomainError::InternalError(format!(
+                                    "Number {} is already assigned to another user/group", value
+                                )));
+                            }
+                        }
+                    }
+
                     // === POSIX gidNumber population hook (only when enabled) ===
-                    let posix = Self::get_posix_config_with_transaction(transaction).await?;
                     let mut final_attributes = request.attributes;
 
-                    if posix.auto_gid_enabled {
-                        let next_gid = Self::compute_next_gid_number(transaction, posix.gid_start).await?;
+                    if settings.group_gidnumber_assign {
+                        let next_gid = Self::compute_next_gid_number(transaction, settings.group_gidnumber_start).await?;
                         final_attributes.push(Attribute {
                             name: "gidnumber".into(),
                             value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
@@ -376,38 +405,61 @@ impl SqlBackendHandler {
             ..Default::default()
         };
         update_group.update(transaction).await?;
+
         let schema = Self::get_schema_with_transaction(transaction).await?;
+
+        // === POSIX RANGE + DUPLICATE CHECKS (on any inserted uidnumber/gidnumber) ===
+        let _settings = Self::get_posix_settings_with_transaction(transaction).await?;
+
         let mut update_group_attributes = Vec::new();
         let mut remove_group_attributes = Vec::new();
 
         for attribute in request.insert_attributes {
-            let attr_name = attribute.name.as_str();
+            let name = attribute.name.as_str();
+            let value = match &attribute.value {
+                AttributeValue::Integer(Cardinality::Singleton(v)) => *v,
+                _ => {
+                    let db_value = attribute_value_to_db_bytes(&attribute.value);
+                    update_group_attributes.push(model::group_attributes::ActiveModel {
+                        group_id: Set(request.group_id),
+                        attribute_name: Set(attribute.name),
+                        value: Set(Serialized(db_value)),
+                    });
+                    continue;
+                }
+            };
 
-            // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
-            if schema
-                .group_attributes()
-                .get_attribute_type(attr_name)
-                .is_some()
-                || is_backend_writable_readonly_attribute(attr_name)
-            {
-                let db_value = attribute_value_to_db_bytes(&attribute.value);
-                update_group_attributes.push(model::group_attributes::ActiveModel {
-                    group_id: Set(request.group_id),
-                    attribute_name: Set(attribute.name.to_owned()),
-                    value: Set(Serialized(db_value)),
-                });
-            } else {
-                return Err(DomainError::InternalError(format!(
-                    "Group attribute name {} doesn't exist in the schema, yet was attempted to be inserted in the database",
-                    &attribute.name
-                )));
+            if name == "uidnumber" || name == "gidnumber" {
+                if value != 0 && (value < 3000 || value > 20000) {
+                    return Err(DomainError::InternalError(format!(
+                        "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                    )));
+                }
+
+                let taken = if name == "uidnumber" {
+                    Self::is_uidnumber_taken(transaction, value).await?
+                } else {
+                    Self::is_gidnumber_taken(transaction, value).await?
+                };
+
+                if taken {
+                    return Err(DomainError::InternalError(format!(
+                        "Number {} is already assigned to another user/group", value
+                    )));
+                }
             }
+
+            let db_value = attribute_value_to_db_bytes(&attribute.value);
+            update_group_attributes.push(model::group_attributes::ActiveModel {
+                group_id: Set(request.group_id),
+                attribute_name: Set(attribute.name),
+                value: Set(Serialized(db_value)),
+            });
         }
 
         for attribute in request.delete_attributes {
             let attr_name = attribute.as_str();
 
-            // === BACKEND BYPASS FOR READONLY ATTRIBUTES USED BY OU OPERATIONS ===
             if schema
                 .group_attributes()
                 .get_attribute_type(attr_name)
@@ -417,7 +469,8 @@ impl SqlBackendHandler {
                 remove_group_attributes.push(attribute);
             } else {
                 return Err(DomainError::InternalError(format!(
-                    "Group attribute name {attribute} doesn't exist in the schema, yet was attempted to be removed from the database"
+                    "Group attribute name {} doesn't exist in the schema, yet was attempted to be removed from the database",
+                    attr_name
                 )));
             }
         }

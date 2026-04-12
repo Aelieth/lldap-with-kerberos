@@ -54,10 +54,25 @@ pub struct KeycloakConfigResponse {
 }
 
 #[derive(GraphQLObject)]
-pub struct PosixConfig {
-    pub auto_gid_enabled: bool,
-    #[graphql(name = "gidStart")]
-    pub gid_start: i32,   // Juniper only supports i32 for integer fields
+pub struct PosixSettings {
+    // === Users ===
+    pub user_uidnumber_assign: bool,
+    pub user_uidnumber_start: i32,
+    pub user_uidnumber_max: i32,
+
+    pub user_gidnumber_assign: bool,
+    pub user_gidnumber_start: i32,
+
+    pub user_loginshell_assign: bool,
+    pub user_loginshell_default: String,
+
+    pub user_homedirectory_assign: bool,
+    pub user_homedirectory_prefix: String,
+
+    // === Groups ===
+    pub group_gidnumber_assign: bool,
+    pub group_gidnumber_start: i32,
+    pub group_gidnumber_max: i32,
 }
 
 impl<Handler: BackendHandler + OpaqueHandler> Default for Query<Handler> {
@@ -225,27 +240,37 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         Ok(ous)
     }
 
-    async fn posix_config(
+async fn posix_settings(
         context: &Context<Handler>,
-    ) -> FieldResult<PosixConfig> {
-        let span = debug_span!("[GraphQL query] posix_config");
-        span.in_scope(|| debug!("Fetching POSIX config (single source of truth)"));
+    ) -> FieldResult<PosixSettings> {
+        let span = debug_span!("[GraphQL query] posix_settings");
+        span.in_scope(|| debug!("Fetching full POSIX settings (single source of truth)"));
 
         let handler = context
             .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized to read POSIX config"))?;
+            .ok_or_else(field_error_callback(&span, "Unauthorized to read POSIX settings"))?;
 
         let inner = AdminBackendHandler::unsafe_get_handler(handler);
 
-        let cfg = inner.get_posix_config().await
+        let settings = inner.get_posix_settings().await
             .map_err(|e| FieldError::new(
-                "Failed to load posix_config",
+                "Failed to load posix_settings",
                 graphql_value!({ "details": (e.to_string()) }),
             ))?;
 
-        Ok(PosixConfig {
-            auto_gid_enabled: cfg.auto_gid_enabled,
-            gid_start: cfg.gid_start as i32,   // safe cast for Juniper
+        Ok(PosixSettings {
+            user_uidnumber_assign: settings.user_uidnumber_assign,
+            user_uidnumber_start: settings.user_uidnumber_start as i32,
+            user_uidnumber_max: settings.user_uidnumber_max as i32,
+            user_gidnumber_assign: settings.user_gidnumber_assign,
+            user_gidnumber_start: settings.user_gidnumber_start as i32,
+            user_loginshell_assign: settings.user_loginshell_assign,
+            user_loginshell_default: settings.user_loginshell_default,
+            user_homedirectory_assign: settings.user_homedirectory_assign,
+            user_homedirectory_prefix: settings.user_homedirectory_prefix,
+            group_gidnumber_assign: settings.group_gidnumber_assign,
+            group_gidnumber_start: settings.group_gidnumber_start as i32,
+            group_gidnumber_max: settings.group_gidnumber_max as i32,
         })
     }
 }
