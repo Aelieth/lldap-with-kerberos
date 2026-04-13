@@ -3,14 +3,14 @@
 DISCLAIMER:
 WORK IN PROGRESS / PERSONAL PROJECT and my first foray into Rust. Use at your own risk with optimistic caution!
 While you may report issues don't expect me to be on top of them as this is a hobby project.
-Built with aid of Grok / xAI - Thanks Grok!
+Built with aid of Grok / xAI. Thanks Grok and all of my agents - Tasker, Curiella, and ふわりね!
 -----------
 
 # KLLDAP – Lightweight LDAP with Kerberos
 
 Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
 
-~11,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
+~12,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
 
 ## Schema System – Single Source of Truth
 - All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`

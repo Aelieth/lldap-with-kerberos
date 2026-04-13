@@ -38,8 +38,9 @@ type Mutation {
   testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
   saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
   pushRealmToKeycloak(url: String!, realm: String!, adminUser: String!, adminPass: String!, lldapUrl: String!, syncUsername: String!, syncPassword: String!): PushRealmResponse!
-  setPosixConfig(input: PosixConfigInput!): PosixConfigResponse!
-  reassignGidNumbers: PosixConfigResponse!
+  setPosixSettings(input: PosixSettingsInput!): PosixSettingsResponse!
+  reassignUidNumbers: PosixSettingsResponse!
+  reassignGidNumbers: PosixSettingsResponse!
 }
 
 input SaveKeycloakConfigInput {
@@ -92,7 +93,7 @@ type Query {
   keycloakSuggestedConfig: KeycloakSuggestedConfig!
   keycloakConfig: KeycloakConfigResponse!
   userOus: [String!]!
-  posixConfig: PosixConfig!
+  posixSettings: PosixSettings!
 }
 
 "The details required to create a user."
@@ -115,20 +116,35 @@ input CreateUserInput {
   "Attributes." attributes: [AttributeValueInput!]
 }
 
+type ObjectClassInfo {
+  objectClass: String!
+  isHardcoded: Boolean!
+}
+
 type ExportKeytabForKeycloakResponse {
   ok: Boolean!
   path: String!
   errorMsg: String!
 }
 
-type ObjectClassInfo {
-  objectClass: String!
-  isHardcoded: Boolean!
-}
-
 type PushRealmResponse {
   ok: Boolean!
   message: String!
+}
+
+input PosixSettingsInput {
+  userUidnumberAssign: Boolean!
+  userUidnumberStart: Int!
+  userUidnumberMax: Int!
+  userGidnumberAssign: Boolean!
+  userGidnumberStart: Int!
+  userLoginshellAssign: Boolean!
+  userLoginshellDefault: String!
+  userHomedirectoryAssign: Boolean!
+  userHomedirectoryPrefix: String!
+  groupGidnumberAssign: Boolean!
+  groupGidnumberStart: Int!
+  groupGidnumberMax: Int!
 }
 
 type AttributeSchema {
@@ -169,19 +185,14 @@ input UpdateUserInput {
   """ insertAttributes: [AttributeValueInput!]
 }
 
-input PosixConfigInput {
-  autoGidEnabled: Boolean!
-  gidStart: Int!
-}
-
-type PosixConfigResponse {
-  success: Boolean!
-  message: String!
-}
-
 input EqualityConstraint {
   field: String!
   value: String!
+}
+
+type PosixSettingsResponse {
+  success: Boolean!
+  message: String!
 }
 
 type Schema {
@@ -275,11 +286,6 @@ type SaveKeycloakConfigResponse {
   message: String!
 }
 
-type PosixConfig {
-  autoGidEnabled: Boolean!
-  gidStart: Int!
-}
-
 type TestKeycloakConnectionResponse {
   ok: Boolean!
   message: String!
@@ -287,6 +293,21 @@ type TestKeycloakConnectionResponse {
 
 type Success {
   ok: Boolean!
+}
+
+type PosixSettings {
+  userUidnumberAssign: Boolean!
+  userUidnumberStart: Int!
+  userUidnumberMax: Int!
+  userGidnumberAssign: Boolean!
+  userGidnumberStart: Int!
+  userLoginshellAssign: Boolean!
+  userLoginshellDefault: String!
+  userHomedirectoryAssign: Boolean!
+  userHomedirectoryPrefix: String!
+  groupGidnumberAssign: Boolean!
+  groupGidnumberStart: Int!
+  groupGidnumberMax: Int!
 }
 
 schema {

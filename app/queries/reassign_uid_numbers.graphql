@@ -1,0 +1,6 @@
+mutation ReassignUidNumbers {
+  reassignUidNumbers {
+    success
+    message
+  }
+}

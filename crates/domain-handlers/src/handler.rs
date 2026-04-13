@@ -229,6 +229,7 @@ pub trait PosixBackendHandler: Send + Sync {
     async fn get_posix_settings(&self) -> Result<PosixSettings>;
     async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()>;
     async fn reassign_gid_numbers(&self) -> Result<()>;
+    async fn reassign_uid_numbers(&self) -> Result<()>;
 }
 
 #[cfg(test)]

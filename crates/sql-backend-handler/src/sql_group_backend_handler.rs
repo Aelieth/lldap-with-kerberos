@@ -276,7 +276,7 @@ impl GroupBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
 
-        let default_ou = self.get_allowed_ous().await?
+        let _default_ou = self.get_allowed_ous().await?
             .into_iter()
             .next()
             .unwrap_or_else(|| "groups".to_string());
@@ -318,22 +318,28 @@ impl GroupBackendHandler for SqlBackendHandler {
                         }
                     }
 
-                    // === POSIX gidNumber population hook (only when enabled) ===
+                    // === POSIX gidNumber auto-assign (only when enabled) ===
+                    // If admin supplied a non-zero gidNumber we keep it (already checked).
+                    // Otherwise compute next available that skips taken numbers.
                     let mut final_attributes = request.attributes;
 
                     if settings.group_gidnumber_assign {
-                        let next_gid = Self::compute_next_gid_number(transaction, settings.group_gidnumber_start).await?;
-                        final_attributes.push(Attribute {
-                            name: "gidnumber".into(),
-                            value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                        let already_has_gid = final_attributes.iter().any(|a| {
+                            a.name.as_str() == "gidnumber"
+                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
                         });
-                    }
 
-                    if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
-                        final_attributes.push(Attribute {
-                            name: "ou".into(),
-                            value: AttributeValue::String(Cardinality::Singleton(default_ou)),
-                        });
+                        if !already_has_gid {
+                            let next_gid = Self::next_available_gid_number(
+                                transaction,
+                                settings.group_gidnumber_start,
+                                settings.group_gidnumber_max,
+                            ).await?;
+                            final_attributes.push(Attribute {
+                                name: "gidnumber".into(),
+                                value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                            });
+                        }
                     }
 
                     let group_id = new_group.insert(transaction).await?.group_id;

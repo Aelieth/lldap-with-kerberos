@@ -10,7 +10,6 @@ use lldap_domain_model::{
     model,
 };
 use lldap_schema::{AttributeList, AttributeSchema, PublicSchema, Schema};
-use lldap_schema::schema::PosixSettings;
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
@@ -126,8 +125,28 @@ impl SqlBackendHandler {
             system_attributes: AttributeList {
                 attributes: vec![],  // system attributes are hardcoded in PublicSchema::get()
             },
-            // === NEW: POSIX settings (use default for now — all auto-assign off) ===
-            posix_settings: PosixSettings::default(),
+            // === POSIX settings — now loaded live from system_config table ===
+            posix_settings: {
+                let settings = Self::get_posix_settings_with_transaction(transaction).await?;
+                lldap_schema::schema::PosixSettings {
+                    user_uidnumber_assign: settings.user_uidnumber_assign,
+                    user_uidnumber_start: settings.user_uidnumber_start,
+                    user_uidnumber_max: settings.user_uidnumber_max,
+
+                    user_gidnumber_assign: settings.user_gidnumber_assign,
+                    user_gidnumber_start: settings.user_gidnumber_start,
+
+                    user_loginshell_assign: settings.user_loginshell_assign,
+                    user_loginshell_default: settings.user_loginshell_default,
+
+                    user_homedirectory_assign: settings.user_homedirectory_assign,
+                    user_homedirectory_prefix: settings.user_homedirectory_prefix,
+
+                    group_gidnumber_assign: settings.group_gidnumber_assign,
+                    group_gidnumber_start: settings.group_gidnumber_start,
+                    group_gidnumber_max: settings.group_gidnumber_max,
+                }
+            },
             extra_user_object_classes: Self::get_user_object_classes(transaction)
                 .await?
                 .into_iter()

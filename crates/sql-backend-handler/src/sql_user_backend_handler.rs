@@ -481,26 +481,49 @@ impl SqlBackendHandler {
             .map_err(|e| DomainError::InternalError(format!("Failed to parse posix_settings JSON: {}", e)))
     }
 
-    pub(crate) async fn compute_next_gid_number(
+        // === NEXT AVAILABLE POSIX NUMBER HELPERS (respect admin overrides + skip collisions) ===
+    pub(crate) async fn next_available_uid_number(
         transaction: &DatabaseTransaction,
         start: i64,
+        max: i64,
     ) -> Result<i64> {
-        let attributes = model::GroupAttributes::find()
-            .filter(model::group_attributes::Column::AttributeName.eq("gidnumber"))
-            .all(transaction)
-            .await?;
+        if start > max {
+            return Err(DomainError::InternalError(format!(
+                "uidNumber start ({}) > max ({})", start, max
+            )));
+        }
+        let mut candidate = start;
+        while candidate <= max {
+            if !Self::is_uidnumber_taken(transaction, candidate).await? {
+                return Ok(candidate);
+            }
+            candidate += 1;
+        }
+        Err(DomainError::InternalError(format!(
+            "No available uidNumber in range {}-{} (all taken)", start, max
+        )))
+    }
 
-        let max_gid = attributes
-            .into_iter()
-            .filter_map(|a| {
-                String::from_utf8(a.value.0)
-                    .ok()
-                    .and_then(|s| s.trim().parse::<i64>().ok())
-            })
-            .max()
-            .unwrap_or(start - 1);
-
-        Ok(max_gid + 1)
+    pub(crate) async fn next_available_gid_number(
+        transaction: &DatabaseTransaction,
+        start: i64,
+        max: i64,
+    ) -> Result<i64> {
+        if start > max {
+            return Err(DomainError::InternalError(format!(
+                "gidNumber start ({}) > max ({})", start, max
+            )));
+        }
+        let mut candidate = start;
+        while candidate <= max {
+            if !Self::is_gidnumber_taken(transaction, candidate).await? {
+                return Ok(candidate);
+            }
+            candidate += 1;
+        }
+        Err(DomainError::InternalError(format!(
+            "No available gidNumber in range {}-{} (all taken)", start, max
+        )))
     }
 
     // === DUPLICATE NUMBER ENFORCEMENT HELPERS (used by create/update user/group) ===
@@ -581,6 +604,64 @@ impl SqlBackendHandler {
                         update.update(transaction).await?;
 
                         next_gid += 1;
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_uid_numbers(&self) -> Result<()> {
+        let settings = self.get_posix_settings().await?;
+        if !settings.user_uidnumber_assign {
+            return Ok(());
+        }
+
+        self.sql_pool
+            .transaction::<_, (), DomainError>(|transaction| {
+                Box::pin(async move {
+                    let users = model::User::find()
+                        .order_by_asc(model::users::Column::CreationDate)
+                        .all(transaction)
+                        .await?;
+
+                    let mut next_uid = settings.user_uidnumber_start;
+
+                    for user in users {
+                        let user_id = user.user_id.clone();   // ← fix: clone so we can use it twice
+
+                        let uid_value = next_uid.to_string().into_bytes();
+
+                        let attr = model::user_attributes::ActiveModel {
+                            user_id: Set(user_id.clone()),
+                            attribute_name: Set(AttributeName::from("uidnumber")),
+                            value: Set(Serialized(uid_value)),
+                        };
+
+                        model::UserAttributes::insert(attr)
+                            .on_conflict(
+                                OnConflict::columns([
+                                    model::user_attributes::Column::UserId,
+                                    model::user_attributes::Column::AttributeName,
+                                ])
+                                .update_column(model::user_attributes::Column::Value)
+                                .to_owned(),
+                            )
+                            .exec(transaction)
+                            .await?;
+
+                        let now = chrono::Utc::now().naive_utc();
+                        let update = model::users::ActiveModel {
+                            user_id: Set(user_id),
+                            modified_date: Set(now),
+                            ..Default::default()
+                        };
+                        update.update(transaction).await?;
+
+                        next_uid += 1;
                     }
                     Ok(())
                 })
@@ -671,7 +752,7 @@ impl UserBackendHandler for SqlBackendHandler {
                     let schema = Self::get_schema_with_transaction(transaction).await?;
 
                     // === POSIX RANGE + DUPLICATE CHECKS ===
-                    let _settings = Self::get_posix_settings_with_transaction(transaction).await?;
+                    let settings = Self::get_posix_settings_with_transaction(transaction).await?;
 
                     for attr in &request.attributes {
                         let name = attr.name.as_str();
@@ -701,6 +782,50 @@ impl UserBackendHandler for SqlBackendHandler {
                         }
                     }
 
+                    // === POSIX auto-assign for users (uidNumber + optional gidNumber) ===
+                    // If admin supplied a non-zero number we keep it (already checked).
+                    // Otherwise compute next available that skips taken numbers.
+                    let mut final_attributes = request.attributes;
+
+                    if settings.user_uidnumber_assign {
+                        let already_has_uid = final_attributes.iter().any(|a| {
+                            a.name.as_str() == "uidnumber"
+                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
+                        });
+
+                        if !already_has_uid {
+                            let next_uid = Self::next_available_uid_number(
+                                transaction,
+                                settings.user_uidnumber_start,
+                                settings.user_uidnumber_max,
+                            ).await?;
+                            final_attributes.push(Attribute {
+                                name: "uidnumber".into(),
+                                value: AttributeValue::Integer(Cardinality::Singleton(next_uid)),
+                            });
+                        }
+                    }
+
+                    if settings.user_gidnumber_assign {
+                        let already_has_gid = final_attributes.iter().any(|a| {
+                            a.name.as_str() == "gidnumber"
+                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
+                        });
+
+                        if !already_has_gid {
+                            // user_gidnumber has no separate max in PosixSettings → use same global POSIX range
+                            let next_gid = Self::next_available_gid_number(
+                                transaction,
+                                settings.user_gidnumber_start,
+                                20000,
+                            ).await?;
+                            final_attributes.push(Attribute {
+                                name: "gidnumber".into(),
+                                value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                            });
+                        }
+                    }
+
                     let new_user = model::users::ActiveModel {
                         user_id: Set(request.user_id.clone()),
                         email: Set(request.email),
@@ -717,7 +842,7 @@ impl UserBackendHandler for SqlBackendHandler {
                     let _group_id = new_user.insert(transaction).await?.user_id;
                     let mut new_user_attributes = Vec::new();
 
-                    for attribute in request.attributes {
+                    for attribute in final_attributes {
                         let canonical_name = schema
                             .user_attributes()
                             .get_by_name_or_alias(attribute.name.as_str())
@@ -846,6 +971,10 @@ impl PosixBackendHandler for SqlBackendHandler {
 
     async fn reassign_gid_numbers(&self) -> Result<()> {
         self.reassign_gid_numbers().await
+    }
+
+    async fn reassign_uid_numbers(&self) -> Result<()> {
+        self.reassign_uid_numbers().await
     }
 }
 

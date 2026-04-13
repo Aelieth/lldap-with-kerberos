@@ -1,6 +1,16 @@
 query GetPosixConfig {
-  posixConfig {
-    autoGidEnabled
-    gidStart
+  posixSettings {
+    userUidnumberAssign
+    userUidnumberStart
+    userUidnumberMax
+    userGidnumberAssign
+    userGidnumberStart
+    userLoginshellAssign
+    userLoginshellDefault
+    userHomedirectoryAssign
+    userHomedirectoryPrefix
+    groupGidnumberAssign
+    groupGidnumberStart
+    groupGidnumberMax
   }
 }

@@ -1151,6 +1151,30 @@ async fn set_posix_settings(
         })
     }
 
+        async fn reassign_uid_numbers(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixSettingsResponse> {
+        let span = debug_span!("[GraphQL mutation] reassign_uid_numbers");
+        span.in_scope(|| debug!("Reassigning all user uidNumbers"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized uidNumber reassign"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+
+        inner.reassign_uid_numbers().await
+            .map_err(|e| FieldError::new(
+                "Failed to reassign uidNumbers",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixSettingsResponse {
+            success: true,
+            message: "✅ All user uidNumbers have been reassigned from the new starting value".to_string(),
+        })
+    }
+
     async fn reassign_gid_numbers(
         context: &Context<Handler>,
     ) -> FieldResult<PosixSettingsResponse> {

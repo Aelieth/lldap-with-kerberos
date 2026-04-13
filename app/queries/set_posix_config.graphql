@@ -1,5 +1,5 @@
-mutation SetPosixConfig($input: PosixConfigInput!) {
-  setPosixConfig(input: $input) {
+mutation SetPosixConfig($input: PosixSettingsInput!) {
+  setPosixSettings(input: $input) {
     success
     message
   }
