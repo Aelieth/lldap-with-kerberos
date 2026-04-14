@@ -39,7 +39,10 @@ type Mutation {
   saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
   pushRealmToKeycloak(url: String!, realm: String!, adminUser: String!, adminPass: String!, lldapUrl: String!, syncUsername: String!, syncPassword: String!): PushRealmResponse!
   setPosixSettings(input: PosixSettingsInput!): PosixSettingsResponse!
-  reassignUidNumbers: PosixSettingsResponse!
+  reassignUserUidNumbers: PosixSettingsResponse!
+  reassignUserGidNumbers: PosixSettingsResponse!
+  reassignUserHomedirectories: PosixSettingsResponse!
+  reassignUserLoginshells: PosixSettingsResponse!
   reassignGidNumbers: PosixSettingsResponse!
 }
 

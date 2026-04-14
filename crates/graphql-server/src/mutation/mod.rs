@@ -1151,10 +1151,10 @@ async fn set_posix_settings(
         })
     }
 
-        async fn reassign_uid_numbers(
+    async fn reassign_user_uid_numbers(
         context: &Context<Handler>,
     ) -> FieldResult<PosixSettingsResponse> {
-        let span = debug_span!("[GraphQL mutation] reassign_uid_numbers");
+        let span = debug_span!("[GraphQL mutation] reassign_user_uid_numbers");
         span.in_scope(|| debug!("Reassigning all user uidNumbers"));
 
         let handler = context
@@ -1163,15 +1163,87 @@ async fn set_posix_settings(
 
         let inner = AdminBackendHandler::unsafe_get_handler(handler);
 
-        inner.reassign_uid_numbers().await
+        inner.reassign_user_uid_numbers().await
             .map_err(|e| FieldError::new(
-                "Failed to reassign uidNumbers",
+                "Failed to reassign user uidNumbers",
                 graphql_value!({ "details": (e.to_string()) }),
             ))?;
 
         Ok(PosixSettingsResponse {
             success: true,
             message: "✅ All user uidNumbers have been reassigned from the new starting value".to_string(),
+        })
+    }
+
+    async fn reassign_user_gid_numbers(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixSettingsResponse> {
+        let span = debug_span!("[GraphQL mutation] reassign_user_gid_numbers");
+        span.in_scope(|| debug!("Reassigning all user gidNumbers"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized gidNumber reassign"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+
+        inner.reassign_user_gid_numbers().await
+            .map_err(|e| FieldError::new(
+                "Failed to reassign user gidNumbers",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixSettingsResponse {
+            success: true,
+            message: "✅ All user gidNumbers have been reassigned from the new starting value".to_string(),
+        })
+    }
+
+    async fn reassign_user_homedirectories(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixSettingsResponse> {
+        let span = debug_span!("[GraphQL mutation] reassign_user_homedirectories");
+        span.in_scope(|| debug!("Reassigning all user homeDirectories"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized homeDirectory reassign"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+
+        inner.reassign_user_homedirectories().await
+            .map_err(|e| FieldError::new(
+                "Failed to reassign user homeDirectories",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixSettingsResponse {
+            success: true,
+            message: "✅ All user homeDirectories have been reassigned".to_string(),
+        })
+    }
+
+    async fn reassign_user_loginshells(
+        context: &Context<Handler>,
+    ) -> FieldResult<PosixSettingsResponse> {
+        let span = debug_span!("[GraphQL mutation] reassign_user_loginshells");
+        span.in_scope(|| debug!("Reassigning all user loginShells"));
+
+        let handler = context
+            .get_admin_handler()
+            .ok_or_else(field_error_callback(&span, "Unauthorized loginShell reassign"))?;
+
+        let inner = AdminBackendHandler::unsafe_get_handler(handler);
+
+        inner.reassign_user_loginshells().await
+            .map_err(|e| FieldError::new(
+                "Failed to reassign user loginShells",
+                graphql_value!({ "details": (e.to_string()) }),
+            ))?;
+
+        Ok(PosixSettingsResponse {
+            success: true,
+            message: "✅ All user loginShells have been reassigned".to_string(),
         })
     }
 

@@ -526,6 +526,35 @@ impl SqlBackendHandler {
         )))
     }
 
+    pub(crate) async fn user_gid_number(
+        transaction: &DatabaseTransaction,
+        start: i64,
+        max: i64,
+    ) -> Result<i64> {
+        if start > max {
+            return Err(DomainError::InternalError(format!(
+                "user_gidnumber start ({}) > max ({})", start, max
+            )));
+        }
+        let mut candidate = start;
+        while candidate <= max {
+            // Only check user table — groups are allowed to share the same gid number
+            let taken = model::UserAttributes::find()
+            .filter(model::UserAttributesColumn::AttributeName.eq("gidnumber"))
+            .filter(model::UserAttributesColumn::Value.eq(candidate.to_string().into_bytes()))
+            .count(transaction)
+            .await? > 0;
+
+            if !taken {
+                return Ok(candidate);
+            }
+            candidate += 1;
+        }
+        Err(DomainError::InternalError(format!(
+            "No available user gidNumber in range {}-{} (all taken)", start, max
+        )))
+    }
+
     // === DUPLICATE NUMBER ENFORCEMENT HELPERS (used by create/update user/group) ===
     pub(crate) async fn is_uidnumber_taken(
         transaction: &DatabaseTransaction,
@@ -613,61 +642,114 @@ impl SqlBackendHandler {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "info", err)]
-    pub async fn reassign_uid_numbers(&self) -> Result<()> {
+        #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_user_uid_numbers(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.user_uidnumber_assign {
-            return Ok(());
-        }
+        if !settings.user_uidnumber_assign { return Ok(()); }
 
-        self.sql_pool
-            .transaction::<_, (), DomainError>(|transaction| {
-                Box::pin(async move {
-                    let users = model::User::find()
-                        .order_by_asc(model::users::Column::CreationDate)
-                        .all(transaction)
-                        .await?;
-
-                    let mut next_uid = settings.user_uidnumber_start;
-
-                    for user in users {
-                        let user_id = user.user_id.clone();   // ← fix: clone so we can use it twice
-
-                        let uid_value = next_uid.to_string().into_bytes();
-
-                        let attr = model::user_attributes::ActiveModel {
-                            user_id: Set(user_id.clone()),
-                            attribute_name: Set(AttributeName::from("uidnumber")),
-                            value: Set(Serialized(uid_value)),
-                        };
-
-                        model::UserAttributes::insert(attr)
-                            .on_conflict(
-                                OnConflict::columns([
-                                    model::user_attributes::Column::UserId,
-                                    model::user_attributes::Column::AttributeName,
-                                ])
-                                .update_column(model::user_attributes::Column::Value)
-                                .to_owned(),
-                            )
-                            .exec(transaction)
-                            .await?;
-
-                        let now = chrono::Utc::now().naive_utc();
-                        let update = model::users::ActiveModel {
-                            user_id: Set(user_id),
-                            modified_date: Set(now),
-                            ..Default::default()
-                        };
-                        update.update(transaction).await?;
-
-                        next_uid += 1;
-                    }
-                    Ok(())
-                })
+        self.sql_pool.transaction::<_, (), DomainError>(|tx| {
+            Box::pin(async move {
+                let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
+                let mut next = settings.user_uidnumber_start;
+                for user in users {
+                    let uid_value = next.to_string().into_bytes();
+                    let attr = model::user_attributes::ActiveModel {
+                        user_id: Set(user.user_id.clone()),
+                        attribute_name: Set(AttributeName::from("uidnumber")),
+                        value: Set(Serialized(uid_value)),
+                    };
+                    model::UserAttributes::insert(attr)
+                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                        .exec(tx).await?;
+                    let now = chrono::Utc::now().naive_utc();
+                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                    next += 1;
+                }
+                Ok(())
             })
-            .await?;
+        }).await?;
+        Ok(())
+    }
 
+    #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_user_gid_numbers(&self) -> Result<()> {
+        let settings = self.get_posix_settings().await?;
+        if !settings.user_gidnumber_assign { return Ok(()); }
+
+        self.sql_pool.transaction::<_, (), DomainError>(|tx| {
+            Box::pin(async move {
+                let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
+                let mut next = settings.user_gidnumber_start;
+                for user in users {
+                    let gid_value = next.to_string().into_bytes();
+                    let attr = model::user_attributes::ActiveModel {
+                        user_id: Set(user.user_id.clone()),
+                        attribute_name: Set(AttributeName::from("gidnumber")),
+                        value: Set(Serialized(gid_value)),
+                    };
+                    model::UserAttributes::insert(attr)
+                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                        .exec(tx).await?;
+                    let now = chrono::Utc::now().naive_utc();
+                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                    next += 1;
+                }
+                Ok(())
+            })
+        }).await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_user_homedirectories(&self) -> Result<()> {
+        let settings = self.get_posix_settings().await?;
+        if !settings.user_homedirectory_assign { return Ok(()); }
+
+        self.sql_pool.transaction::<_, (), DomainError>(|tx| {
+            Box::pin(async move {
+                let users = model::User::find().all(tx).await?;
+                for user in users {
+                    let home = format!("{}/{}", settings.user_homedirectory_prefix, user.user_id);
+                    let attr = model::user_attributes::ActiveModel {
+                        user_id: Set(user.user_id.clone()),
+                        attribute_name: Set(AttributeName::from("homedirectory")),
+                        value: Set(Serialized(home.into_bytes())),
+                    };
+                    model::UserAttributes::insert(attr)
+                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                        .exec(tx).await?;
+                    let now = chrono::Utc::now().naive_utc();
+                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                }
+                Ok(())
+            })
+        }).await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "info", err)]
+    pub async fn reassign_user_loginshells(&self) -> Result<()> {
+        let settings = self.get_posix_settings().await?;
+        if !settings.user_loginshell_assign { return Ok(()); }
+
+        self.sql_pool.transaction::<_, (), DomainError>(|tx| {
+            Box::pin(async move {
+                let users = model::User::find().all(tx).await?;
+                for user in users {
+                    let attr = model::user_attributes::ActiveModel {
+                        user_id: Set(user.user_id.clone()),
+                        attribute_name: Set(AttributeName::from("loginshell")),
+                        value: Set(Serialized(settings.user_loginshell_default.clone().into_bytes())),
+                    };
+                    model::UserAttributes::insert(attr)
+                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                        .exec(tx).await?;
+                    let now = chrono::Utc::now().naive_utc();
+                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                }
+                Ok(())
+            })
+        }).await?;
         Ok(())
     }
 }
@@ -782,9 +864,8 @@ impl UserBackendHandler for SqlBackendHandler {
                         }
                     }
 
-                    // === POSIX auto-assign for users (uidNumber + optional gidNumber) ===
-                    // If admin supplied a non-zero number we keep it (already checked).
-                    // Otherwise compute next available that skips taken numbers.
+                    // === POSIX auto-assign for users (uidNumber + gidNumber + loginShell + homeDirectory) ===
+                    // If admin supplied a value we keep it. Otherwise use the configured default when flag is true.
                     let mut final_attributes = request.attributes;
 
                     if settings.user_uidnumber_assign {
@@ -792,7 +873,6 @@ impl UserBackendHandler for SqlBackendHandler {
                             a.name.as_str() == "uidnumber"
                                 && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
                         });
-
                         if !already_has_uid {
                             let next_uid = Self::next_available_uid_number(
                                 transaction,
@@ -809,19 +889,39 @@ impl UserBackendHandler for SqlBackendHandler {
                     if settings.user_gidnumber_assign {
                         let already_has_gid = final_attributes.iter().any(|a| {
                             a.name.as_str() == "gidnumber"
-                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
+                            && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
                         });
 
                         if !already_has_gid {
-                            // user_gidnumber has no separate max in PosixSettings → use same global POSIX range
-                            let next_gid = Self::next_available_gid_number(
+                            let next_gid = Self::user_gid_number(
                                 transaction,
                                 settings.user_gidnumber_start,
                                 20000,
                             ).await?;
                             final_attributes.push(Attribute {
                                 name: "gidnumber".into(),
-                                value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                                                  value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                            });
+                        }
+                    }
+
+                    if settings.user_loginshell_assign {
+                        let already_has_shell = final_attributes.iter().any(|a| a.name.as_str() == "loginshell");
+                        if !already_has_shell {
+                            final_attributes.push(Attribute {
+                                name: "loginshell".into(),
+                                value: AttributeValue::String(Cardinality::Singleton(settings.user_loginshell_default.clone())),
+                            });
+                        }
+                    }
+
+                    if settings.user_homedirectory_assign {
+                        let already_has_home = final_attributes.iter().any(|a| a.name.as_str() == "homedirectory");
+                        if !already_has_home {
+                            let home_dir = format!("{}/{}", settings.user_homedirectory_prefix, request.user_id);
+                            final_attributes.push(Attribute {
+                                name: "homedirectory".into(),
+                                value: AttributeValue::String(Cardinality::Singleton(home_dir)),
                             });
                         }
                     }
@@ -964,17 +1064,23 @@ impl PosixBackendHandler for SqlBackendHandler {
     async fn get_posix_settings(&self) -> Result<PosixSettings> {
         self.get_posix_settings().await
     }
-
     async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()> {
         self.set_posix_settings(settings).await
     }
-
     async fn reassign_gid_numbers(&self) -> Result<()> {
         self.reassign_gid_numbers().await
     }
-
-    async fn reassign_uid_numbers(&self) -> Result<()> {
-        self.reassign_uid_numbers().await
+    async fn reassign_user_uid_numbers(&self) -> Result<()> {
+        self.reassign_user_uid_numbers().await
+    }
+    async fn reassign_user_gid_numbers(&self) -> Result<()> {
+        self.reassign_user_gid_numbers().await
+    }
+    async fn reassign_user_homedirectories(&self) -> Result<()> {
+        self.reassign_user_homedirectories().await
+    }
+    async fn reassign_user_loginshells(&self) -> Result<()> {
+        self.reassign_user_loginshells().await
     }
 }
 

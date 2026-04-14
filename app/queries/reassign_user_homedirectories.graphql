@@ -1,0 +1,6 @@
+mutation ReassignUserHomeDirectories {
+  reassignUserHomedirectories {
+    success
+    message
+  }
+}

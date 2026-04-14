@@ -40,11 +40,38 @@ pub struct ReassignGidNumbers;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/reassign_uid_numbers.graphql",
+    query_path = "queries/reassign_user_uid_numbers.graphql",
     response_derives = "Debug",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct ReassignUidNumbers;
+pub struct ReassignUserUidNumbers;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/reassign_user_gid_numbers.graphql",
+response_derives = "Debug",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct ReassignUserGidNumbers;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/reassign_user_homedirectories.graphql",
+response_derives = "Debug",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct ReassignUserHomeDirectories;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/reassign_user_loginshells.graphql",
+response_derives = "Debug",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct ReassignUserLoginShells;
 
 #[derive(Properties, PartialEq)]
 pub struct PosixOptionsProps {
@@ -67,7 +94,7 @@ pub struct PosixOptions {
     group_gidnumber_assign: bool,
     group_gidnumber_start: String,
     group_gidnumber_max: String,
-
+    ranges_changed: bool,
     config_changed: bool,
     loading: bool,
 }
@@ -89,10 +116,12 @@ pub enum Msg {
     UpdateGroupGidMax(String),
     SaveConfig,
     SaveResponse(Result<set_posix_config::ResponseData>),
-    ReassignGidNumbers,
-    ReassignUidNumbers,
-    ReassignGidResponse(Result<reassign_gid_numbers::ResponseData>),
-    ReassignUidResponse(Result<reassign_uid_numbers::ResponseData>),
+    ReassignUserUidNumbers,
+    ReassignUserGidNumbers,
+    ReassignUserLoginShells,
+    ReassignUserHomeDirectories,
+    ReassignGroupGidNumbers,
+    ReassignResponse(Result<reassign_gid_numbers::ResponseData>),
 }
 
 impl CommonComponent<PosixOptions> for PosixOptions {
@@ -143,6 +172,7 @@ impl CommonComponent<PosixOptions> for PosixOptions {
             Msg::UpdateGroupGidAssign(v) => { self.group_gidnumber_assign = v; self.config_changed = true; Ok(true) }
             Msg::UpdateGroupGidStart(s) => { self.group_gidnumber_start = s; self.config_changed = true; Ok(true) }
             Msg::UpdateGroupGidMax(s) => { self.group_gidnumber_max = s; self.config_changed = true; Ok(true) }
+
             Msg::SaveConfig => {
                 let input = set_posix_config::PosixSettingsInput {
                     userUidnumberAssign: self.user_uidnumber_assign,
@@ -173,34 +203,51 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                 ctx.props().on_status_update.emit(format!("❌ Failed to save POSIX config: {}", e));
                 Ok(true)
             }
-            Msg::ReassignGidNumbers => {
+
+            // Reassign actions - using closures to fix type mismatch
+            Msg::ReassignUserUidNumbers => {
+                let vars = reassign_user_uid_numbers::Variables {};
+                self.common.call_graphql::<ReassignUserUidNumbers, _>(
+                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user uidNumbers",
+                );
+                Ok(false)
+            }
+            Msg::ReassignUserGidNumbers => {
+                let vars = reassign_user_gid_numbers::Variables {};
+                self.common.call_graphql::<ReassignUserGidNumbers, _>(
+                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user gidNumbers",
+                );
+                Ok(false)
+            }
+            Msg::ReassignUserLoginShells => {
+                let vars = reassign_user_loginshells::Variables {};
+                self.common.call_graphql::<ReassignUserLoginShells, _>(
+                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user loginShells",
+                );
+                Ok(false)
+            }
+            Msg::ReassignUserHomeDirectories => {
+                let vars = reassign_user_homedirectories::Variables {};
+                self.common.call_graphql::<ReassignUserHomeDirectories, _>(
+                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user homeDirectories",
+                );
+                Ok(false)
+            }
+            Msg::ReassignGroupGidNumbers => {
                 let vars = reassign_gid_numbers::Variables {};
                 self.common.call_graphql::<ReassignGidNumbers, _>(
-                    ctx, vars, Msg::ReassignGidResponse, "Failed to reassign gidNumbers",
+                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign group gidNumbers",
                 );
                 Ok(false)
             }
-            Msg::ReassignUidNumbers => {
-                let vars = reassign_uid_numbers::Variables {};
-                self.common.call_graphql::<ReassignUidNumbers, _>(
-                    ctx, vars, Msg::ReassignUidResponse, "Failed to reassign uidNumbers",
-                );
-                Ok(false)
-            }
-            Msg::ReassignGidResponse(Ok(_)) => {
-                ctx.props().on_status_update.emit("✅ All group gidNumbers reassigned successfully".to_string());
+
+            // Shared response handler
+            Msg::ReassignResponse(Ok(_)) => {
+                ctx.props().on_status_update.emit("✅ Reassign completed successfully".to_string());
                 Ok(true)
             }
-            Msg::ReassignGidResponse(Err(e)) => {
-                ctx.props().on_status_update.emit(format!("❌ Reassign gidNumbers failed: {}", e));
-                Ok(true)
-            }
-            Msg::ReassignUidResponse(Ok(_)) => {
-                ctx.props().on_status_update.emit("✅ All user uidNumbers reassigned successfully".to_string());
-                Ok(true)
-            }
-            Msg::ReassignUidResponse(Err(e)) => {
-                ctx.props().on_status_update.emit(format!("❌ Reassign uidNumbers failed: {}", e));
+            Msg::ReassignResponse(Err(e)) => {
+                ctx.props().on_status_update.emit(format!("❌ Reassign failed: {}", e));
                 Ok(true)
             }
         }
@@ -229,6 +276,7 @@ impl Component for PosixOptions {
             group_gidnumber_assign: false,
             group_gidnumber_start: "3001".to_string(),
             group_gidnumber_max: "3999".to_string(),
+            ranges_changed: false,
             config_changed: false,
             loading: true,
         }
@@ -241,6 +289,7 @@ impl Component for PosixOptions {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 
+        // Toggle & input callbacks
         let on_user_uid_assign = link.callback(|e: Event| {
             let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
             Msg::UpdateUserUidAssign(checked)
@@ -269,9 +318,14 @@ impl Component for PosixOptions {
         let on_group_gid_start = link.callback(|e: InputEvent| Msg::UpdateGroupGidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_group_gid_max = link.callback(|e: InputEvent| Msg::UpdateGroupGidMax(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
 
+        // Reassign callbacks
+        let on_reassign_user_uid = link.callback(|_| Msg::ReassignUserUidNumbers);
+        let on_reassign_user_gid = link.callback(|_| Msg::ReassignUserGidNumbers);
+        let on_reassign_user_loginshell = link.callback(|_| Msg::ReassignUserLoginShells);
+        let on_reassign_user_home = link.callback(|_| Msg::ReassignUserHomeDirectories);
+        let on_reassign_group_gid = link.callback(|_| Msg::ReassignGroupGidNumbers);
+
         let on_save = link.callback(|_| Msg::SaveConfig);
-        let on_reassign_uid = link.callback(|_| Msg::ReassignUidNumbers);
-        let on_reassign_gid = link.callback(|_| Msg::ReassignGidNumbers);
 
         let save_disabled = self.loading || !self.config_changed;
         let reassign_disabled = !self.config_changed || self.loading;
@@ -282,85 +336,73 @@ impl Component for PosixOptions {
                     <div class="card mb-4">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5>{ "POSIX Attributes" }</h5>
-                            <span class="badge bg-info">{ "Status: POSIX config loaded successfully" }</span>  // parent alert handles real status
+                            <span class="badge bg-info">{ "Status: POSIX config loaded successfully" }</span>
                         </div>
                         <div class="card-body">
 
                             // USERS SECTION
                             <h6 class="text-muted mb-3">{ "USERS SECTION" }</h6>
                             <div class="mb-4">
-                                <div class="form-check mb-3">
-                                    <input type="checkbox" class="form-check-input" checked={self.user_uidnumber_assign} onchange={on_user_uid_assign} disabled={self.loading} />
-                                    <label class="form-check-label">{ "Auto-assign uidNumber to new users" }</label>
-                                </div>
-                                <div class="row g-3 mb-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label">{"Starting uidNumber"}</label>
-                                        <input type="number" class="form-control" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="1000" disabled={self.loading} />
+                                <div class="d-flex align-items-center mb-3">
+                                    <div class="form-check flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" checked={self.user_uidnumber_assign} onchange={on_user_uid_assign} disabled={self.loading} />
+                                        <label class="form-check-label">{ "Auto-assign uidNumber range:" }</label>
                                     </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">{"Maximum"}</label>
-                                        <input type="number" class="form-control" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="1000" disabled={self.loading} />
+                                    <span class="mx-1 text-muted small">{ "to" }</span>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="1000" disabled={self.loading} />
+                                    <button onclick={on_reassign_user_uid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                </div>
+
+                                <div class="d-flex align-items-center mb-3">
+                                    <div class="form-check flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" checked={self.user_gidnumber_assign} onchange={on_user_gid_assign} disabled={self.loading} />
+                                        <label class="form-check-label">{ "Auto-assign gidNumber:" }</label>
                                     </div>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 120px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="1000" disabled={self.loading} />
+                                    <button onclick={on_reassign_user_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
 
-                                <div class="form-check mb-3">
-                                    <input type="checkbox" class="form-check-input" checked={self.user_gidnumber_assign} onchange={on_user_gid_assign} disabled={self.loading} />
-                                    <label class="form-check-label">{ "Auto-assign gidNumber to new users" }</label>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">{"Starting gidNumber"}</label>
-                                    <input type="number" class="form-control" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="1000" disabled={self.loading} />
-                                </div>
-
-                                <div class="form-check mb-3">
-                                    <input type="checkbox" class="form-check-input" checked={self.user_loginshell_assign} onchange={on_user_loginshell_assign} disabled={self.loading} />
-                                    <label class="form-check-label">{ "Auto-assign loginShell" }</label>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">{"Default loginShell"}</label>
-                                    <input type="text" class="form-control" value={self.user_loginshell_default.clone()} oninput={on_user_loginshell_default} disabled={self.loading} />
+                                <div class="d-flex align-items-center mb-3">
+                                    <div class="form-check flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" checked={self.user_loginshell_assign} onchange={on_user_loginshell_assign} disabled={self.loading} />
+                                        <label class="form-check-label">{ "Auto-assign loginShell:" }</label>
+                                    </div>
+                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_loginshell_default.clone()} oninput={on_user_loginshell_default} disabled={self.loading} />
+                                    <button onclick={on_reassign_user_loginshell} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
 
-                                <div class="form-check mb-3">
-                                    <input type="checkbox" class="form-check-input" checked={self.user_homedirectory_assign} onchange={on_user_home_assign} disabled={self.loading} />
-                                    <label class="form-check-label">{ "Auto-assign homeDirectory" }</label>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">{"Home prefix"}</label>
-                                    <input type="text" class="form-control" value={self.user_homedirectory_prefix.clone()} oninput={on_user_home_prefix} disabled={self.loading} />
+                                <div class="d-flex align-items-center mb-3">
+                                    <div class="form-check flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" checked={self.user_homedirectory_assign} onchange={on_user_home_assign} disabled={self.loading} />
+                                        <label class="form-check-label">{ "Auto-assign homeDirectory:" }</label>
+                                    </div>
+                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_homedirectory_prefix.clone()} oninput={on_user_home_prefix} disabled={self.loading} />
+                                    <button onclick={on_reassign_user_home} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
                             </div>
 
                             // GROUPS SECTION
                             <h6 class="text-muted mb-3">{ "GROUPS SECTION" }</h6>
                             <div class="mb-4">
-                                <div class="form-check mb-3">
-                                    <input type="checkbox" class="form-check-input" checked={self.group_gidnumber_assign} onchange={on_group_gid_assign} disabled={self.loading} />
-                                    <label class="form-check-label">{ "Auto-assign gidNumber to new groups" }</label>
-                                </div>
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label">{"Starting gidNumber"}</label>
-                                        <input type="number" class="form-control" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="1000" disabled={self.loading} />
+                                <div class="d-flex align-items-center">
+                                    <div class="form-check flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" checked={self.group_gidnumber_assign} onchange={on_group_gid_assign} disabled={self.loading} />
+                                        <label class="form-check-label">{ "Auto-assign gidNumber range:" }</label>
                                     </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">{"Maximum"}</label>
-                                        <input type="number" class="form-control" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="1000" disabled={self.loading} />
-                                    </div>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="1000" disabled={self.loading} />
+                                    <span class="mx-1 text-muted small">{ "to" }</span>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="1000" disabled={self.loading} />
+                                    <button onclick={on_reassign_group_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
                             </div>
+
                         </div>
 
-                        <div class="card-footer d-flex gap-2">
-                            <button onclick={on_save} class="btn btn-success flex-fill" disabled={save_disabled}>
+                        // Save button right-aligned with breathing room
+                        <div class="card-footer text-end pe-3">
+                            <button onclick={on_save} class="btn btn-success px-4" disabled={save_disabled}>
                                 { "Save POSIX Config" }
-                            </button>
-                            <button onclick={on_reassign_uid} class="btn btn-warning flex-fill" disabled={reassign_disabled}>
-                                { "Reassign uidNumbers" }
-                            </button>
-                            <button onclick={on_reassign_gid} class="btn btn-warning flex-fill" disabled={reassign_disabled}>
-                                { "Reassign gidNumbers" }
                             </button>
                         </div>
                     </div>
