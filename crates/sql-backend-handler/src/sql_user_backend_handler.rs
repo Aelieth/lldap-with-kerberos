@@ -526,35 +526,6 @@ impl SqlBackendHandler {
         )))
     }
 
-    pub(crate) async fn user_gid_number(
-        transaction: &DatabaseTransaction,
-        start: i64,
-        max: i64,
-    ) -> Result<i64> {
-        if start > max {
-            return Err(DomainError::InternalError(format!(
-                "user_gidnumber start ({}) > max ({})", start, max
-            )));
-        }
-        let mut candidate = start;
-        while candidate <= max {
-            // Only check user table — groups are allowed to share the same gid number
-            let taken = model::UserAttributes::find()
-            .filter(model::UserAttributesColumn::AttributeName.eq("gidnumber"))
-            .filter(model::UserAttributesColumn::Value.eq(candidate.to_string().into_bytes()))
-            .count(transaction)
-            .await? > 0;
-
-            if !taken {
-                return Ok(candidate);
-            }
-            candidate += 1;
-        }
-        Err(DomainError::InternalError(format!(
-            "No available user gidNumber in range {}-{} (all taken)", start, max
-        )))
-    }
-
     // === DUPLICATE NUMBER ENFORCEMENT HELPERS (used by create/update user/group) ===
     pub(crate) async fn is_uidnumber_taken(
         transaction: &DatabaseTransaction,
@@ -893,14 +864,10 @@ impl UserBackendHandler for SqlBackendHandler {
                         });
 
                         if !already_has_gid {
-                            let next_gid = Self::user_gid_number(
-                                transaction,
-                                settings.user_gidnumber_start,
-                                20000,
-                            ).await?;
+                            // STATIC assignment — every user gets the exact same gidNumber from config
                             final_attributes.push(Attribute {
                                 name: "gidnumber".into(),
-                                                  value: AttributeValue::Integer(Cardinality::Singleton(next_gid)),
+                                value: AttributeValue::Integer(Cardinality::Singleton(settings.user_gidnumber_start)),
                             });
                         }
                     }

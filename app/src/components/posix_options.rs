@@ -1,4 +1,3 @@
-// crates/graphql-server/src/components/posix_options.rs
 use crate::{
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
@@ -9,7 +8,6 @@ use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 use wasm_bindgen::JsCast;
 
-// GraphQL derives (kept inside the component file so POSIX stays 100% self-contained)
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
@@ -48,28 +46,28 @@ pub struct ReassignUserUidNumbers;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "queries/reassign_user_gid_numbers.graphql",
-response_derives = "Debug",
-custom_scalars_module = "crate::infra::graphql"
+    schema_path = "../schema.graphql",
+    query_path = "queries/reassign_user_gid_numbers.graphql",
+    response_derives = "Debug",
+    custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct ReassignUserGidNumbers;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "queries/reassign_user_homedirectories.graphql",
-response_derives = "Debug",
-custom_scalars_module = "crate::infra::graphql"
+    schema_path = "../schema.graphql",
+    query_path = "queries/reassign_user_homedirectories.graphql",
+    response_derives = "Debug",
+    custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct ReassignUserHomeDirectories;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "queries/reassign_user_loginshells.graphql",
-response_derives = "Debug",
-custom_scalars_module = "crate::infra::graphql"
+    schema_path = "../schema.graphql",
+    query_path = "queries/reassign_user_loginshells.graphql",
+    response_derives = "Debug",
+    custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct ReassignUserLoginShells;
 
@@ -94,9 +92,13 @@ pub struct PosixOptions {
     group_gidnumber_assign: bool,
     group_gidnumber_start: String,
     group_gidnumber_max: String,
-    ranges_changed: bool,
+
     config_changed: bool,
     loading: bool,
+
+    // NEW: local dynamic status (exactly matches your ASCII layout)
+    status: String,
+    status_class: String, // bg-success / bg-danger / bg-info
 }
 
 pub enum Msg {
@@ -121,7 +123,7 @@ pub enum Msg {
     ReassignUserLoginShells,
     ReassignUserHomeDirectories,
     ReassignGroupGidNumbers,
-    ReassignResponse(Result<reassign_gid_numbers::ResponseData>),
+    ReassignResponse(Result<()>),
 }
 
 impl CommonComponent<PosixOptions> for PosixOptions {
@@ -133,6 +135,8 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                     ctx, vars, Msg::ConfigResponse, "Failed to load POSIX config",
                 );
                 self.loading = true;
+                self.status = "Loading POSIX config...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::ConfigResponse(Ok(data)) => {
@@ -152,14 +156,20 @@ impl CommonComponent<PosixOptions> for PosixOptions {
 
                 self.loading = false;
                 self.config_changed = false;
-                ctx.props().on_status_update.emit("✅ POSIX config loaded successfully".to_string());
+                self.status = "POSIX config loaded".to_string();
+                self.status_class = "bg-success".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::ConfigResponse(Err(e)) => {
                 self.loading = false;
-                ctx.props().on_status_update.emit(format!("❌ Failed to load POSIX config: {}", e));
+                self.status = format!("❌ Failed to load POSIX config: {}", e);
+                self.status_class = "bg-danger".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
+
+            // ... (all Update* handlers unchanged) ...
             Msg::UpdateUserUidAssign(v) => { self.user_uidnumber_assign = v; self.config_changed = true; Ok(true) }
             Msg::UpdateUserUidStart(s) => { self.user_uidnumber_start = s; self.config_changed = true; Ok(true) }
             Msg::UpdateUserUidMax(s) => { self.user_uidnumber_max = s; self.config_changed = true; Ok(true) }
@@ -192,62 +202,81 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                 self.common.call_graphql::<SetPosixConfig, _>(
                     ctx, vars, Msg::SaveResponse, "Failed to save POSIX config",
                 );
+                self.status = "Saving...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::SaveResponse(Ok(_)) => {
                 self.config_changed = false;
-                ctx.props().on_status_update.emit("✅ POSIX config saved successfully".to_string());
+                self.status = "✅ POSIX config saved successfully".to_string();
+                self.status_class = "bg-success".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::SaveResponse(Err(e)) => {
-                ctx.props().on_status_update.emit(format!("❌ Failed to save POSIX config: {}", e));
+                self.status = format!("❌ Failed to save POSIX config: {}", e);
+                self.status_class = "bg-danger".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
 
-            // Reassign actions - using closures to fix type mismatch
+            // Reassign actions
             Msg::ReassignUserUidNumbers => {
                 let vars = reassign_user_uid_numbers::Variables {};
                 self.common.call_graphql::<ReassignUserUidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user uidNumbers",
+                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user uidNumbers",
                 );
+                self.status = "Reassigning user uidNumbers...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::ReassignUserGidNumbers => {
                 let vars = reassign_user_gid_numbers::Variables {};
                 self.common.call_graphql::<ReassignUserGidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user gidNumbers",
+                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user gidNumbers",
                 );
+                self.status = "Reassigning user gidNumbers...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::ReassignUserLoginShells => {
-                let vars = reassign_user_loginshells::Variables {};
+                let vars = reassign_user_login_shells::Variables {};
                 self.common.call_graphql::<ReassignUserLoginShells, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user loginShells",
+                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user loginShells",
                 );
+                self.status = "Reassigning user loginShells...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::ReassignUserHomeDirectories => {
-                let vars = reassign_user_homedirectories::Variables {};
+                let vars = reassign_user_home_directories::Variables {};
                 self.common.call_graphql::<ReassignUserHomeDirectories, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign user homeDirectories",
+                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user homeDirectories",
                 );
+                self.status = "Reassigning user homeDirectories...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::ReassignGroupGidNumbers => {
                 let vars = reassign_gid_numbers::Variables {};
                 self.common.call_graphql::<ReassignGidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r), "Failed to reassign group gidNumbers",
+                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign group gidNumbers",
                 );
+                self.status = "Reassigning group gidNumbers...".to_string();
+                self.status_class = "bg-info".to_string();
                 Ok(false)
             }
 
-            // Shared response handler
             Msg::ReassignResponse(Ok(_)) => {
-                ctx.props().on_status_update.emit("✅ Reassign completed successfully".to_string());
+                self.status = "✅ Reassign completed successfully".to_string();
+                self.status_class = "bg-success".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::ReassignResponse(Err(e)) => {
-                ctx.props().on_status_update.emit(format!("❌ Reassign failed: {}", e));
+                self.status = format!("❌ Reassign failed: {}", e);
+                self.status_class = "bg-danger".to_string();
+                ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
         }
@@ -276,9 +305,10 @@ impl Component for PosixOptions {
             group_gidnumber_assign: false,
             group_gidnumber_start: "3001".to_string(),
             group_gidnumber_max: "3999".to_string(),
-            ranges_changed: false,
             config_changed: false,
             loading: true,
+            status: "Loading POSIX config...".to_string(),
+            status_class: "bg-info".to_string(),
         }
     }
 
@@ -289,7 +319,7 @@ impl Component for PosixOptions {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 
-        // Toggle & input callbacks
+        // (callbacks unchanged — only the status badge is new in the header)
         let on_user_uid_assign = link.callback(|e: Event| {
             let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
             Msg::UpdateUserUidAssign(checked)
@@ -318,7 +348,6 @@ impl Component for PosixOptions {
         let on_group_gid_start = link.callback(|e: InputEvent| Msg::UpdateGroupGidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_group_gid_max = link.callback(|e: InputEvent| Msg::UpdateGroupGidMax(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
 
-        // Reassign callbacks
         let on_reassign_user_uid = link.callback(|_| Msg::ReassignUserUidNumbers);
         let on_reassign_user_gid = link.callback(|_| Msg::ReassignUserGidNumbers);
         let on_reassign_user_loginshell = link.callback(|_| Msg::ReassignUserLoginShells);
@@ -328,7 +357,7 @@ impl Component for PosixOptions {
         let on_save = link.callback(|_| Msg::SaveConfig);
 
         let save_disabled = self.loading || !self.config_changed;
-        let reassign_disabled = !self.config_changed || self.loading;
+        let reassign_disabled = self.loading;
 
         html! {
             <div class="row">
@@ -336,7 +365,7 @@ impl Component for PosixOptions {
                     <div class="card mb-4">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5>{ "POSIX Attributes" }</h5>
-                            <span class="badge bg-info">{ "Status: POSIX config loaded successfully" }</span>
+                            <span class={format!("badge {}", self.status_class)}>{ &self.status }</span>
                         </div>
                         <div class="card-body">
 
@@ -359,7 +388,7 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.user_gidnumber_assign} onchange={on_user_gid_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign gidNumber:" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 120px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="1000" disabled={self.loading} />
                                     <button onclick={on_reassign_user_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
 
@@ -399,7 +428,6 @@ impl Component for PosixOptions {
 
                         </div>
 
-                        // Save button right-aligned with breathing room
                         <div class="card-footer text-end pe-3">
                             <button onclick={on_save} class="btn btn-success px-4" disabled={save_disabled}>
                                 { "Save POSIX Config" }

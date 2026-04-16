@@ -4,5 +4,5 @@
 # Edit via "Federation" settings in UI.
 
 url = "http://keycloak:8080"
-realm = "testlab.local"
+realm = "master"
 admin_user = "admin"
