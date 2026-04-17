@@ -18,6 +18,40 @@ use lldap_domain_model::model::UserColumn;
 use std::collections::BTreeMap;
 use tracing::{debug, instrument, warn};
 
+/// NEW HELPER 1: Convert internal ou string ("people" or "people\home") into clean hierarchical LDAP RDN chain
+pub fn internal_ou_to_ldap_rdn_chain(ou: &str) -> Vec<(String, String)> {
+    if ou.trim().is_empty() {
+        return vec![("ou".to_string(), "people".to_string())];
+    }
+    let parts: Vec<&str> = ou.split('\\').collect();
+    let mut chain = Vec::with_capacity(parts.len());
+    for part in parts.iter().rev() {
+        let trimmed = part.trim();
+        if !trimmed.is_empty() {
+            chain.push(("ou".to_string(), trimmed.to_string()));
+        }
+    }
+    if chain.is_empty() {
+        chain.push(("ou".to_string(), "people".to_string()));
+    }
+    chain
+}
+
+/// NEW HELPER 2: Reverse of the above — reconstruct internal ou string from LDAP RDN chain
+pub fn ldap_rdn_chain_to_internal_ou(rdn_chain: &[(String, String)]) -> String {
+    let ous: Vec<String> = rdn_chain
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("ou"))
+        .map(|(_, v)| v.clone())
+        .rev()
+        .collect();
+    if ous.is_empty() {
+        "people".to_string()
+    } else {
+        ous.join("\\")
+    }
+}
+
 /// Convert a NaiveDateTime to LDAP GeneralizedTime format (YYYYMMDDHHMMSSZ)
 /// This is the standard format required by LDAP for timestamp attributes like pwdChangedTime
 pub fn to_generalized_time(dt: &NaiveDateTime) -> Vec<u8> {
@@ -94,16 +128,33 @@ pub fn get_user_or_group_id_from_distinguished_name(
     };
     if !is_subtree(&parts, base_tree) {
         return UserOrGroupName::BadSubStree;
-    } else if parts.len() == base_tree.len() + 2
-        && parts[1].0 == "ou"
-        && (parts[0].0 == "cn" || parts[0].0 == "uid")
-    {
-        if parts[1].1 == "groups" {
-            return UserOrGroupName::Group(GroupName::from(parts[0].1.clone()));
-        } else if parts[1].1 == "people" {
-            return UserOrGroupName::User(UserId::from(parts[0].1.clone()));
+    }
+
+    // New hierarchical support
+    let ou_chain: Vec<(String, String)> = parts
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("ou"))
+        .cloned()
+        .collect();
+
+    if parts.len() == base_tree.len() + ou_chain.len() + 1 {
+        let rdn = &parts[0];
+        if rdn.0.eq_ignore_ascii_case("uid") {
+            return UserOrGroupName::User(UserId::from(rdn.1.clone()));
+        } else if rdn.0.eq_ignore_ascii_case("cn") {
+            return UserOrGroupName::Group(GroupName::from(rdn.1.clone()));
         }
     }
+
+    // Fallback to original flat logic for ou=people and ou=groups
+    if parts.len() == base_tree.len() + 2 {
+        if parts[1] == ("ou".to_string(), "people".to_string()) {
+            return UserOrGroupName::User(UserId::from(parts[0].1.clone()));
+        } else if parts[1] == ("ou".to_string(), "groups".to_string()) {
+            return UserOrGroupName::Group(GroupName::from(parts[0].1.clone()));
+        }
+    }
+
     UserOrGroupName::UnexpectedFormat
 }
 
@@ -114,7 +165,7 @@ pub fn get_user_id_from_distinguished_name(
 ) -> LdapResult<UserId> {
     match get_user_or_group_id_from_distinguished_name(dn, base_tree) {
         UserOrGroupName::User(user_id) => Ok(user_id),
-        err => Err(err.into_ldap_error(dn, format!(r#""uid=id,ou=people,{base_dn_str}""#))),
+        err => Err(err.into_ldap_error(dn, format!(r#""uid=id,ou=...,{}""#, base_dn_str))),
     }
 }
 
@@ -125,7 +176,7 @@ pub fn get_group_id_from_distinguished_name(
 ) -> LdapResult<GroupName> {
     match get_user_or_group_id_from_distinguished_name(dn, base_tree) {
         UserOrGroupName::Group(group_name) => Ok(group_name),
-        err => Err(err.into_ldap_error(dn, format!(r#""uid=id,ou=groups,{base_dn_str}""#))),
+        err => Err(err.into_ldap_error(dn, format!(r#""cn=id,ou=...,{}""#, base_dn_str))),
     }
 }
 

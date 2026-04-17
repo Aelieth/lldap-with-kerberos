@@ -160,7 +160,15 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         let backend_handler = self
         .backend_handler
         .get_user_restricted_lister_handler(user_info);
-        search::do_search(&backend_handler, self.ldap_info, request).await
+
+        let allowed_ous = self
+        .backend_handler
+        .unsafe_get_handler()
+        .get_allowed_ous()
+        .await
+        .unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]);
+
+        search::do_search(&backend_handler, self.ldap_info, request, &allowed_ous).await
     }
 
     #[instrument(skip_all, level = "debug", fields(dn = %request.dn))]

@@ -3,7 +3,8 @@ use crate::core::{
     utils::{
         ExpandedAttributes, LdapInfo, UserFieldType, expand_attribute_wildcards,
         get_custom_attribute, get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, map_user_field, to_generalized_time,
+        get_user_id_from_distinguished_name_or_plain_name, internal_ou_to_ldap_rdn_chain,
+        map_user_field, to_generalized_time,
     },
 };
 
@@ -157,33 +158,39 @@ fn make_ldap_search_user_result_entry(
     if expanded_attributes.include_custom_attributes {
         expanded_attributes.attribute_keys.extend(
             user.attributes
-            .iter()
-            .map(|a| (a.name.clone(), a.name.to_string())),
+                .iter()
+                .map(|a| (a.name.clone(), a.name.to_string())),
         );
     }
     LdapSearchResultEntry {
         dn: {
-            let ou = get_user_ou(&user);
-            format!("uid={},ou={},{}", user.user_id.as_str(), ou, base_dn_str)
+            let internal_ou = get_user_ou(&user);
+            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
+            let ou_part = rdn_chain
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("uid={},{}", user.user_id.as_str(), ou_part + "," + base_dn_str)
         },
         attributes: expanded_attributes
-        .attribute_keys
-        .into_iter()
-        .filter_map(|(attribute, name)| {
-            let values = get_user_attribute(
-                &user,
-                &attribute,
-                base_dn_str,
-                groups,
-                ignored_user_attributes,
-                schema,
-            )?;
-            Some(LdapPartialAttribute {
-                atype: name,
-                vals: values,
+            .attribute_keys
+            .into_iter()
+            .filter_map(|(attribute, name)| {
+                let values = get_user_attribute(
+                    &user,
+                    &attribute,
+                    base_dn_str,
+                    groups,
+                    ignored_user_attributes,
+                    schema,
+                )?;
+                Some(LdapPartialAttribute {
+                    atype: name,
+                    vals: values,
+                })
             })
-        })
-        .collect::<Vec<LdapPartialAttribute>>(),
+            .collect::<Vec<LdapPartialAttribute>>(),
     }
 }
 
@@ -441,22 +448,22 @@ pub fn convert_users_to_ldap_op<'a>(
     })
 }
 
-// NEW helper — used by EntryDn so ou appears in real LDAP DNs (exactly like quick-start)
+// NEW HELPER — used by EntryDn so ou appears in real LDAP DNs (hierarchical)
 fn get_user_ou(user: &User) -> String {
     user.attributes
-    .iter()
-    .find(|a| a.name.as_str() == "ou")
-    .and_then(|a| {
-        if let lldap_domain::types::AttributeValue::String(
-            lldap_domain::types::Cardinality::Singleton(s),
-        ) = &a.value
-        {
-            Some(s.clone())
-        } else {
-            None
-        }
-    })
-    .unwrap_or_else(|| "people".to_string())
+        .iter()
+        .find(|a| a.name.as_str() == "ou")
+        .and_then(|a| {
+            if let lldap_domain::types::AttributeValue::String(
+                lldap_domain::types::Cardinality::Singleton(s),
+            ) = &a.value
+            {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "people".to_string())
 }
 
 #[cfg(test)]

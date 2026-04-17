@@ -3,7 +3,8 @@ use crate::core::{
     utils::{
         ExpandedAttributes, GroupFieldType, LdapInfo, expand_attribute_wildcards,
         get_custom_attribute, get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, map_group_field,
+        get_user_id_from_distinguished_name_or_plain_name, internal_ou_to_ldap_rdn_chain,
+        map_group_field,
     },
 };
 use chrono::TimeZone;
@@ -142,34 +143,40 @@ fn make_ldap_search_group_result_entry(
     if expanded_attributes.include_custom_attributes {
         expanded_attributes.attribute_keys.extend(
             group
-            .attributes
-            .iter()
-            .map(|a| (a.name.clone(), a.name.to_string())),
+                .attributes
+                .iter()
+                .map(|a| (a.name.clone(), a.name.to_string())),
         );
     }
     LdapSearchResultEntry {
         dn: {
-            let ou = get_group_ou(&group);
-            format!("cn={},ou={},{}", group.display_name, ou, base_dn_str)
+            let internal_ou = get_group_ou(&group);
+            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
+            let ou_part = rdn_chain
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str)
         },
         attributes: expanded_attributes
-        .attribute_keys
-        .into_iter()
-        .filter_map(|(attribute, name)| {
-            let values = get_group_attribute(
-                &group,
-                base_dn_str,
-                &attribute,
-                user_filter,
-                ignored_group_attributes,
-                schema,
-            )?;
-            Some(LdapPartialAttribute {
-                atype: name,
-                vals: values,
+            .attribute_keys
+            .into_iter()
+            .filter_map(|(attribute, name)| {
+                let values = get_group_attribute(
+                    &group,
+                    base_dn_str,
+                    &attribute,
+                    user_filter,
+                    ignored_group_attributes,
+                    schema,
+                )?;
+                Some(LdapPartialAttribute {
+                    atype: name,
+                    vals: values,
+                })
             })
-        })
-        .collect::<Vec<LdapPartialAttribute>>(),
+            .collect::<Vec<LdapPartialAttribute>>(),
     }
 }
 
@@ -207,8 +214,8 @@ fn convert_group_filter(
     match filter {
         LdapFilter::Equality(field, value) if field.eq_ignore_ascii_case("objectclass") => {
             let v = value.to_ascii_lowercase();
-            if v == "person" || v == "inetorgperson" || v == "posixaccount" || v == "mailaccount" {
-                Ok(GroupRequestFilter::False) // silently skip group search
+            if v == "groupofuniquenames" || v == "groupofnames" || v == "posixgroup" {
+                Ok(GroupRequestFilter::True)
             } else {
                 Ok(GroupRequestFilter::False)
             }
@@ -441,7 +448,7 @@ pub fn convert_groups_to_ldap_op<'a>(
     })
 }
 
-// NEW helper — used by EntryDn so ou appears in real LDAP DNs for groups
+// NEW HELPER — used by EntryDn so ou appears in real LDAP DNs (hierarchical)
 fn get_group_ou(group: &Group) -> String {
     group.attributes
     .iter()
