@@ -31,13 +31,15 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - Realm and domain are automatically derived from LLDAP_LDAP_BASE_DN — zero manual configuration needed
 - Bootstrap handled by `crates/kerberos/src/bin/kerberos_manager.rs` on first container start (creates DB, configs, keytab, starts daemons)
 
-## Federation – Keycloak Configuration
+## Federation – Keycloak and POSIX
 - Dedicated “Federation” tab in the web UI (`app/src/components/federation.rs`) for Keycloak + Kerberos integration
 - Loads and saves `keycloak_config.toml` via GraphQL
 - One-click “Test Settings” button validates admin credentials
 - “Push To Keycloak” button (enabled after successful test + sync password) auto-creates realm, LDAP+Kerberos provider, and lldap-web client
 - “Export keytab” button generates ready-to-use keytab for Keycloak HTTP principal
-- Suggested config auto-populated from backend with sensible defaults
+- Dedicated POSIX section - autofill and assignment of POSIX attributes across users or groups
+- POSIX automatic incremented attributes on user / group creation 
+- Prevents POSIX duplicate uid or gid numbers for sanity
 
 ## Frontend – Quality of Life Improvements
 - Reusable OuSelector component renders tree-style dropdowns for 1-level hierarchical OUs using “\” separator
@@ -57,7 +59,6 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings → simple intercept fix inside of the convert_group_filter
 
 ## TODOs before release
-- [CUSTOM FEATURE] POSIX automatic attribute fill (uidNumber, gidNumber, homeDirectory, loginShell)
 - #750 [FEATURE REQUEST] Ability to disable LDAP users
 - #756 / #847 [BUG] Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
 - ldap specific testing for OU's, user account modification, etc
