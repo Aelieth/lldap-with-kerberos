@@ -129,11 +129,9 @@ impl Component for UserDetailsForm {
                     Ok(_) => {
                         self.just_updated = true;
                         self.show_kerberos_banner = false;
-                        // Sync original value so next edit is clean
                         self.original_kerberossync_enabled = self.kerberossync_enabled;
                     }
                     Err(e) => {
-                        // ← NEW: surface the GraphQL FieldError (validation etc.)
                         self.common.error = Some(e.into());
                     }
                 }
@@ -265,7 +263,6 @@ impl UserDetailsForm {
                 continue;
             }
 
-            // FORCE removal for avatar when empty
             if name == "avatar" {
                 if attr.values.is_empty() || attr.values.first().map_or(true, |s| s.trim().is_empty()) {
                     to_remove.push(name.clone());

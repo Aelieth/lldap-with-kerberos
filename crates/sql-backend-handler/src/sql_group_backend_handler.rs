@@ -298,9 +298,9 @@ impl GroupBackendHandler for SqlBackendHandler {
                         };
 
                         if name == "uidnumber" || name == "gidnumber" {
-                            if value != 0 && (value < 3000 || value > 20000) {
+                            if value != 0 && (value < 3000 || value > 60000) {
                                 return Err(DomainError::InternalError(format!(
-                                    "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                                    "{} must be between 3000 and 60000", name
                                 )));
                             }
 
@@ -318,17 +318,10 @@ impl GroupBackendHandler for SqlBackendHandler {
                         }
                     }
 
-                    // === POSIX gidNumber auto-assign (only when enabled) ===
-                    // If admin supplied a non-zero gidNumber we keep it (already checked).
-                    // Otherwise compute next available that skips taken numbers.
                     let mut final_attributes = request.attributes;
 
                     if settings.group_gidnumber_assign {
-                        let already_has_gid = final_attributes.iter().any(|a| {
-                            a.name.as_str() == "gidnumber"
-                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
-                        });
-
+                        let already_has_gid = final_attributes.iter().any(|a| a.name.as_str() == "gidnumber");
                         if !already_has_gid {
                             let next_gid = Self::next_available_gid_number(
                                 transaction,

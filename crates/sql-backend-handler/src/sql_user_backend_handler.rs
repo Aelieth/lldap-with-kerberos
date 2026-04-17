@@ -531,9 +531,6 @@ impl SqlBackendHandler {
         transaction: &DatabaseTransaction,
         uid: i64,
     ) -> Result<bool> {
-        if uid == 0 {
-            return Ok(false); // 0 means "not assigned"
-        }
         let count = model::UserAttributes::find()
         .filter(model::UserAttributesColumn::AttributeName.eq("uidnumber"))
         .filter(model::UserAttributesColumn::Value.eq(uid.to_string().into_bytes()))
@@ -546,9 +543,6 @@ impl SqlBackendHandler {
         transaction: &DatabaseTransaction,
         gid: i64,
     ) -> Result<bool> {
-        if gid == 0 {
-            return Ok(false);
-        }
         let count = model::GroupAttributes::find()
         .filter(model::GroupAttributesColumn::AttributeName.eq("gidnumber"))
         .filter(model::GroupAttributesColumn::Value.eq(gid.to_string().into_bytes()))
@@ -557,84 +551,85 @@ impl SqlBackendHandler {
         Ok(count > 0)
     }
 
-    #[instrument(skip(self), level = "info", err)]
+#[instrument(skip(self), level = "info", err)]
     pub async fn reassign_gid_numbers(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.group_gidnumber_assign {
-            return Ok(());
-        }
-
         self.sql_pool
             .transaction::<_, (), DomainError>(|transaction| {
                 Box::pin(async move {
-                    let groups = model::Group::find()
-                        .order_by_asc(model::groups::Column::CreationDate)
-                        .all(transaction)
-                        .await?;
-
-                    let mut next_gid = settings.group_gidnumber_start;
-
-                    for group in groups {
-                        let gid_value = next_gid.to_string().into_bytes();
-
-                        let attr = model::group_attributes::ActiveModel {
-                            group_id: Set(group.group_id),
-                            attribute_name: Set(AttributeName::from("gidnumber")),
-                            value: Set(Serialized(gid_value)),
-                        };
-
-                        model::GroupAttributes::insert(attr)
-                            .on_conflict(
-                                OnConflict::columns([
-                                    model::group_attributes::Column::GroupId,
-                                    model::group_attributes::Column::AttributeName,
-                                ])
-                                .update_column(model::group_attributes::Column::Value)
-                                .to_owned(),
-                            )
+                    if settings.group_gidnumber_assign {
+                        let groups = model::Group::find()
+                            .order_by_asc(model::groups::Column::CreationDate)
+                            .all(transaction)
+                            .await?;
+                        let mut next_gid = settings.group_gidnumber_start;
+                        for group in groups {
+                            let gid_value = next_gid.to_string().into_bytes();
+                            let attr = model::group_attributes::ActiveModel {
+                                group_id: Set(group.group_id),
+                                attribute_name: Set(AttributeName::from("gidnumber")),
+                                value: Set(Serialized(gid_value)),
+                            };
+                            model::GroupAttributes::insert(attr)
+                                .on_conflict(
+                                    OnConflict::columns([
+                                        model::group_attributes::Column::GroupId,
+                                        model::group_attributes::Column::AttributeName,
+                                    ])
+                                    .update_column(model::group_attributes::Column::Value)
+                                    .to_owned(),
+                                )
+                                .exec(transaction)
+                                .await?;
+                            let now = chrono::Utc::now().naive_utc();
+                            let update = model::groups::ActiveModel {
+                                group_id: Set(group.group_id),
+                                modified_date: Set(now),
+                                ..Default::default()
+                            };
+                            update.update(transaction).await?;
+                            next_gid += 1;
+                        }
+                    } else {
+                        model::GroupAttributes::delete_many()
+                            .filter(model::group_attributes::Column::AttributeName.eq("gidnumber"))
                             .exec(transaction)
                             .await?;
-
-                        let now = chrono::Utc::now().naive_utc();
-                        let update = model::groups::ActiveModel {
-                            group_id: Set(group.group_id),
-                            modified_date: Set(now),
-                            ..Default::default()
-                        };
-                        update.update(transaction).await?;
-
-                        next_gid += 1;
                     }
                     Ok(())
                 })
             })
             .await?;
-
         Ok(())
     }
 
-        #[instrument(skip(self), level = "info", err)]
+#[instrument(skip(self), level = "info", err)]
     pub async fn reassign_user_uid_numbers(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.user_uidnumber_assign { return Ok(()); }
-
         self.sql_pool.transaction::<_, (), DomainError>(|tx| {
             Box::pin(async move {
-                let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
-                let mut next = settings.user_uidnumber_start;
-                for user in users {
-                    let uid_value = next.to_string().into_bytes();
-                    let attr = model::user_attributes::ActiveModel {
-                        user_id: Set(user.user_id.clone()),
-                        attribute_name: Set(AttributeName::from("uidnumber")),
-                        value: Set(Serialized(uid_value)),
-                    };
-                    model::UserAttributes::insert(attr)
-                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
-                        .exec(tx).await?;
-                    let now = chrono::Utc::now().naive_utc();
-                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
-                    next += 1;
+                if settings.user_uidnumber_assign {
+                    let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
+                    let mut next = settings.user_uidnumber_start;
+                    for user in users {
+                        let uid_value = next.to_string().into_bytes();
+                        let attr = model::user_attributes::ActiveModel {
+                            user_id: Set(user.user_id.clone()),
+                            attribute_name: Set(AttributeName::from("uidnumber")),
+                            value: Set(Serialized(uid_value)),
+                        };
+                        model::UserAttributes::insert(attr)
+                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                            .exec(tx).await?;
+                        let now = chrono::Utc::now().naive_utc();
+                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                        next += 1;
+                    }
+                } else {
+                    model::UserAttributes::delete_many()
+                        .filter(model::user_attributes::Column::AttributeName.eq("uidnumber"))
+                        .exec(tx)
+                        .await?;
                 }
                 Ok(())
             })
@@ -642,28 +637,33 @@ impl SqlBackendHandler {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "info", err)]
+#[instrument(skip(self), level = "info", err)]
     pub async fn reassign_user_gid_numbers(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.user_gidnumber_assign { return Ok(()); }
-
         self.sql_pool.transaction::<_, (), DomainError>(|tx| {
             Box::pin(async move {
-                let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
-                let mut next = settings.user_gidnumber_start;
-                for user in users {
-                    let gid_value = next.to_string().into_bytes();
-                    let attr = model::user_attributes::ActiveModel {
-                        user_id: Set(user.user_id.clone()),
-                        attribute_name: Set(AttributeName::from("gidnumber")),
-                        value: Set(Serialized(gid_value)),
-                    };
-                    model::UserAttributes::insert(attr)
-                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
-                        .exec(tx).await?;
-                    let now = chrono::Utc::now().naive_utc();
-                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
-                    next += 1;
+                if settings.user_gidnumber_assign {
+                    let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
+                    let mut next = settings.user_gidnumber_start;
+                    for user in users {
+                        let gid_value = next.to_string().into_bytes();
+                        let attr = model::user_attributes::ActiveModel {
+                            user_id: Set(user.user_id.clone()),
+                            attribute_name: Set(AttributeName::from("gidnumber")),
+                            value: Set(Serialized(gid_value)),
+                        };
+                        model::UserAttributes::insert(attr)
+                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                            .exec(tx).await?;
+                        let now = chrono::Utc::now().naive_utc();
+                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                        next += 1;
+                    }
+                } else {
+                    model::UserAttributes::delete_many()
+                        .filter(model::user_attributes::Column::AttributeName.eq("gidnumber"))
+                        .exec(tx)
+                        .await?;
                 }
                 Ok(())
             })
@@ -671,26 +671,31 @@ impl SqlBackendHandler {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "info", err)]
+#[instrument(skip(self), level = "info", err)]
     pub async fn reassign_user_homedirectories(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.user_homedirectory_assign { return Ok(()); }
-
         self.sql_pool.transaction::<_, (), DomainError>(|tx| {
             Box::pin(async move {
-                let users = model::User::find().all(tx).await?;
-                for user in users {
-                    let home = format!("{}/{}", settings.user_homedirectory_prefix, user.user_id);
-                    let attr = model::user_attributes::ActiveModel {
-                        user_id: Set(user.user_id.clone()),
-                        attribute_name: Set(AttributeName::from("homedirectory")),
-                        value: Set(Serialized(home.into_bytes())),
-                    };
-                    model::UserAttributes::insert(attr)
-                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
-                        .exec(tx).await?;
-                    let now = chrono::Utc::now().naive_utc();
-                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                if settings.user_homedirectory_assign {
+                    let users = model::User::find().all(tx).await?;
+                    for user in users {
+                        let home = format!("{}/{}", settings.user_homedirectory_prefix, user.user_id);
+                        let attr = model::user_attributes::ActiveModel {
+                            user_id: Set(user.user_id.clone()),
+                            attribute_name: Set(AttributeName::from("homedirectory")),
+                            value: Set(Serialized(home.into_bytes())),
+                        };
+                        model::UserAttributes::insert(attr)
+                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                            .exec(tx).await?;
+                        let now = chrono::Utc::now().naive_utc();
+                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                    }
+                } else {
+                    model::UserAttributes::delete_many()
+                        .filter(model::user_attributes::Column::AttributeName.eq("homedirectory"))
+                        .exec(tx)
+                        .await?;
                 }
                 Ok(())
             })
@@ -698,25 +703,30 @@ impl SqlBackendHandler {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "info", err)]
+#[instrument(skip(self), level = "info", err)]
     pub async fn reassign_user_loginshells(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
-        if !settings.user_loginshell_assign { return Ok(()); }
-
         self.sql_pool.transaction::<_, (), DomainError>(|tx| {
             Box::pin(async move {
-                let users = model::User::find().all(tx).await?;
-                for user in users {
-                    let attr = model::user_attributes::ActiveModel {
-                        user_id: Set(user.user_id.clone()),
-                        attribute_name: Set(AttributeName::from("loginshell")),
-                        value: Set(Serialized(settings.user_loginshell_default.clone().into_bytes())),
-                    };
-                    model::UserAttributes::insert(attr)
-                        .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
-                        .exec(tx).await?;
-                    let now = chrono::Utc::now().naive_utc();
-                    model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                if settings.user_loginshell_assign {
+                    let users = model::User::find().all(tx).await?;
+                    for user in users {
+                        let attr = model::user_attributes::ActiveModel {
+                            user_id: Set(user.user_id.clone()),
+                            attribute_name: Set(AttributeName::from("loginshell")),
+                            value: Set(Serialized(settings.user_loginshell_default.clone().into_bytes())),
+                        };
+                        model::UserAttributes::insert(attr)
+                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                            .exec(tx).await?;
+                        let now = chrono::Utc::now().naive_utc();
+                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
+                    }
+                } else {
+                    model::UserAttributes::delete_many()
+                        .filter(model::user_attributes::Column::AttributeName.eq("loginshell"))
+                        .exec(tx)
+                        .await?;
                 }
                 Ok(())
             })
@@ -724,7 +734,6 @@ impl SqlBackendHandler {
         Ok(())
     }
 }
-
 
 
 #[async_trait]
@@ -815,9 +824,9 @@ impl UserBackendHandler for SqlBackendHandler {
                         };
 
                         if name == "uidnumber" || name == "gidnumber" {
-                            if value != 0 && (value < 3000 || value > 20000) {
+                            if value != 0 && (value < 3000 || value > 60000) {
                                 return Err(DomainError::InternalError(format!(
-                                    "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                                    "{} must be between 3000 and 60000", name
                                 )));
                             }
 
@@ -836,14 +845,10 @@ impl UserBackendHandler for SqlBackendHandler {
                     }
 
                     // === POSIX auto-assign for users (uidNumber + gidNumber + loginShell + homeDirectory) ===
-                    // If admin supplied a value we keep it. Otherwise use the configured default when flag is true.
                     let mut final_attributes = request.attributes;
 
                     if settings.user_uidnumber_assign {
-                        let already_has_uid = final_attributes.iter().any(|a| {
-                            a.name.as_str() == "uidnumber"
-                                && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
-                        });
+                        let already_has_uid = final_attributes.iter().any(|a| a.name.as_str() == "uidnumber");
                         if !already_has_uid {
                             let next_uid = Self::next_available_uid_number(
                                 transaction,
@@ -858,13 +863,8 @@ impl UserBackendHandler for SqlBackendHandler {
                     }
 
                     if settings.user_gidnumber_assign {
-                        let already_has_gid = final_attributes.iter().any(|a| {
-                            a.name.as_str() == "gidnumber"
-                            && matches!(&a.value, AttributeValue::Integer(Cardinality::Singleton(v)) if *v != 0)
-                        });
-
+                        let already_has_gid = final_attributes.iter().any(|a| a.name.as_str() == "gidnumber");
                         if !already_has_gid {
-                            // STATIC assignment — every user gets the exact same gidNumber from config
                             final_attributes.push(Attribute {
                                 name: "gidnumber".into(),
                                 value: AttributeValue::Integer(Cardinality::Singleton(settings.user_gidnumber_start)),

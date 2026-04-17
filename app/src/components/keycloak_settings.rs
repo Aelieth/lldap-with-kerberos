@@ -291,7 +291,7 @@ impl Component for KeycloakSettings {
                             <div class="row">
                                 // LEFT COLUMN — Connection Settings
                                 <div class="col-md-6 border-end border-secondary pe-4">
-                                <h6 class="text-muted mb-3">{ "Keycloak Connection Settings" }</h6>
+                                    <h6 class="text-muted mb-3 text-decoration-underline">{ "Keycloak Connection Settings" }</h6>
 
                                     <div class="d-flex align-items-center mb-3">
                                         <label class="form-label me-3" style="min-width: 140px;">{ "Keycloak URL" }</label>
@@ -321,7 +321,7 @@ impl Component for KeycloakSettings {
 
                                 // RIGHT COLUMN — New Realm Settings
                                 <div class="col-md-6 ps-4">
-                                <h6 class="text-muted mb-3">{ "New Realm Settings" }</h6>
+                                    <h6 class="text-muted mb-3 text-decoration-underline">{ "New Realm Settings" }</h6>
 
                                     <div class={if self.connection_tested_successfully { "" } else { "opacity-50 pe-none" }}>
                                         <div class="d-flex align-items-center mb-3">

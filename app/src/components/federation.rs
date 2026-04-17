@@ -1,3 +1,4 @@
+// app/src/components/federation.rs
 use crate::components::{keycloak_settings::KeycloakSettings, posix_options::PosixOptions};
 use yew::prelude::*;
 
@@ -8,9 +9,15 @@ pub struct FederationProps {}
 pub fn federation(_props: &FederationProps) -> Html {
     html! {
         <div class="container">
-
             <KeycloakSettings />
-            <PosixOptions on_status_update={Callback::noop()} />   // noop because POSIX is now fully self-contained
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <PosixOptions on_status_update={Callback::noop()} />
+                </div>
+                <div class="col-md-6">
+                    // Future cards (e.g. LLDAP System Options) go here
+                </div>
+            </div>
         </div>
     }
 }

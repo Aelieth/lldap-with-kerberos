@@ -1094,25 +1094,34 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         Ok(PushRealmResponse { ok: true, message })
     }
 
-async fn set_posix_settings(
+    async fn set_posix_settings(
         context: &Context<Handler>,
         input: PosixSettingsInput,
     ) -> FieldResult<PosixSettingsResponse> {
         let span = debug_span!("[GraphQL mutation] set_posix_settings");
         span.in_scope(|| debug!(?input));
 
-        // === Backend range enforcement (3000-20000) ===
-        let ranges = [
-            ("user_uidnumber_start", input.user_uidnumber_start),
-            ("user_uidnumber_max", input.user_uidnumber_max),
-            ("user_gidnumber_start", input.user_gidnumber_start),
-            ("group_gidnumber_start", input.group_gidnumber_start),
-            ("group_gidnumber_max", input.group_gidnumber_max),
-        ];
-        for (name, val) in ranges {
-            if val != 0 && (val < 3000 || val > 20000) {
+        // === CONDITIONAL range enforcement — only check fields that are actually enabled ===
+        if input.user_uidnumber_assign {
+            if input.user_uidnumber_start < 3000 || input.user_uidnumber_start > 60000 ||
+               input.user_uidnumber_max < 3000 || input.user_uidnumber_max > 60000 {
                 return Err(FieldError::new(
-                    format!("{} must be between 3000 and 20000 (or 0 for no limit)", name),
+                    "user_uidnumber_start and user_uidnumber_max must be between 3000 and 60000 inclusive",
+                    juniper::Value::null(),
+                ));
+            }
+        }
+        if input.user_gidnumber_assign && (input.user_gidnumber_start < 3000 || input.user_gidnumber_start > 60000) {
+            return Err(FieldError::new(
+                "user_gidnumber_start must be between 3000 and 60000 inclusive",
+                juniper::Value::null(),
+            ));
+        }
+        if input.group_gidnumber_assign {
+            if input.group_gidnumber_start < 3000 || input.group_gidnumber_start > 60000 ||
+               input.group_gidnumber_max < 3000 || input.group_gidnumber_max > 60000 {
+                return Err(FieldError::new(
+                    "group_gidnumber_start and group_gidnumber_max must be between 3000 and 60000 inclusive",
                     juniper::Value::null(),
                 ));
             }

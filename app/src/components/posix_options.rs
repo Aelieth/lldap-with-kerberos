@@ -1,3 +1,4 @@
+// crates/graphql-server/src/components/posix_options.rs
 use crate::{
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
@@ -8,67 +9,33 @@ use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 use wasm_bindgen::JsCast;
 
+// GraphQL derives
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/get_posix_config.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/get_posix_config.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct GetPosixConfig;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/set_posix_config.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/set_posix_config.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct SetPosixConfig;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/reassign_gid_numbers.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/reassign_gid_numbers.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct ReassignGidNumbers;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/reassign_user_uid_numbers.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/reassign_user_uid_numbers.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct ReassignUserUidNumbers;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/reassign_user_gid_numbers.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/reassign_user_gid_numbers.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct ReassignUserGidNumbers;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/reassign_user_homedirectories.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/reassign_user_homedirectories.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct ReassignUserHomeDirectories;
 
 #[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "queries/reassign_user_loginshells.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
+#[graphql(schema_path = "../schema.graphql", query_path = "queries/reassign_user_loginshells.graphql", response_derives = "Debug", custom_scalars_module = "crate::infra::graphql")]
 pub struct ReassignUserLoginShells;
 
 #[derive(Properties, PartialEq)]
@@ -78,7 +45,6 @@ pub struct PosixOptionsProps {
 
 pub struct PosixOptions {
     common: CommonComponentParts<Self>,
-    // Full PosixSettings from backend
     user_uidnumber_assign: bool,
     user_uidnumber_start: String,
     user_uidnumber_max: String,
@@ -88,17 +54,25 @@ pub struct PosixOptions {
     user_loginshell_default: String,
     user_homedirectory_assign: bool,
     user_homedirectory_prefix: String,
-
     group_gidnumber_assign: bool,
     group_gidnumber_start: String,
     group_gidnumber_max: String,
-
     config_changed: bool,
     loading: bool,
-
-    // NEW: local dynamic status (exactly matches your ASCII layout)
+    // Confirmation modal
+    pending_reassign: Option<ReassignAction>,
+    // local status badge
     status: String,
-    status_class: String, // bg-success / bg-danger / bg-info
+    status_class: String,
+}
+
+#[derive(Clone, PartialEq)]
+enum ReassignAction {
+    UserUidNumbers,
+    UserGidNumbers,
+    UserLoginShells,
+    UserHomeDirectories,
+    GroupGidNumbers,
 }
 
 pub enum Msg {
@@ -123,6 +97,8 @@ pub enum Msg {
     ReassignUserLoginShells,
     ReassignUserHomeDirectories,
     ReassignGroupGidNumbers,
+    ConfirmReassign,
+    CancelReassign,
     ReassignResponse(Result<()>),
 }
 
@@ -131,9 +107,7 @@ impl CommonComponent<PosixOptions> for PosixOptions {
         match msg {
             Msg::LoadConfig => {
                 let vars = get_posix_config::Variables {};
-                self.common.call_graphql::<GetPosixConfig, _>(
-                    ctx, vars, Msg::ConfigResponse, "Failed to load POSIX config",
-                );
+                self.common.call_graphql::<GetPosixConfig, _>(ctx, vars, Msg::ConfigResponse, "Failed to load POSIX config");
                 self.loading = true;
                 self.status = "Loading POSIX config...".to_string();
                 self.status_class = "bg-info".to_string();
@@ -156,7 +130,7 @@ impl CommonComponent<PosixOptions> for PosixOptions {
 
                 self.loading = false;
                 self.config_changed = false;
-                self.status = "POSIX config loaded".to_string();
+                self.status = "✅ POSIX config loaded successfully".to_string();
                 self.status_class = "bg-success".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
@@ -169,7 +143,7 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                 Ok(true)
             }
 
-            // ... (all Update* handlers unchanged) ...
+            // Update handlers
             Msg::UpdateUserUidAssign(v) => { self.user_uidnumber_assign = v; self.config_changed = true; Ok(true) }
             Msg::UpdateUserUidStart(s) => { self.user_uidnumber_start = s; self.config_changed = true; Ok(true) }
             Msg::UpdateUserUidMax(s) => { self.user_uidnumber_max = s; self.config_changed = true; Ok(true) }
@@ -186,22 +160,20 @@ impl CommonComponent<PosixOptions> for PosixOptions {
             Msg::SaveConfig => {
                 let input = set_posix_config::PosixSettingsInput {
                     userUidnumberAssign: self.user_uidnumber_assign,
-                    userUidnumberStart: self.user_uidnumber_start.parse().unwrap_or(3001),
-                    userUidnumberMax: self.user_uidnumber_max.parse().unwrap_or(3999),
+                    userUidnumberStart: self.user_uidnumber_start.parse().unwrap_or(3000),
+                    userUidnumberMax: self.user_uidnumber_max.parse().unwrap_or(60000),
                     userGidnumberAssign: self.user_gidnumber_assign,
-                    userGidnumberStart: self.user_gidnumber_start.parse().unwrap_or(3001),
+                    userGidnumberStart: self.user_gidnumber_start.parse().unwrap_or(3000),
                     userLoginshellAssign: self.user_loginshell_assign,
                     userLoginshellDefault: self.user_loginshell_default.clone(),
                     userHomedirectoryAssign: self.user_homedirectory_assign,
                     userHomedirectoryPrefix: self.user_homedirectory_prefix.clone(),
                     groupGidnumberAssign: self.group_gidnumber_assign,
-                    groupGidnumberStart: self.group_gidnumber_start.parse().unwrap_or(3001),
-                    groupGidnumberMax: self.group_gidnumber_max.parse().unwrap_or(3999),
+                    groupGidnumberStart: self.group_gidnumber_start.parse().unwrap_or(3000),
+                    groupGidnumberMax: self.group_gidnumber_max.parse().unwrap_or(60000),
                 };
                 let vars = set_posix_config::Variables { input };
-                self.common.call_graphql::<SetPosixConfig, _>(
-                    ctx, vars, Msg::SaveResponse, "Failed to save POSIX config",
-                );
+                self.common.call_graphql::<SetPosixConfig, _>(ctx, vars, Msg::SaveResponse, "Failed to save POSIX config");
                 self.status = "Saving...".to_string();
                 self.status_class = "bg-info".to_string();
                 Ok(false)
@@ -220,51 +192,45 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                 Ok(true)
             }
 
-            // Reassign actions
-            Msg::ReassignUserUidNumbers => {
-                let vars = reassign_user_uid_numbers::Variables {};
-                self.common.call_graphql::<ReassignUserUidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user uidNumbers",
-                );
-                self.status = "Reassigning user uidNumbers...".to_string();
-                self.status_class = "bg-info".to_string();
+            // Reassign buttons open the confirmation modal
+            Msg::ReassignUserUidNumbers => { self.pending_reassign = Some(ReassignAction::UserUidNumbers); Ok(true) }
+            Msg::ReassignUserGidNumbers => { self.pending_reassign = Some(ReassignAction::UserGidNumbers); Ok(true) }
+            Msg::ReassignUserLoginShells => { self.pending_reassign = Some(ReassignAction::UserLoginShells); Ok(true) }
+            Msg::ReassignUserHomeDirectories => { self.pending_reassign = Some(ReassignAction::UserHomeDirectories); Ok(true) }
+            Msg::ReassignGroupGidNumbers => { self.pending_reassign = Some(ReassignAction::GroupGidNumbers); Ok(true) }
+
+            Msg::ConfirmReassign => {
+                if let Some(action) = self.pending_reassign.take() {
+                    match action {
+                        ReassignAction::UserUidNumbers => {
+                            let vars = reassign_user_uid_numbers::Variables {};
+                            self.common.call_graphql::<ReassignUserUidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user uidNumbers");
+                        }
+                        ReassignAction::UserGidNumbers => {
+                            let vars = reassign_user_gid_numbers::Variables {};
+                            self.common.call_graphql::<ReassignUserGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user gidNumbers");
+                        }
+                        ReassignAction::UserLoginShells => {
+                            let vars = reassign_user_login_shells::Variables {};
+                            self.common.call_graphql::<ReassignUserLoginShells, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user loginShells");
+                        }
+                        ReassignAction::UserHomeDirectories => {
+                            let vars = reassign_user_home_directories::Variables {};
+                            self.common.call_graphql::<ReassignUserHomeDirectories, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user homeDirectories");
+                        }
+                        ReassignAction::GroupGidNumbers => {
+                            let vars = reassign_gid_numbers::Variables {};
+                            self.common.call_graphql::<ReassignGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign group gidNumbers");
+                        }
+                    }
+                    self.status = "Reassigning...".to_string();
+                    self.status_class = "bg-info".to_string();
+                }
                 Ok(false)
             }
-            Msg::ReassignUserGidNumbers => {
-                let vars = reassign_user_gid_numbers::Variables {};
-                self.common.call_graphql::<ReassignUserGidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user gidNumbers",
-                );
-                self.status = "Reassigning user gidNumbers...".to_string();
-                self.status_class = "bg-info".to_string();
-                Ok(false)
-            }
-            Msg::ReassignUserLoginShells => {
-                let vars = reassign_user_login_shells::Variables {};
-                self.common.call_graphql::<ReassignUserLoginShells, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user loginShells",
-                );
-                self.status = "Reassigning user loginShells...".to_string();
-                self.status_class = "bg-info".to_string();
-                Ok(false)
-            }
-            Msg::ReassignUserHomeDirectories => {
-                let vars = reassign_user_home_directories::Variables {};
-                self.common.call_graphql::<ReassignUserHomeDirectories, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user homeDirectories",
-                );
-                self.status = "Reassigning user homeDirectories...".to_string();
-                self.status_class = "bg-info".to_string();
-                Ok(false)
-            }
-            Msg::ReassignGroupGidNumbers => {
-                let vars = reassign_gid_numbers::Variables {};
-                self.common.call_graphql::<ReassignGidNumbers, _>(
-                    ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign group gidNumbers",
-                );
-                self.status = "Reassigning group gidNumbers...".to_string();
-                self.status_class = "bg-info".to_string();
-                Ok(false)
+            Msg::CancelReassign => {
+                self.pending_reassign = None;
+                Ok(true)
             }
 
             Msg::ReassignResponse(Ok(_)) => {
@@ -294,19 +260,20 @@ impl Component for PosixOptions {
         Self {
             common: CommonComponentParts::<Self>::create(),
             user_uidnumber_assign: false,
-            user_uidnumber_start: "3001".to_string(),
-            user_uidnumber_max: "3999".to_string(),
+            user_uidnumber_start: "3000".to_string(),
+            user_uidnumber_max: "60000".to_string(),
             user_gidnumber_assign: false,
-            user_gidnumber_start: "3001".to_string(),
+            user_gidnumber_start: "3000".to_string(),
             user_loginshell_assign: false,
             user_loginshell_default: "/bin/bash".to_string(),
             user_homedirectory_assign: false,
             user_homedirectory_prefix: "/home".to_string(),
             group_gidnumber_assign: false,
-            group_gidnumber_start: "3001".to_string(),
-            group_gidnumber_max: "3999".to_string(),
+            group_gidnumber_start: "3000".to_string(),
+            group_gidnumber_max: "60000".to_string(),
             config_changed: false,
             loading: true,
+            pending_reassign: None,
             status: "Loading POSIX config...".to_string(),
             status_class: "bg-info".to_string(),
         }
@@ -319,32 +286,17 @@ impl Component for PosixOptions {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 
-        // (callbacks unchanged — only the status badge is new in the header)
-        let on_user_uid_assign = link.callback(|e: Event| {
-            let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
-            Msg::UpdateUserUidAssign(checked)
-        });
+        // Callbacks (unchanged from last version)
+        let on_user_uid_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateUserUidAssign(checked) });
         let on_user_uid_start = link.callback(|e: InputEvent| Msg::UpdateUserUidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_user_uid_max = link.callback(|e: InputEvent| Msg::UpdateUserUidMax(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
-        let on_user_gid_assign = link.callback(|e: Event| {
-            let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
-            Msg::UpdateUserGidAssign(checked)
-        });
+        let on_user_gid_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateUserGidAssign(checked) });
         let on_user_gid_start = link.callback(|e: InputEvent| Msg::UpdateUserGidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
-        let on_user_loginshell_assign = link.callback(|e: Event| {
-            let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
-            Msg::UpdateUserLoginShellAssign(checked)
-        });
+        let on_user_loginshell_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateUserLoginShellAssign(checked) });
         let on_user_loginshell_default = link.callback(|e: InputEvent| Msg::UpdateUserLoginShellDefault(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
-        let on_user_home_assign = link.callback(|e: Event| {
-            let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
-            Msg::UpdateUserHomeAssign(checked)
-        });
+        let on_user_home_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateUserHomeAssign(checked) });
         let on_user_home_prefix = link.callback(|e: InputEvent| Msg::UpdateUserHomePrefix(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
-        let on_group_gid_assign = link.callback(|e: Event| {
-            let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked();
-            Msg::UpdateGroupGidAssign(checked)
-        });
+        let on_group_gid_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateGroupGidAssign(checked) });
         let on_group_gid_start = link.callback(|e: InputEvent| Msg::UpdateGroupGidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_group_gid_max = link.callback(|e: InputEvent| Msg::UpdateGroupGidMax(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
 
@@ -369,33 +321,32 @@ impl Component for PosixOptions {
                         </div>
                         <div class="card-body">
 
-                            // USERS SECTION
-                            <h6 class="text-muted mb-3">{ "USERS SECTION" }</h6>
+                            <h6 class="text-muted mb-3 text-decoration-underline">{ "Users Section" }</h6>
                             <div class="mb-4">
                                 <div class="d-flex align-items-center mb-3">
                                     <div class="form-check flex-grow-1">
                                         <input type="checkbox" class="form-check-input" checked={self.user_uidnumber_assign} onchange={on_user_uid_assign} disabled={self.loading} />
-                                        <label class="form-check-label">{ "Auto-assign uidNumber range:" }</label>
+                                        <label class="form-check-label">{ "Auto-assign uidNumber range" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="3000" max="60000" disabled={self.loading} />
                                     <span class="mx-1 text-muted small">{ "to" }</span>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="3000" max="60000" disabled={self.loading} />
                                     <button onclick={on_reassign_user_uid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
 
                                 <div class="d-flex align-items-center mb-3">
                                     <div class="form-check flex-grow-1">
                                         <input type="checkbox" class="form-check-input" checked={self.user_gidnumber_assign} onchange={on_user_gid_assign} disabled={self.loading} />
-                                        <label class="form-check-label">{ "Auto-assign gidNumber:" }</label>
+                                        <label class="form-check-label">{ "Auto-assign gidNumber" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="3000" max="60000" disabled={self.loading} />
                                     <button onclick={on_reassign_user_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
 
                                 <div class="d-flex align-items-center mb-3">
                                     <div class="form-check flex-grow-1">
                                         <input type="checkbox" class="form-check-input" checked={self.user_loginshell_assign} onchange={on_user_loginshell_assign} disabled={self.loading} />
-                                        <label class="form-check-label">{ "Auto-assign loginShell:" }</label>
+                                        <label class="form-check-label">{ "Auto-assign loginShell" }</label>
                                     </div>
                                     <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_loginshell_default.clone()} oninput={on_user_loginshell_default} disabled={self.loading} />
                                     <button onclick={on_reassign_user_loginshell} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
@@ -404,24 +355,23 @@ impl Component for PosixOptions {
                                 <div class="d-flex align-items-center mb-3">
                                     <div class="form-check flex-grow-1">
                                         <input type="checkbox" class="form-check-input" checked={self.user_homedirectory_assign} onchange={on_user_home_assign} disabled={self.loading} />
-                                        <label class="form-check-label">{ "Auto-assign homeDirectory:" }</label>
+                                        <label class="form-check-label">{ "Auto-assign homeDirectory" }</label>
                                     </div>
                                     <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_homedirectory_prefix.clone()} oninput={on_user_home_prefix} disabled={self.loading} />
                                     <button onclick={on_reassign_user_home} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
                             </div>
 
-                            // GROUPS SECTION
-                            <h6 class="text-muted mb-3">{ "GROUPS SECTION" }</h6>
+                            <h6 class="text-muted mb-3 text-decoration-underline">{ "Groups Section" }</h6>
                             <div class="mb-4">
                                 <div class="d-flex align-items-center">
                                     <div class="form-check flex-grow-1">
                                         <input type="checkbox" class="form-check-input" checked={self.group_gidnumber_assign} onchange={on_group_gid_assign} disabled={self.loading} />
-                                        <label class="form-check-label">{ "Auto-assign gidNumber range:" }</label>
+                                        <label class="form-check-label">{ "Auto-assign gidNumber range" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="3000" max="60000" disabled={self.loading} />
                                     <span class="mx-1 text-muted small">{ "to" }</span>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="1000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="3000" max="60000" disabled={self.loading} />
                                     <button onclick={on_reassign_group_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
                                 </div>
                             </div>
@@ -433,6 +383,37 @@ impl Component for PosixOptions {
                                 { "Save POSIX Config" }
                             </button>
                         </div>
+
+                        // Confirmation modal
+                        { if let Some(action) = &self.pending_reassign {
+                            let message = match action {
+                                ReassignAction::UserUidNumbers => "This will reassign all user uidNumbers using the configured range.".to_string(),
+                                ReassignAction::UserGidNumbers => "This will reassign all user gidNumbers using the configured value.".to_string(),
+                                ReassignAction::UserLoginShells => "This will reassign the loginShell to every user.".to_string(),
+                                ReassignAction::UserHomeDirectories => "This will reassign the homeDirectory to every user.".to_string(),
+                                ReassignAction::GroupGidNumbers => "This will reassign all group gidNumbers using the configured range.".to_string(),
+                            };
+                            html! {
+                                <div class="modal fade show" style="display: block; background: rgba(0,0,0,0.5);" tabindex="-1">
+                                    <div class="modal-dialog">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">{ "Confirm Reassign" }</h5>
+                                                <button type="button" class="btn-close" onclick={link.callback(|_| Msg::CancelReassign)}></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <p>{ message }</p>
+                                                <p class="text-danger fw-bold">{ "This action affects the entire database and cannot be undone." }</p>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" onclick={link.callback(|_| Msg::CancelReassign)}>{ "Cancel" }</button>
+                                                <button type="button" class="btn btn-warning" onclick={link.callback(|_| Msg::ConfirmReassign)}>{ "Confirm Reassign" }</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        } else { html! {} }}
                     </div>
                 </div>
             </div>
