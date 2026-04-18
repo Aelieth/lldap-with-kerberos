@@ -320,7 +320,7 @@ impl SqlBackendHandler {
         let lower_email = request.email.as_ref().map(|s| s.as_str().to_lowercase());
         let now = chrono::Utc::now().naive_utc();
 
-        // === POSIX RANGE + DUPLICATE CHECKS (on any inserted uidnumber/gidnumber) ===
+        // === POSIX RANGE + DUPLICATE CHECKS (only on inserted uidnumber/gidnumber) ===
         let _settings = Self::get_posix_settings_with_transaction(transaction).await?;
 
         for attr in &update_user_attributes {
@@ -340,9 +340,9 @@ impl SqlBackendHandler {
             };
 
             if name == "uidnumber" || name == "gidnumber" {
-                if value != 0 && (value < 3000 || value > 20000) {
+                if value < 3000 || value > 60000 {
                     return Err(DomainError::InternalError(format!(
-                        "{} must be between 3000 and 20000 (or 0 for no limit)", name
+                        "{} must be between 3000 and 60000", name
                     )));
                 }
 
@@ -637,29 +637,38 @@ impl SqlBackendHandler {
         Ok(())
     }
 
-#[instrument(skip(self), level = "info", err)]
+    #[instrument(skip(self), level = "info", err)]
     pub async fn reassign_user_gid_numbers(&self) -> Result<()> {
         let settings = self.get_posix_settings().await?;
         self.sql_pool.transaction::<_, (), DomainError>(|tx| {
             Box::pin(async move {
                 if settings.user_gidnumber_assign {
-                    let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
-                    let mut next = settings.user_gidnumber_start;
+                    // STATIC assignment — every user gets the exact same gidNumber from config
+                    let users = model::User::find().all(tx).await?;
                     for user in users {
-                        let gid_value = next.to_string().into_bytes();
+                        let gid_value = settings.user_gidnumber_start.to_string().into_bytes();
                         let attr = model::user_attributes::ActiveModel {
                             user_id: Set(user.user_id.clone()),
                             attribute_name: Set(AttributeName::from("gidnumber")),
                             value: Set(Serialized(gid_value)),
                         };
                         model::UserAttributes::insert(attr)
-                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
+                            .on_conflict(OnConflict::columns([
+                                model::user_attributes::Column::UserId,
+                                model::user_attributes::Column::AttributeName,
+                            ])
+                            .update_column(model::user_attributes::Column::Value)
+                            .to_owned())
                             .exec(tx).await?;
                         let now = chrono::Utc::now().naive_utc();
-                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
-                        next += 1;
+                        model::users::ActiveModel {
+                            user_id: Set(user.user_id),
+                            modified_date: Set(now),
+                            ..Default::default()
+                        }.update(tx).await?;
                     }
                 } else {
+                    // Toggle OFF → delete gidnumber from all users
                     model::UserAttributes::delete_many()
                         .filter(model::user_attributes::Column::AttributeName.eq("gidnumber"))
                         .exec(tx)

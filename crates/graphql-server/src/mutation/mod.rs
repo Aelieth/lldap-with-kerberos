@@ -1106,14 +1106,14 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             if input.user_uidnumber_start < 3000 || input.user_uidnumber_start > 60000 ||
                input.user_uidnumber_max < 3000 || input.user_uidnumber_max > 60000 {
                 return Err(FieldError::new(
-                    "user_uidnumber_start and user_uidnumber_max must be between 3000 and 60000 inclusive",
+                    "user_uidnumber must be between 3000 and 60000",
                     juniper::Value::null(),
                 ));
             }
         }
         if input.user_gidnumber_assign && (input.user_gidnumber_start < 3000 || input.user_gidnumber_start > 60000) {
             return Err(FieldError::new(
-                "user_gidnumber_start must be between 3000 and 60000 inclusive",
+                "user_gidnumber_start must be between 3000 and 60000",
                 juniper::Value::null(),
             ));
         }
@@ -1121,7 +1121,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             if input.group_gidnumber_start < 3000 || input.group_gidnumber_start > 60000 ||
                input.group_gidnumber_max < 3000 || input.group_gidnumber_max > 60000 {
                 return Err(FieldError::new(
-                    "group_gidnumber_start and group_gidnumber_max must be between 3000 and 60000 inclusive",
+                    "group_gidnumber must be between 3000 and 60000",
                     juniper::Value::null(),
                 ));
             }
@@ -1156,7 +1156,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         Ok(PosixSettingsResponse {
             success: true,
-            message: "✅ Full POSIX settings saved (all toggles and ranges updated)".to_string(),
+            message: "✅ POSIX settings saved (toggles and ranges updated)".to_string(),
         })
     }
 
@@ -1180,7 +1180,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         Ok(PosixSettingsResponse {
             success: true,
-            message: "✅ All user uidNumbers have been reassigned from the new starting value".to_string(),
+            message: "✅ All user uidNumbers have been reassigned".to_string(),
         })
     }
 
@@ -1204,7 +1204,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         Ok(PosixSettingsResponse {
             success: true,
-            message: "✅ All user gidNumbers have been reassigned from the new starting value".to_string(),
+            message: "✅ All user gidNumbers have been reassigned".to_string(),
         })
     }
 
@@ -1276,7 +1276,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
 
         Ok(PosixSettingsResponse {
             success: true,
-            message: "✅ All group gidNumbers have been reassigned from the new starting value".to_string(),
+            message: "✅ All group gidNumbers have been reassigned".to_string(),
         })
     }
 }

@@ -130,14 +130,14 @@ impl CommonComponent<PosixOptions> for PosixOptions {
 
                 self.loading = false;
                 self.config_changed = false;
-                self.status = "✅ POSIX config loaded successfully".to_string();
+                self.status = "POSIX config loaded".to_string();
                 self.status_class = "bg-success".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::ConfigResponse(Err(e)) => {
                 self.loading = false;
-                self.status = format!("❌ Failed to load POSIX config: {}", e);
+                self.status = format!("POSIX config failure: {}", e);
                 self.status_class = "bg-danger".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
@@ -173,20 +173,20 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                     groupGidnumberMax: self.group_gidnumber_max.parse().unwrap_or(60000),
                 };
                 let vars = set_posix_config::Variables { input };
-                self.common.call_graphql::<SetPosixConfig, _>(ctx, vars, Msg::SaveResponse, "Failed to save POSIX config");
+                self.common.call_graphql::<SetPosixConfig, _>(ctx, vars, Msg::SaveResponse, "Save POSIX config failure");
                 self.status = "Saving...".to_string();
                 self.status_class = "bg-info".to_string();
                 Ok(false)
             }
             Msg::SaveResponse(Ok(_)) => {
                 self.config_changed = false;
-                self.status = "✅ POSIX config saved successfully".to_string();
+                self.status = "POSIX config saved".to_string();
                 self.status_class = "bg-success".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::SaveResponse(Err(e)) => {
-                self.status = format!("❌ Failed to save POSIX config: {}", e);
+                self.status = format!("Failed: {}", e);
                 self.status_class = "bg-danger".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
@@ -204,23 +204,23 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                     match action {
                         ReassignAction::UserUidNumbers => {
                             let vars = reassign_user_uid_numbers::Variables {};
-                            self.common.call_graphql::<ReassignUserUidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user uidNumbers");
+                            self.common.call_graphql::<ReassignUserUidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Reassign user uidNumbers failure");
                         }
                         ReassignAction::UserGidNumbers => {
                             let vars = reassign_user_gid_numbers::Variables {};
-                            self.common.call_graphql::<ReassignUserGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user gidNumbers");
+                            self.common.call_graphql::<ReassignUserGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Reassign user gidNumbers failure");
                         }
                         ReassignAction::UserLoginShells => {
                             let vars = reassign_user_login_shells::Variables {};
-                            self.common.call_graphql::<ReassignUserLoginShells, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user loginShells");
+                            self.common.call_graphql::<ReassignUserLoginShells, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Reassign user loginShells failure");
                         }
                         ReassignAction::UserHomeDirectories => {
                             let vars = reassign_user_home_directories::Variables {};
-                            self.common.call_graphql::<ReassignUserHomeDirectories, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign user homeDirectories");
+                            self.common.call_graphql::<ReassignUserHomeDirectories, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Reassign user homeDirectories failure");
                         }
                         ReassignAction::GroupGidNumbers => {
                             let vars = reassign_gid_numbers::Variables {};
-                            self.common.call_graphql::<ReassignGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Failed to reassign group gidNumbers");
+                            self.common.call_graphql::<ReassignGidNumbers, _>(ctx, vars, |r| Msg::ReassignResponse(r.map(|_| ())), "Reassign group gidNumbers failure");
                         }
                     }
                     self.status = "Reassigning...".to_string();
@@ -234,13 +234,13 @@ impl CommonComponent<PosixOptions> for PosixOptions {
             }
 
             Msg::ReassignResponse(Ok(_)) => {
-                self.status = "✅ Reassign completed successfully".to_string();
+                self.status = "Reassign completed".to_string();
                 self.status_class = "bg-success".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
             }
             Msg::ReassignResponse(Err(e)) => {
-                self.status = format!("❌ Reassign failed: {}", e);
+                self.status = format!("Reassign failed: {}", e);
                 self.status_class = "bg-danger".to_string();
                 ctx.props().on_status_update.emit(self.status.clone());
                 Ok(true)
