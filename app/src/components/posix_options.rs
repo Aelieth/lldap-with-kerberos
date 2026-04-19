@@ -1,4 +1,3 @@
-// crates/graphql-server/src/components/posix_options.rs
 use crate::{
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
@@ -57,6 +56,14 @@ pub struct PosixOptions {
     group_gidnumber_assign: bool,
     group_gidnumber_start: String,
     group_gidnumber_max: String,
+
+    // saved states for button logic and pending-save behavior
+    saved_user_uidnumber_assign: bool,
+    saved_user_gidnumber_assign: bool,
+    saved_user_loginshell_assign: bool,
+    saved_user_homedirectory_assign: bool,
+    saved_group_gidnumber_assign: bool,
+
     config_changed: bool,
     loading: bool,
     // Confirmation modal
@@ -115,18 +122,28 @@ impl CommonComponent<PosixOptions> for PosixOptions {
             }
             Msg::ConfigResponse(Ok(data)) => {
                 let cfg = data.posix_settings;
+
                 self.user_uidnumber_assign = cfg.user_uidnumber_assign;
-                self.user_uidnumber_start = cfg.user_uidnumber_start.to_string();
-                self.user_uidnumber_max = cfg.user_uidnumber_max.to_string();
+                self.saved_user_uidnumber_assign = cfg.user_uidnumber_assign;
+                self.user_uidnumber_start = if cfg.user_uidnumber_assign { cfg.user_uidnumber_start.to_string() } else { "".to_string() };
+                self.user_uidnumber_max = if cfg.user_uidnumber_assign { cfg.user_uidnumber_max.to_string() } else { "".to_string() };
+
                 self.user_gidnumber_assign = cfg.user_gidnumber_assign;
-                self.user_gidnumber_start = cfg.user_gidnumber_start.to_string();
+                self.saved_user_gidnumber_assign = cfg.user_gidnumber_assign;
+                self.user_gidnumber_start = if cfg.user_gidnumber_assign { cfg.user_gidnumber_start.to_string() } else { "".to_string() };
+
                 self.user_loginshell_assign = cfg.user_loginshell_assign;
-                self.user_loginshell_default = cfg.user_loginshell_default;
+                self.saved_user_loginshell_assign = cfg.user_loginshell_assign;
+                self.user_loginshell_default = if cfg.user_loginshell_assign { cfg.user_loginshell_default } else { "".to_string() };
+
                 self.user_homedirectory_assign = cfg.user_homedirectory_assign;
-                self.user_homedirectory_prefix = cfg.user_homedirectory_prefix;
+                self.saved_user_homedirectory_assign = cfg.user_homedirectory_assign;
+                self.user_homedirectory_prefix = if cfg.user_homedirectory_assign { cfg.user_homedirectory_prefix } else { "".to_string() };
+
                 self.group_gidnumber_assign = cfg.group_gidnumber_assign;
-                self.group_gidnumber_start = cfg.group_gidnumber_start.to_string();
-                self.group_gidnumber_max = cfg.group_gidnumber_max.to_string();
+                self.saved_group_gidnumber_assign = cfg.group_gidnumber_assign;
+                self.group_gidnumber_start = if cfg.group_gidnumber_assign { cfg.group_gidnumber_start.to_string() } else { "".to_string() };
+                self.group_gidnumber_max = if cfg.group_gidnumber_assign { cfg.group_gidnumber_max.to_string() } else { "".to_string() };
 
                 self.loading = false;
                 self.config_changed = false;
@@ -144,16 +161,53 @@ impl CommonComponent<PosixOptions> for PosixOptions {
             }
 
             // Update handlers
-            Msg::UpdateUserUidAssign(v) => { self.user_uidnumber_assign = v; self.config_changed = true; Ok(true) }
+            Msg::UpdateUserUidAssign(v) => {
+                self.user_uidnumber_assign = v;
+                if !v {
+                    self.user_uidnumber_start = "".to_string();
+                    self.user_uidnumber_max = "".to_string();
+                }
+                self.config_changed = true;
+                Ok(true)
+            }
             Msg::UpdateUserUidStart(s) => { self.user_uidnumber_start = s; self.config_changed = true; Ok(true) }
             Msg::UpdateUserUidMax(s) => { self.user_uidnumber_max = s; self.config_changed = true; Ok(true) }
-            Msg::UpdateUserGidAssign(v) => { self.user_gidnumber_assign = v; self.config_changed = true; Ok(true) }
+            Msg::UpdateUserGidAssign(v) => {
+                self.user_gidnumber_assign = v;
+                if !v {
+                    self.user_gidnumber_start = "".to_string();
+                }
+                self.config_changed = true;
+                Ok(true)
+            }
             Msg::UpdateUserGidStart(s) => { self.user_gidnumber_start = s; self.config_changed = true; Ok(true) }
-            Msg::UpdateUserLoginShellAssign(v) => { self.user_loginshell_assign = v; self.config_changed = true; Ok(true) }
+            Msg::UpdateUserLoginShellAssign(v) => {
+                self.user_loginshell_assign = v;
+                if !v {
+                    self.user_loginshell_default = "".to_string();
+                }
+                self.config_changed = true;
+                Ok(true)
+            }
             Msg::UpdateUserLoginShellDefault(s) => { self.user_loginshell_default = s; self.config_changed = true; Ok(true) }
-            Msg::UpdateUserHomeAssign(v) => { self.user_homedirectory_assign = v; self.config_changed = true; Ok(true) }
+            Msg::UpdateUserHomeAssign(v) => {
+                self.user_homedirectory_assign = v;
+                if !v {
+                    self.user_homedirectory_prefix = "".to_string();
+                }
+                self.config_changed = true;
+                Ok(true)
+            }
             Msg::UpdateUserHomePrefix(s) => { self.user_homedirectory_prefix = s; self.config_changed = true; Ok(true) }
-            Msg::UpdateGroupGidAssign(v) => { self.group_gidnumber_assign = v; self.config_changed = true; Ok(true) }
+            Msg::UpdateGroupGidAssign(v) => {
+                self.group_gidnumber_assign = v;
+                if !v {
+                    self.group_gidnumber_start = "".to_string();
+                    self.group_gidnumber_max = "".to_string();
+                }
+                self.config_changed = true;
+                Ok(true)
+            }
             Msg::UpdateGroupGidStart(s) => { self.group_gidnumber_start = s; self.config_changed = true; Ok(true) }
             Msg::UpdateGroupGidMax(s) => { self.group_gidnumber_max = s; self.config_changed = true; Ok(true) }
 
@@ -179,6 +233,13 @@ impl CommonComponent<PosixOptions> for PosixOptions {
                 Ok(false)
             }
             Msg::SaveResponse(Ok(_)) => {
+                // sync saved states to current after successful save
+                self.saved_user_uidnumber_assign = self.user_uidnumber_assign;
+                self.saved_user_gidnumber_assign = self.user_gidnumber_assign;
+                self.saved_user_loginshell_assign = self.user_loginshell_assign;
+                self.saved_user_homedirectory_assign = self.user_homedirectory_assign;
+                self.saved_group_gidnumber_assign = self.group_gidnumber_assign;
+
                 self.config_changed = false;
                 self.status = "POSIX config saved".to_string();
                 self.status_class = "bg-success".to_string();
@@ -271,6 +332,13 @@ impl Component for PosixOptions {
             group_gidnumber_assign: false,
             group_gidnumber_start: "3000".to_string(),
             group_gidnumber_max: "60000".to_string(),
+
+            saved_user_uidnumber_assign: false,
+            saved_user_gidnumber_assign: false,
+            saved_user_loginshell_assign: false,
+            saved_user_homedirectory_assign: false,
+            saved_group_gidnumber_assign: false,
+
             config_changed: false,
             loading: true,
             pending_reassign: None,
@@ -286,7 +354,7 @@ impl Component for PosixOptions {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 
-        // Callbacks (unchanged from last version)
+        // Callbacks
         let on_user_uid_assign = link.callback(|e: Event| { let checked = e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().checked(); Msg::UpdateUserUidAssign(checked) });
         let on_user_uid_start = link.callback(|e: InputEvent| Msg::UpdateUserUidStart(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
         let on_user_uid_max = link.callback(|e: InputEvent| Msg::UpdateUserUidMax(e.target().unwrap().dyn_into::<web_sys::HtmlInputElement>().unwrap().value()));
@@ -309,7 +377,22 @@ impl Component for PosixOptions {
         let on_save = link.callback(|_| Msg::SaveConfig);
 
         let save_disabled = self.loading || !self.config_changed;
-        let reassign_disabled = self.loading;
+
+        // per-button logic (label + enabled after save)
+        let uid_button_text = if self.user_uidnumber_assign { "Reassign" } else { "Remove" };
+        let uid_button_disabled = self.loading || (self.user_uidnumber_assign != self.saved_user_uidnumber_assign);
+
+        let gid_user_button_text = if self.user_gidnumber_assign { "Reassign" } else { "Remove" };
+        let gid_user_button_disabled = self.loading || (self.user_gidnumber_assign != self.saved_user_gidnumber_assign);
+
+        let loginshell_button_text = if self.user_loginshell_assign { "Reassign" } else { "Remove" };
+        let loginshell_button_disabled = self.loading || (self.user_loginshell_assign != self.saved_user_loginshell_assign);
+
+        let home_button_text = if self.user_homedirectory_assign { "Reassign" } else { "Remove" };
+        let home_button_disabled = self.loading || (self.user_homedirectory_assign != self.saved_user_homedirectory_assign);
+
+        let gid_group_button_text = if self.group_gidnumber_assign { "Reassign" } else { "Remove" };
+        let gid_group_button_disabled = self.loading || (self.group_gidnumber_assign != self.saved_group_gidnumber_assign);
 
         html! {
             <div class="row">
@@ -328,10 +411,10 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.user_uidnumber_assign} onchange={on_user_uid_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign uidNumber range" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="3000" max="60000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_start.clone()} oninput={on_user_uid_start} min="3000" max="60000" disabled={self.loading || !self.user_uidnumber_assign} />
                                     <span class="mx-1 text-muted small">{ "to" }</span>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="3000" max="60000" disabled={self.loading} />
-                                    <button onclick={on_reassign_user_uid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_uidnumber_max.clone()} oninput={on_user_uid_max} min="3000" max="60000" disabled={self.loading || !self.user_uidnumber_assign} />
+                                    <button onclick={on_reassign_user_uid} class="btn btn-warning btn-sm ms-2" disabled={uid_button_disabled}>{ uid_button_text }</button>
                                 </div>
 
                                 <div class="d-flex align-items-center mb-3">
@@ -339,8 +422,8 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.user_gidnumber_assign} onchange={on_user_gid_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign gidNumber" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="3000" max="60000" disabled={self.loading} />
-                                    <button onclick={on_reassign_user_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.user_gidnumber_start.clone()} oninput={on_user_gid_start} min="3000" max="60000" disabled={self.loading || !self.user_gidnumber_assign} />
+                                    <button onclick={on_reassign_user_gid} class="btn btn-warning btn-sm ms-2" disabled={gid_user_button_disabled}>{ gid_user_button_text }</button>
                                 </div>
 
                                 <div class="d-flex align-items-center mb-3">
@@ -348,8 +431,8 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.user_loginshell_assign} onchange={on_user_loginshell_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign loginShell" }</label>
                                     </div>
-                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_loginshell_default.clone()} oninput={on_user_loginshell_default} disabled={self.loading} />
-                                    <button onclick={on_reassign_user_loginshell} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_loginshell_default.clone()} oninput={on_user_loginshell_default} disabled={self.loading || !self.user_loginshell_assign} />
+                                    <button onclick={on_reassign_user_loginshell} class="btn btn-warning btn-sm ms-2" disabled={loginshell_button_disabled}>{ loginshell_button_text }</button>
                                 </div>
 
                                 <div class="d-flex align-items-center mb-3">
@@ -357,8 +440,8 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.user_homedirectory_assign} onchange={on_user_home_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign homeDirectory" }</label>
                                     </div>
-                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_homedirectory_prefix.clone()} oninput={on_user_home_prefix} disabled={self.loading} />
-                                    <button onclick={on_reassign_user_home} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                    <input type="text" class="form-control form-control-sm mx-2" style="width: 160px;" value={self.user_homedirectory_prefix.clone()} oninput={on_user_home_prefix} disabled={self.loading || !self.user_homedirectory_assign} />
+                                    <button onclick={on_reassign_user_home} class="btn btn-warning btn-sm ms-2" disabled={home_button_disabled}>{ home_button_text }</button>
                                 </div>
                             </div>
 
@@ -369,10 +452,10 @@ impl Component for PosixOptions {
                                         <input type="checkbox" class="form-check-input" checked={self.group_gidnumber_assign} onchange={on_group_gid_assign} disabled={self.loading} />
                                         <label class="form-check-label">{ "Auto-assign gidNumber range" }</label>
                                     </div>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="3000" max="60000" disabled={self.loading} />
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_start.clone()} oninput={on_group_gid_start} min="3000" max="60000" disabled={self.loading || !self.group_gidnumber_assign} />
                                     <span class="mx-1 text-muted small">{ "to" }</span>
-                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="3000" max="60000" disabled={self.loading} />
-                                    <button onclick={on_reassign_group_gid} class="btn btn-warning btn-sm ms-2" disabled={reassign_disabled}>{ "Reassign" }</button>
+                                    <input type="number" class="form-control form-control-sm mx-2" style="width: 90px;" value={self.group_gidnumber_max.clone()} oninput={on_group_gid_max} min="3000" max="60000" disabled={self.loading || !self.group_gidnumber_assign} />
+                                    <button onclick={on_reassign_group_gid} class="btn btn-warning btn-sm ms-2" disabled={gid_group_button_disabled}>{ gid_group_button_text }</button>
                                 </div>
                             </div>
 

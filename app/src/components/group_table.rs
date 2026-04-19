@@ -2,14 +2,16 @@ use crate::{
     components::{
         router::{AppRoute, Link},
         ou_table::OuTable,
-        change_group_ou::ChangeGroupOu,
+        change_ou::{ChangeOu, OuChangeKind},
         delete_group::DeleteGroup,
+        table_action_bar::TableActionBar,
+        table_bulk_selection::TableBulkSelection,
     },
     infra::common_component::{CommonComponent, CommonComponentParts},
 };
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
-use list_user_ous_query::ResponseData as OusResponseData;
+use list_ous_query::ResponseData as OusResponseData;
 use yew::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -25,11 +27,11 @@ pub struct GetGroupList;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/list_user_ous.graphql",
+    query_path = "queries/list_ous.graphql",
     response_derives = "Debug, Clone",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct ListUserOusQuery;
+pub struct ListOusQuery;
 
 use get_group_list::ResponseData;
 
@@ -42,7 +44,7 @@ pub struct GroupTable {
     search_term: String,
     search_field: String,
     ous: Vec<String>,
-    selected_groups: Vec<i64>,
+    bulk_selection: TableBulkSelection<i64>,
 }
 
 pub enum Msg {
@@ -58,6 +60,7 @@ pub enum Msg {
     OuCreated(String),
     OuDeleted(String),
     ChangeOuForSelected(String),
+    CreateOuError(String),
 }
 
 impl CommonComponent<GroupTable> for GroupTable {
@@ -68,15 +71,19 @@ impl CommonComponent<GroupTable> for GroupTable {
                 Ok(true)
             }
             Msg::ListUserOusResponse(ous) => {
-                self.ous = ous?.user_ous;
+                self.ous = ous?.list_ous;
                 Ok(true)
             }
             Msg::OnError(e) => Err(e),
+            Msg::CreateOuError(err) => {
+                self.common.error = Some(anyhow::Error::msg(err));
+                Ok(true)
+            }
             Msg::OnGroupDeleted(group_id) => {
                 if let Some(groups) = &mut self.groups {
                     groups.retain(|g| g.id != group_id);
                 }
-                self.selected_groups.retain(|id| *id != group_id);
+                self.bulk_selection.clear();
                 Ok(true)
             }
             Msg::OuFilterChanged(ou) => {
@@ -92,11 +99,7 @@ impl CommonComponent<GroupTable> for GroupTable {
                 Ok(true)
             }
             Msg::ToggleGroupSelection(group_id) => {
-                if self.selected_groups.contains(&group_id) {
-                    self.selected_groups.retain(|id| *id != group_id);
-                } else {
-                    self.selected_groups.push(group_id);
-                }
+                self.bulk_selection.toggle(group_id);
                 Ok(true)
             }
             Msg::ToggleSelectAll => {
@@ -113,12 +116,7 @@ impl CommonComponent<GroupTable> for GroupTable {
                             _ => true,
                         });
                     }
-                    let filtered_ids: Vec<i64> = filtered.iter().map(|g| g.id).collect();
-                    if self.selected_groups.len() == filtered_ids.len() && !filtered_ids.is_empty() {
-                        self.selected_groups.clear();
-                    } else {
-                        self.selected_groups = filtered_ids;
-                    }
+                    self.bulk_selection.toggle_all(&filtered.iter().map(|g| g.id).collect::<Vec<_>>());
                 }
                 Ok(true)
             }
@@ -136,7 +134,7 @@ impl CommonComponent<GroupTable> for GroupTable {
                 Ok(true)
             }
             Msg::ChangeOuForSelected(_new_ou) => {
-                self.selected_groups.clear();
+                self.bulk_selection.clear();
                 self.common.call_graphql::<GetGroupList, _>(
                     ctx,
                     get_group_list::Variables {},
@@ -164,6 +162,10 @@ impl GroupTable {
     fn get_ou(group: &Group) -> String {
         Self::get_attribute_value(group, "ou").unwrap_or_else(|| "groups".to_string())
     }
+
+    fn get_member_count(_group: &Group) -> String {
+        "–".to_string()   // placeholder — expand when GraphQL adds real member count
+    }
 }
 
 impl Component for GroupTable {
@@ -178,7 +180,7 @@ impl Component for GroupTable {
             search_term: String::new(),
             search_field: "Group Name".to_string(),
             ous: vec![],
-            selected_groups: Vec::new(),
+            bulk_selection: TableBulkSelection::default(),
         };
 
         table.common.call_graphql::<GetGroupList, _>(
@@ -188,9 +190,9 @@ impl Component for GroupTable {
             "Error trying to fetch groups",
         );
 
-        table.common.call_graphql::<ListUserOusQuery, _>(
+        table.common.call_graphql::<ListOusQuery, _>(
             ctx,
-            list_user_ous_query::Variables {},
+            list_ous_query::Variables {},
             Msg::ListUserOusResponse,
             "Error trying to fetch OUs",
         );
@@ -203,73 +205,6 @@ impl Component for GroupTable {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div>
-            <OuTable
-            ou_filter={self.ou_filter.clone()}
-            ous={self.ous.clone()}
-            on_ou_changed={ctx.link().callback(Msg::OuFilterChanged)}
-            on_ou_created={ctx.link().callback(Msg::OuCreated)}
-            on_ou_deleted={ctx.link().callback(Msg::OuDeleted)}
-            error={self.common.error.as_ref().map(|e| e.to_string())}
-            default_primary={"groups".to_string()}
-            />
-            <hr class="my-4" />
-
-            <div class="row g-3 align-items-end mb-3">
-                <div class="col-auto">
-                    <Link classes="btn btn-primary" to={AppRoute::CreateGroup}>
-                        <i class="bi-people-fill me-2"></i>
-                        {"Create Group"}
-                    </Link>
-                </div>
-                <div class="col-auto">
-                    <ChangeGroupOu
-                        selected_groups={self.selected_groups.clone()}
-                        ous={self.ous.clone()}
-                        on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
-                        on_error={Callback::noop()} />
-                </div>
-
-                <div class="col-md-2 ms-auto">
-                    <select class="form-select" onchange={ctx.link().callback(|e: Event| {
-                        let value = e.target().unwrap()
-                            .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
-                            .value();
-                        Msg::SearchFieldChanged(value)
-                    })}>
-                        { for vec!["Group Name".to_string(), "OU".to_string()].iter().map(|f| html! {
-                            <option value={f.clone()} selected={f == &self.search_field}>{f}</option>
-                        }) }
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <input type="text" class="form-control" placeholder="Type to search..." value={self.search_term.clone()}
-                    oninput={ctx.link().callback(|e: InputEvent| {
-                        let value = e.target().unwrap()
-                            .dyn_into::<web_sys::HtmlInputElement>().unwrap()
-                            .value();
-                        Msg::SearchTermChanged(value)
-                    })} />
-                </div>
-            </div>
-
-            {self.view_groups(ctx)}
-
-            <div class="row justify-content-start mt-3">
-                <div class="col-auto">
-                    // Bulk delete can be added later (next turtle step)
-                </div>
-            </div>
-
-            {self.view_errors()}
-            </div>
-        }
-    }
-}
-
-impl GroupTable {
-    fn view_groups(&self, ctx: &Context<Self>) -> Html {
         let filtered_groups = self.groups.as_ref().map_or(vec![], |groups| {
             let mut filtered = groups.clone();
             if self.ou_filter != "All" {
@@ -286,8 +221,58 @@ impl GroupTable {
             filtered
         });
 
-        let all_selected = !filtered_groups.is_empty() &&
-            filtered_groups.iter().all(|g| self.selected_groups.contains(&g.id));
+        html! {
+            <div>
+            <OuTable
+            ou_filter={self.ou_filter.clone()}
+            ous={self.ous.clone()}
+            on_ou_changed={ctx.link().callback(Msg::OuFilterChanged)}
+            on_ou_created={ctx.link().callback(Msg::OuCreated)}
+            on_ou_deleted={ctx.link().callback(Msg::OuDeleted)}
+            error={self.common.error.as_ref().map(|e| e.to_string())}
+            default_primary={"groups".to_string()}
+            />
+            <hr class="my-4" />
+
+            <TableActionBar
+                create_route={AppRoute::CreateGroup}
+                create_label={"Create Group".to_string()}
+                create_icon={"bi-people-fill me-2".to_string()}
+                kind={OuChangeKind::Groups(self.bulk_selection.selected.clone())}
+                ous={self.ous.clone()}
+                on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
+                on_error={ctx.link().callback(Msg::OnError)}
+                search_field={self.search_field.clone()}
+                search_term={self.search_term.clone()}
+                search_fields={vec![
+                    "Group Name".to_string(),
+                    "OU".to_string(),
+                ]}
+                on_search_field_changed={ctx.link().callback(Msg::SearchFieldChanged)}
+                on_search_term_changed={ctx.link().callback(Msg::SearchTermChanged)}
+            />
+
+            {self.view_groups(ctx, &filtered_groups)}
+
+            <div class="row justify-content-start mt-3">
+                <div class="col-auto">
+                    <DeleteGroup
+                        selected_groups={self.bulk_selection.selected.clone()}
+                        on_group_deleted={ctx.link().callback(Msg::OnGroupDeleted)}
+                        on_error={ctx.link().callback(Msg::OnError)}
+                    />
+                </div>
+            </div>
+
+            {self.view_errors()}
+            </div>
+        }
+    }
+}
+
+impl GroupTable {
+    fn view_groups(&self, ctx: &Context<Self>, filtered_groups: &[Group]) -> Html {
+        let all_selected = self.bulk_selection.all_selected(&filtered_groups.iter().map(|g| g.id).collect::<Vec<_>>());
 
         html! {
             <div class="table-responsive">
@@ -301,7 +286,7 @@ impl GroupTable {
             <th class="fw-bold fs-8">{"Group name"}</th>
             <th class="fw-bold fs-8">{"OU"}</th>
             <th class="fw-bold fs-8">{"Creation date"}</th>
-            <th class="fw-bold fs-8">{"Delete"}</th>
+            <th class="fw-bold fs-8">{"Members"}</th>
             </tr>
             </thead>
             <tbody>
@@ -313,7 +298,7 @@ impl GroupTable {
     }
 
     fn view_group(&self, ctx: &Context<Self>, group: &Group) -> Html {
-        let is_selected = self.selected_groups.contains(&group.id);
+        let is_selected = self.bulk_selection.is_selected(&group.id);
         let group_id = group.id;
 
         html! {
@@ -325,13 +310,7 @@ impl GroupTable {
             <td><Link to={AppRoute::GroupDetails{group_id: group.id}}>{&group.display_name}</Link></td>
             <td>{Self::get_ou(group)}</td>
             <td>{group.creation_date.naive_local().date()}</td>
-            <td>
-                <DeleteGroup
-                    group={group.clone()}
-                    on_group_deleted={ctx.link().callback(Msg::OnGroupDeleted)}
-                    on_error={ctx.link().callback(Msg::OnError)}
-                />
-            </td>
+            <td>{Self::get_member_count(group)}</td>
             </tr>
         }
     }

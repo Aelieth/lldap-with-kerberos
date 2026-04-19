@@ -37,7 +37,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY --chown=lldap:lldap . .
 RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password -p lldap-kerberos
-RUN cargo install wasm-pack
+RUN cargo install wasm-pack --locked
 RUN cd app && wasm-pack build --target web --release
 RUN cd app && gzip -9 -k -f pkg/lldap_app_bg.wasm
 

@@ -20,7 +20,7 @@ use crate::{
 use anyhow::{Result, ensure};
 use gloo_console::log;
 use graphql_client::GraphQLQuery;
-use list_user_ous_query::ResponseData as OusResponseData;
+use list_ous_query::ResponseData as OusResponseData;
 use validator_derive::Validate;
 use yew::prelude::*;
 use yew_form_derive::Model;
@@ -39,11 +39,11 @@ pub struct GetGroupAttributesSchema;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/list_user_ous.graphql",
+    query_path = "queries/list_ous.graphql",
     response_derives = "Debug, Clone",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct ListUserOusQuery;
+pub struct ListOusQuery;
 
 pub type Attribute =
     get_group_attributes_schema::GetGroupAttributesSchemaSchemaGroupSchemaAttributes;
@@ -105,7 +105,7 @@ impl CommonComponent<CreateGroupForm> for CreateGroupForm {
                 Ok(true)
             }
             Msg::ListUserOusResponse(ous) => {
-                self.ous = ous?.user_ous;
+                self.ous = ous?.list_ous;
                 Ok(true)
             }
             Msg::SubmitForm => {
@@ -191,9 +191,9 @@ impl Component for CreateGroupForm {
 
         component
             .common
-            .call_graphql::<ListUserOusQuery, _>(
+            .call_graphql::<ListOusQuery, _>(
                 ctx,
-                list_user_ous_query::Variables {},
+                list_ous_query::Variables {},
                 Msg::ListUserOusResponse,
                 "Error trying to fetch OUs",
             );
@@ -221,7 +221,7 @@ impl Component for CreateGroupForm {
             field_name="groupname"
             oninput={link.callback(|_| Msg::Update)} />
 
-            // OU selector exactly like create_user.rs
+            // OU selector — now using clean OuSelector with show_all=false
             <div class="mb-3 row">
             <label class="form-label col-4 col-form-label">{"Organizational Unit :"}</label>
             <div class="col-8">
@@ -229,7 +229,7 @@ impl Component for CreateGroupForm {
             ous={self.ous.clone()}
             current_ou={self.selected_ou.clone()}
             on_ou_changed={link.callback(Msg::OuChanged)}
-            hide_all={true} />
+            show_all={false} />
             </div>
             </div>
 

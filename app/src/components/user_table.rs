@@ -2,26 +2,27 @@ use crate::{
     components::{
         router::{AppRoute, Link},
         ou_table::OuTable,
-        change_user_ou::ChangeUserOu,
+        change_ou::OuChangeKind,
         delete_user::DeleteUser,
+        table_action_bar::TableActionBar,
+        table_bulk_selection::TableBulkSelection,
     },
     infra::common_component::{CommonComponent, CommonComponentParts},
 };
 use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use list_users_query::ResponseData;
-use list_user_ous_query::ResponseData as OusResponseData;
+use list_ous_query::ResponseData as OusResponseData;
 use yew::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "../schema.graphql",
-    query_path = "queries/list_user_ous.graphql",
+    query_path = "queries/list_ous.graphql",
     response_derives = "Debug, Clone",
     custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct ListUserOusQuery;
+pub struct ListOusQuery;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -41,7 +42,7 @@ pub struct UserTable {
     search_term: String,
     search_field: String,
     ous: Vec<String>,
-    selected_users: Vec<String>,
+    bulk_selection: TableBulkSelection<String>,   // ← new reusable logic
 }
 
 pub enum Msg {
@@ -69,7 +70,7 @@ impl CommonComponent<UserTable> for UserTable {
                 Ok(true)
             }
             Msg::ListUserOusResponse(ous) => {
-                self.ous = ous?.user_ous;
+                self.ous = ous?.list_ous;
                 Ok(true)
             }
             Msg::OnError(e) => Err(e),
@@ -81,7 +82,7 @@ impl CommonComponent<UserTable> for UserTable {
                 if let Some(users) = &mut self.users {
                     users.retain(|u| u.id != user_id);
                 }
-                self.selected_users.retain(|id| id != &user_id);
+                self.bulk_selection.clear();
                 Ok(true)
             }
             Msg::OuFilterChanged(ou) => {
@@ -97,11 +98,7 @@ impl CommonComponent<UserTable> for UserTable {
                 Ok(true)
             }
             Msg::ToggleUserSelection(user_id) => {
-                if self.selected_users.contains(&user_id) {
-                    self.selected_users.retain(|id| id != &user_id);
-                } else {
-                    self.selected_users.push(user_id);
-                }
+                self.bulk_selection.toggle(user_id);
                 Ok(true)
             }
             Msg::ToggleSelectAll => {
@@ -114,19 +111,14 @@ impl CommonComponent<UserTable> for UserTable {
                         let term = self.search_term.to_lowercase();
                         filtered.retain(|u| match self.search_field.as_str() {
                             "User ID" => u.id.to_lowercase().contains(&term),
-                                        "Email" => u.email.to_lowercase().contains(&term),
-                                        "Display Name" => u.display_name.to_lowercase().contains(&term),
-                                        "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
-                                        "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
-                                        _ => true,
+                            "Email" => u.email.to_lowercase().contains(&term),
+                            "Display Name" => u.display_name.to_lowercase().contains(&term),
+                            "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
+                            "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
+                            _ => true,
                         });
                     }
-                    let filtered_ids: Vec<String> = filtered.iter().map(|u| u.id.clone()).collect();
-                    if self.selected_users.len() == filtered_ids.len() && !filtered_ids.is_empty() {
-                        self.selected_users.clear();
-                    } else {
-                        self.selected_users = filtered_ids;
-                    }
+                    self.bulk_selection.toggle_all(&filtered.iter().map(|u| u.id.clone()).collect::<Vec<_>>());
                 }
                 Ok(true)
             }
@@ -148,7 +140,7 @@ impl CommonComponent<UserTable> for UserTable {
                 Ok(true)
             }
             Msg::ChangeOuForSelected(_new_ou) => {
-                self.selected_users.clear();
+                self.bulk_selection.clear();
                 self.common.call_graphql::<ListUsersQuery, _>(
                     ctx,
                     list_users_query::Variables { filters: None },
@@ -196,7 +188,7 @@ impl Component for UserTable {
             search_term: String::new(),
             search_field: "User ID".to_string(),
             ous: vec![],
-            selected_users: Vec::new(),
+            bulk_selection: TableBulkSelection::default(),
         };
 
         table.common.call_graphql::<ListUsersQuery, _>(
@@ -206,9 +198,9 @@ impl Component for UserTable {
             "Error trying to fetch users",
         );
 
-        table.common.call_graphql::<ListUserOusQuery, _>(
+        table.common.call_graphql::<ListOusQuery, _>(
             ctx,
-            list_user_ous_query::Variables {},
+            list_ous_query::Variables {},
             Msg::ListUserOusResponse,
             "Error trying to fetch OUs",
         );
@@ -221,77 +213,6 @@ impl Component for UserTable {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div>
-            <OuTable
-            ou_filter={self.ou_filter.clone()}
-            ous={self.ous.clone()}
-            on_ou_changed={ctx.link().callback(Msg::OuFilterChanged)}
-            on_ou_created={ctx.link().callback(Msg::OuCreated)}
-            on_ou_deleted={ctx.link().callback(Msg::OuDeleted)}
-            error={self.common.error.as_ref().map(|e| e.to_string())}
-            default_primary={"people".to_string()}
-            />
-            <hr class="my-4" />
-
-            <div class="row g-3 align-items-end mb-3">
-            <div class="col-auto">
-            <Link classes="btn btn-primary" to={AppRoute::CreateUser}>
-            <i class="bi-person-plus me-2"></i>
-            {"Create User"}
-            </Link>
-            </div>
-            <div class="col-auto">
-            <ChangeUserOu
-            selected_users={self.selected_users.clone()}
-            ous={self.ous.clone()}
-            on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
-            on_error={Callback::noop()} />
-            </div>
-
-            <div class="col-md-2 ms-auto">
-            <select class="form-select" onchange={ctx.link().callback(|e: Event| {
-                let value = e.target().unwrap()
-                .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
-                .value();
-                Msg::SearchFieldChanged(value)
-            })}>
-            { for vec!["User ID".to_string(), "Email".to_string(), "Display Name".to_string(), "First Name".to_string(), "Last Name".to_string(), "Creation Date".to_string()].iter().map(|f| html! {
-                <option value={f.clone()} selected={f == &self.search_field}>{f}</option>
-            }) }
-            </select>
-            </div>
-            <div class="col-md-4">
-            <input type="text" class="form-control" placeholder="Type to search..." value={self.search_term.clone()}
-            oninput={ctx.link().callback(|e: InputEvent| {
-                let value = e.target().unwrap()
-                .dyn_into::<web_sys::HtmlInputElement>().unwrap()
-                .value();
-                Msg::SearchTermChanged(value)
-            })} />
-            </div>
-            </div>
-
-            {self.view_users(ctx)}
-
-            <div class="row justify-content-start mt-3">
-                <div class="col-auto">
-                    <DeleteUser
-                        selected_users={self.selected_users.clone()}
-                        on_user_deleted={ctx.link().callback(Msg::OnUserDeleted)}
-                        on_error={ctx.link().callback(Msg::OnError)}
-                    />
-                </div>
-            </div>
-
-            {self.view_errors()}
-            </div>
-        }
-    }
-}
-
-impl UserTable {
-    fn view_users(&self, ctx: &Context<Self>) -> Html {
         let filtered_users = self.users.as_ref().map_or(vec![], |users| {
             let mut filtered = users.clone();
             if self.ou_filter != "All" {
@@ -311,8 +232,62 @@ impl UserTable {
             filtered
         });
 
-        let all_selected = !filtered_users.is_empty() &&
-        filtered_users.iter().all(|u| self.selected_users.contains(&u.id));
+        html! {
+            <div>
+            <OuTable
+            ou_filter={self.ou_filter.clone()}
+            ous={self.ous.clone()}
+            on_ou_changed={ctx.link().callback(Msg::OuFilterChanged)}
+            on_ou_created={ctx.link().callback(Msg::OuCreated)}
+            on_ou_deleted={ctx.link().callback(Msg::OuDeleted)}
+            error={self.common.error.as_ref().map(|e| e.to_string())}
+            default_primary={"people".to_string()}
+            />
+            <hr class="my-4" />
+
+            <TableActionBar
+                create_route={AppRoute::CreateUser}
+                create_label={"Create User".to_string()}
+                create_icon={"bi-person-plus me-2".to_string()}
+                kind={OuChangeKind::Users(self.bulk_selection.selected.clone())}
+                ous={self.ous.clone()}
+                on_ou_changed={ctx.link().callback(|new_ou: String| Msg::ChangeOuForSelected(new_ou))}
+                on_error={ctx.link().callback(Msg::OnError)}
+                search_field={self.search_field.clone()}
+                search_term={self.search_term.clone()}
+                search_fields={vec![
+                    "User ID".to_string(),
+                    "Email".to_string(),
+                    "Display Name".to_string(),
+                    "First Name".to_string(),
+                    "Last Name".to_string(),
+                    "Creation Date".to_string(),
+                ]}
+                on_search_field_changed={ctx.link().callback(Msg::SearchFieldChanged)}
+                on_search_term_changed={ctx.link().callback(Msg::SearchTermChanged)}
+            />
+
+            {self.view_users(ctx, &filtered_users)}
+
+            <div class="row justify-content-start mt-3">
+                <div class="col-auto">
+                    <DeleteUser
+                        selected_users={self.bulk_selection.selected.clone()}
+                        on_user_deleted={ctx.link().callback(Msg::OnUserDeleted)}
+                        on_error={ctx.link().callback(Msg::OnError)}
+                    />
+                </div>
+            </div>
+
+            {self.view_errors()}
+            </div>
+        }
+    }
+}
+
+impl UserTable {
+    fn view_users(&self, ctx: &Context<Self>, filtered_users: &[User]) -> Html {
+        let all_selected = self.bulk_selection.all_selected(&filtered_users.iter().map(|u| u.id.clone()).collect::<Vec<_>>());
 
         html! {
             <div class="table-responsive">
@@ -346,7 +321,7 @@ impl UserTable {
         let last_name = Self::get_attribute_value(user, "lastname").unwrap_or_default();
         let kerberos_sync = Self::get_kerberos_sync(user);
         let ou = Self::get_ou(user);
-        let is_selected = self.selected_users.contains(&user.id);
+        let is_selected = self.bulk_selection.is_selected(&user.id);
         let user_id = user.id.clone();
 
         html! {

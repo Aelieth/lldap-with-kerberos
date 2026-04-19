@@ -95,7 +95,7 @@ type Query {
   kerberosInfo: KerberosInfo!
   keycloakSuggestedConfig: KeycloakSuggestedConfig!
   keycloakConfig: KeycloakConfigResponse!
-  userOus: [String!]!
+  listOus: [String!]!
   posixSettings: PosixSettings!
 }
 

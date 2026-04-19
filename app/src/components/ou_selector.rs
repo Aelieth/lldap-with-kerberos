@@ -7,8 +7,12 @@ pub struct OuSelectorProps {
     pub ous: Vec<String>,
     pub current_ou: String,
     pub on_ou_changed: Callback<String>,
+    #[prop_or_default]
+    pub built_in_primaries: Vec<String>,
+    #[prop_or(true)]
+    pub show_all: bool,
+    #[prop_or_default]
     pub label: Option<String>,
-    pub hide_all: bool,
 }
 
 #[function_component(OuSelector)]
@@ -34,24 +38,18 @@ pub fn ou_selector(props: &OuSelectorProps) -> Html {
         }
     }
 
-    // Force both built-in primaries to always appear (like people)
-    for built_in in &["people".to_string(), "groups".to_string()] {
+    // Add caller-supplied built-in primaries if missing
+    for built_in in &props.built_in_primaries {
         if !primaries.contains(built_in) {
             primaries.push(built_in.clone());
         }
     }
 
-    primaries.sort_by(|a, b| {
-        if a == "people" { std::cmp::Ordering::Less }
-        else if b == "people" { std::cmp::Ordering::Greater }
-        else if a == "groups" { std::cmp::Ordering::Less }
-        else if b == "groups" { std::cmp::Ordering::Greater }
-        else { a.cmp(b) }
-    });
+    primaries.sort();
 
     let mut display_ous = vec![];
 
-    if !props.hide_all {
+    if props.show_all {
         display_ous.push(("All".to_string(), "All".to_string()));
     }
 
@@ -71,12 +69,14 @@ pub fn ou_selector(props: &OuSelectorProps) -> Html {
     }
 
     html! {
-        <select class="form-select" onchange={props.on_ou_changed.reform(|e: Event| {
-            let value = e.target().unwrap()
-                .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
-                .value();
-            value
-        })}>
+        <select
+            class="form-select"
+            onchange={props.on_ou_changed.reform(|e: Event| {
+                let value = e.target().unwrap()
+                    .dyn_into::<web_sys::HtmlSelectElement>().unwrap()
+                    .value();
+                value
+            })}>
             { for display_ous.iter().map(|(display, value)| html! {
                 <option value={value.clone()} selected={value == &props.current_ou}>
                     {display}

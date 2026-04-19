@@ -1,5 +1,4 @@
 use crate::{
-    components::group_table::Group,
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
         modal::Modal,
@@ -26,7 +25,7 @@ pub struct DeleteGroup {
 
 #[derive(yew::Properties, Clone, PartialEq, Debug)]
 pub struct DeleteGroupProps {
-    pub group: Group,
+    pub selected_groups: Vec<i64>,
     pub on_group_deleted: Callback<i64>,
     pub on_error: Callback<Error>,
 }
@@ -35,7 +34,7 @@ pub enum Msg {
     ClickedDeleteGroup,
     ConfirmDeleteGroup,
     DismissModal,
-    DeleteGroupResponse(Result<delete_group_query::ResponseData>),
+    DeleteGroupResponse(Result<delete_group_query::ResponseData>, i64),
 }
 
 impl CommonComponent<DeleteGroup> for DeleteGroup {
@@ -46,28 +45,40 @@ impl CommonComponent<DeleteGroup> for DeleteGroup {
     ) -> Result<bool> {
         match msg {
             Msg::ClickedDeleteGroup => {
+                if ctx.props().selected_groups.is_empty() {
+                    return Ok(true);
+                }
                 self.modal.as_ref().expect("modal not initialized").show();
+                Ok(true)
             }
             Msg::ConfirmDeleteGroup => {
-                self.update(ctx, Msg::DismissModal);
-                self.common.call_graphql::<DeleteGroupQuery, _>(
-                    ctx,
-                    delete_group_query::Variables {
-                        group_id: ctx.props().group.id,
-                    },
-                    Msg::DeleteGroupResponse,
-                    "Error trying to delete group",
-                );
+                for group_id in ctx.props().selected_groups.clone() {
+                    self.common.call_graphql::<DeleteGroupQuery, _>(
+                        ctx,
+                        delete_group_query::Variables { group_id },
+                        move |response| Msg::DeleteGroupResponse(response, group_id),
+                        "Error trying to delete group",
+                    );
+                }
+                self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
             }
             Msg::DismissModal => {
                 self.modal.as_ref().expect("modal not initialized").hide();
+                Ok(true)
             }
-            Msg::DeleteGroupResponse(response) => {
-                response?;
-                ctx.props().on_group_deleted.emit(ctx.props().group.id);
+            Msg::DeleteGroupResponse(response, group_id) => {
+                match response {
+                    Ok(_) => {
+                        ctx.props().on_group_deleted.emit(group_id);
+                    }
+                    Err(e) => {
+                        ctx.props().on_error.emit(e);
+                    }
+                }
+                Ok(true)
             }
         }
-        Ok(true)
     }
 
     fn mut_common(&mut self) -> &mut CommonComponentParts<Self> {
@@ -108,13 +119,22 @@ impl Component for DeleteGroup {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+        let count = ctx.props().selected_groups.len();
+
+        let button_text = if count <= 1 {
+            "Delete Group".to_string()
+        } else {
+            format!("Delete {} Groups", count)
+        };
+
         html! {
           <>
           <button
             class="btn btn-danger"
-            disabled={self.common.is_task_running()}
+            disabled={self.common.is_task_running() || count == 0}
             onclick={link.callback(|_| Msg::ClickedDeleteGroup)}>
-            <i class="bi-x-circle-fill" aria-label="Delete group" />
+            <i class="bi-x-circle-fill me-2" aria-label="Delete selected groups" />
+            {button_text}
           </button>
           {self.show_modal(ctx)}
           </>
@@ -125,18 +145,20 @@ impl Component for DeleteGroup {
 impl DeleteGroup {
     fn show_modal(&self, ctx: &Context<Self>) -> Html {
         let link = &ctx.link();
+        let count = ctx.props().selected_groups.len();
+
         html! {
           <div
             class="modal fade"
-            id={format!("deleteGroupModal{}", ctx.props().group.id)}
+            id="deleteGroupsModal"
             tabindex="-1"
-            aria-labelledby="deleteGroupModalLabel"
+            aria-labelledby="deleteGroupsModalLabel"
             aria-hidden="true"
             ref={self.node_ref.clone()}>
             <div class="modal-dialog">
               <div class="modal-content">
                 <div class="modal-header">
-                  <h5 class="modal-title" id="deleteGroupModalLabel">{"Delete group?"}</h5>
+                  <h5 class="modal-title" id="deleteGroupsModalLabel">{format!("Delete {} groups?", count)}</h5>
                   <button
                     type="button"
                     class="btn-close"
@@ -144,26 +166,27 @@ impl DeleteGroup {
                     onclick={link.callback(|_| Msg::DismissModal)} />
                 </div>
                 <div class="modal-body">
-                <span>
-                  {"Are you sure you want to delete group "}
-                  <b>{&ctx.props().group.display_name}</b>{"?"}
-                </span>
+                  <span>
+                    {"Are you sure you want to permanently delete "}
+                    <b>{count}</b>{" selected groups? This action cannot be undone."}
+                  </span>
                 </div>
                 <div class="modal-footer">
                   <button
                     type="button"
                     class="btn btn-secondary"
                     onclick={link.callback(|_| Msg::DismissModal)}>
-                      <i class="bi-x-circle me-2"></i>
-                      {"Cancel"}
+                    <i class="bi-x-circle me-2"></i>
+                    {"Cancel"}
                   </button>
                   <button
                     type="button"
                     onclick={link.callback(|_| Msg::ConfirmDeleteGroup)}
-                    class="btn btn-danger">
+                    class="btn btn-danger"
+                    disabled={self.common.is_task_running()}>
                     <i class="bi-check-circle me-2"></i>
-                    {"Yes, I'm sure"}
-                 </button>
+                    {"Yes, delete them"}
+                  </button>
                 </div>
               </div>
             </div>

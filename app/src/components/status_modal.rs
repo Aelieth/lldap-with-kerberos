@@ -17,7 +17,7 @@ pub fn status_modal(props: &StatusModalProps) -> Html {
         let timeout = Timeout::new(4000, move || {
             on_dismiss.emit(());
         });
-        move || { timeout.cancel(); }   // ← semicolon added here
+        move || { timeout.cancel(); }
     });
 
     let bg_class = if props.is_success { "bg-success" } else { "bg-danger" };

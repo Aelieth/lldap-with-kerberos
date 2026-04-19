@@ -87,11 +87,11 @@ pub struct GetUserAttributesSchema;
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
-query_path = "queries/list_user_ous.graphql",
+query_path = "queries/list_ous.graphql",
 response_derives = "Debug, Clone",
 custom_scalars_module = "crate::infra::graphql"
 )]
-pub struct ListUserOusQuery;
+pub struct ListOusQuery;
 
 pub type Attribute = get_user_attributes_schema::GetUserAttributesSchemaSchemaUserSchemaAttributes;
 
@@ -145,7 +145,7 @@ fn empty_or_long(value: &str) -> Result<(), validator::ValidationError> {
 pub enum Msg {
     Update,
     ListAttributesResponse(Result<get_user_attributes_schema::ResponseData>),
-    ListUserOusResponse(Result<list_user_ous_query::ResponseData>),
+    ListUserOusResponse(Result<list_ous_query::ResponseData>),
     KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
     SubmitForm,
     CreateUserResponse(Result<create_user::ResponseData>),
@@ -177,7 +177,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 Ok(true)
             }
             Msg::ListUserOusResponse(ous) => {
-                self.ous = ous?.user_ous;
+                self.ous = ous?.list_ous;
                 Ok(true)
             }
             Msg::KerberosInfoResponse(res) => {
@@ -422,7 +422,6 @@ impl Component for CreateUserForm {
         } else {
             let attrs = self.attributes_schema.as_ref().unwrap();
 
-            // ORIGINAL WORKING FILTER from before OU changes
             let should_show = |a: &Attribute| !a.is_readonly && a.name != "kerberossync";
 
             let mut visible_attrs: Vec<&Attribute> = attrs.iter().filter(|a| should_show(a)).collect();
@@ -472,7 +471,7 @@ impl Component for CreateUserForm {
                     ous={self.ous.clone()}
                     current_ou={self.selected_ou.clone()}
                     on_ou_changed={link.callback(Msg::OuChanged)}
-                    hide_all={true} />
+                    show_all={false} />
                     </div>
                     </div>
 
@@ -514,9 +513,9 @@ impl Component for CreateUserForm {
             );
             self.fetched_schema = true;
 
-            self.common.call_graphql::<ListUserOusQuery, _>(
+            self.common.call_graphql::<ListOusQuery, _>(
                 ctx,
-                list_user_ous_query::Variables {},
+                list_ous_query::Variables {},
                 Msg::ListUserOusResponse,
                 "Error trying to fetch OUs",
             );

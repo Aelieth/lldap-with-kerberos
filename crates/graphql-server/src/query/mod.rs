@@ -220,10 +220,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         })
     }
 
-    async fn user_ous(
+    async fn list_ous(
         context: &Context<Handler>,
     ) -> FieldResult<Vec<String>> {
-        let span = debug_span!("[GraphQL query] user_ous");
+        let span = debug_span!("[GraphQL query] list_ous");
         span.in_scope(|| debug!("Fetching global allowedous list (single source of truth)"));
 
         let handler = context

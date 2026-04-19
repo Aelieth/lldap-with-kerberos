@@ -9,7 +9,7 @@ pub struct OuTableProps {
     pub on_ou_created: Callback<String>,
     pub on_ou_deleted: Callback<String>,
     pub error: Option<String>,
-    pub default_primary: String,   // "people" or "groups"
+    pub default_primary: String,
 }
 
 #[function_component(OuTable)]
@@ -23,7 +23,7 @@ pub fn ou_table(props: &OuTableProps) -> Html {
                     current_ou={props.ou_filter.clone()}
                     on_ou_changed={props.on_ou_changed.clone()}
                     label={None::<String>}
-                    hide_all={false} />
+                    show_all={true} />
             </div>
 
             { if let Some(err) = &props.error {

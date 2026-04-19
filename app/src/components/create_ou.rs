@@ -241,7 +241,7 @@ impl CreateOu {
                         current_ou={self.selected_primary.clone()}
                         on_ou_changed={link.callback(Msg::PrimarySelected)}
                         label={None::<String>}
-                        hide_all={true} />
+                        show_all={false} />
                 </div>
             }
         } else {
