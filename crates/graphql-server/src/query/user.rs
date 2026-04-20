@@ -1,4 +1,4 @@
-// crates/graphql-server/src/query/user.rs  ← EXACT FILE FOR THIS STEP
+// crates/graphql-server/src/query/user.rs
 use chrono::TimeZone;
 use juniper::{FieldResult, graphql_object};
 use lldap_access_control::UserReadableBackendHandler;
@@ -117,6 +117,13 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     fn uuid(&self) -> &str {
         self.user.uuid.as_str()
+    }
+
+    /// Whether the user is disabled (member of the built-in lldap_disabled group).
+    fn is_disabled(&self) -> bool {
+        self.groups.as_ref().map_or(false, |groups| {
+            groups.iter().any(|g| g.display_name == "lldap_disabled")
+        })
     }
 
     /// User-defined attributes (includes ou + sshpublickey for legacy clients).

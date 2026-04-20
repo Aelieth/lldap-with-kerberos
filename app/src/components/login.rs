@@ -79,7 +79,14 @@ impl CommonComponent<LoginForm> for LoginForm {
                 Ok(true)
             }
             Msg::AuthenticationStartResponse((login_start, res)) => {
-                let res = res.context("Could not log in (invalid response to login start)")?;
+                let res = match res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Let authentication errors (including disabled account) show their real message
+                        self.common.error = Some(e);
+                        return Ok(true);
+                    }
+                };
                 let login_finish =
                     match opaque::client::login::finish_login(login_start, res.credential_response)
                     {

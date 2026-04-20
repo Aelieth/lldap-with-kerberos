@@ -267,6 +267,8 @@ type User {
   sshPublicKeys: [String!]!
   creationDate: DateTimeUtc!
   uuid: String!
+  "Whether the user is disabled (member of the built-in lldap_disabled group)."
+  isDisabled: Boolean!
   "User-defined attributes (includes ou + sshpublickey for legacy clients)."
   attributes: [AttributeValue!]!
   "The groups to which this user belongs."

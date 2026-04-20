@@ -94,10 +94,9 @@ impl LoginHandler for SqlBackendHandler {
     async fn bind(&self, request: BindRequest) -> Result<()> {
         if self.is_user_disabled(&request.name).await? {
             warn!(r#"Login attempt denied for disabled user "{}""#, &request.name);
-            return Err(DomainError::AuthenticationError(format!(
-                r#"for user "{}" (account disabled)"#,
-                request.name
-            )));
+            return Err(DomainError::AuthenticationError(
+                "- Account disabled. Contact administrator.".to_string()
+            ));
         }
 
         if let Some(password_hash) = self
@@ -139,10 +138,9 @@ impl OpaqueHandler for SqlOpaqueHandler {
 
         if self.is_user_disabled(&user_id).await? {
             warn!(r#"OPAQUE login attempt denied for disabled user "{}""#, &user_id);
-            return Err(DomainError::AuthenticationError(format!(
-                r#"for user "{}" (account disabled)"#,
-                user_id
-            )));
+            return Err(DomainError::AuthenticationError(
+                "- Account disabled. Contact administrator.".to_string()
+            ));
         }
 
         info!(r#"OPAQUE login attempt for "{}""#, &user_id);
@@ -192,10 +190,9 @@ impl OpaqueHandler for SqlOpaqueHandler {
         // Extra safety check (in case login_start check is ever bypassed)
         if self.is_user_disabled(&username).await? {
             warn!(r#"OPAQUE login_finish denied for disabled user "{}""#, &username);
-            return Err(DomainError::AuthenticationError(format!(
-                r#"for user "{}" (account disabled)"#,
-                username
-            )));
+            return Err(DomainError::AuthenticationError(
+                "- Account disabled. Contact administrator.".to_string()
+            ));
         }
 
         // Finish the login: this makes sure the client data is correct, and gives a session key we

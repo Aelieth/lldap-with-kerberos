@@ -174,6 +174,10 @@ impl UserTable {
     fn get_ou(user: &User) -> String {
         Self::get_attribute_value(user, "ou").unwrap_or_else(|| "people".to_string())
     }
+
+    fn is_user_disabled(user: &User) -> bool {
+        user.is_disabled
+    }
 }
 
 impl Component for UserTable {
@@ -323,14 +327,28 @@ impl UserTable {
         let ou = Self::get_ou(user);
         let is_selected = self.bulk_selection.is_selected(&user.id);
         let user_id = user.id.clone();
+        let is_disabled = Self::is_user_disabled(user);
+
+        let row_class = if is_disabled { "text-muted" } else { "" };
 
         html! {
-            <tr key={user.id.clone()}>
+            <tr key={user.id.clone()} class={row_class}>
             <td>
             <input type="checkbox" checked={is_selected}
             onclick={ctx.link().callback(move |_| Msg::ToggleUserSelection(user_id.clone()))} />
             </td>
-            <td><Link to={AppRoute::UserDetails{user_id: user.id.clone()}}>{&user.id}</Link></td>
+            <td>
+            {if is_disabled {
+                html! { <span class="text-danger">{"❌ "}</span> }
+            } else {
+                html! {}
+            }}
+            <Link
+                to={AppRoute::UserDetails{user_id: user.id.clone()}}
+                classes={if is_disabled { "text-muted" } else { "" }}>
+                {&user.id}
+            </Link>
+            </td>
             <td>{ou}</td>
             <td>{&user.email}</td>
             <td>{&user.display_name}</td>

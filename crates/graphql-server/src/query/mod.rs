@@ -1,3 +1,4 @@
+// crates/graphql-server/src/query/mod.rs
 pub mod attribute;
 pub mod filters;
 pub mod schema;
@@ -32,7 +33,7 @@ pub struct Query<Handler: BackendHandler + OpaqueHandler> {
 
 #[derive(GraphQLObject)]
 pub struct KerberosInfo {
-    pub public_key_der_base64: Option<String>,  // Base64 DER public key for RSA encryption (null if disabled or gen fails)
+    pub public_key_der_base64: Option<String>,
 }
 
 #[derive(GraphQLObject)]
@@ -134,7 +135,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             filters
             .map(|f| f.try_into_domain_filter(&schema))
             .transpose()?,
-                    false,
+                    true,
         )
         .instrument(span)
         .await?;

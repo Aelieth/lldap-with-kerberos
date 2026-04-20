@@ -4,6 +4,7 @@ query ListUsersQuery($filters: RequestFilter) {
     email
     displayName
     creationDate
+    isDisabled
     attributes {
       name
       value

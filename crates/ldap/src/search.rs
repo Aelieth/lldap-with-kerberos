@@ -37,6 +37,17 @@ enum InternalSearchResults {
     Empty,
 }
 
+// NEW HELPER: automatically hide lldap_disabled users from normal LDAP searches
+fn exclude_disabled_users_filter(original_filter: LdapFilter) -> LdapFilter {
+    LdapFilter::And(vec![
+        original_filter,
+        LdapFilter::Not(Box::new(LdapFilter::Equality(
+            "memberOf".to_string(),
+            "lldap_disabled".to_string(),
+        ))),
+    ])
+}
+
 fn get_search_scope(
     base_dn: &[(String, String)],
     dn_parts: &[(String, String)],
@@ -130,71 +141,71 @@ pub(crate) fn make_search_error(code: LdapResultCode, message: String) -> LdapOp
     LdapOp::SearchResultDone(LdapResultOp {
         code,
         matcheddn: "".to_string(),
-                             message,
-                             referral: vec![],
+        message,
+        referral: vec![],
     })
 }
 
 pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
     LdapOp::SearchResultEntry(LdapSearchResultEntry {
         dn: "".to_string(),
-                              attributes: vec![
-                                  LdapPartialAttribute {
-                                      atype: "objectClass".to_string(),
-                              vals: vec![b"top".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "vendorName".to_string(),
-                              vals: vec![b"LLDAP".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "vendorVersion".to_string(),
-                              vals: vec![concat!("lldap_", env!("CARGO_PKG_VERSION")).to_string().into_bytes()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "supportedLDAPVersion".to_string(),
-                              vals: vec![b"3".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "supportedExtension".to_string(),
-                              vals: vec![
-                                  OID_PASSWORD_MODIFY.as_bytes().to_vec(),
-                              OID_WHOAMI.as_bytes().to_vec(),
-                              ],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "supportedControl".to_string(),
-                              vals: vec![],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "supportedFeatures".to_string(),
-                              vals: vec![b"1.3.6.1.4.1.4203.1.5.1".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "defaultNamingContext".to_string(),
-                              vals: vec![base_dn.to_string().into_bytes()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "namingContexts".to_string(),
-                              vals: vec![base_dn.to_string().into_bytes()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "schemaNamingContext".to_string(),
-                              vals: vec![base_dn.to_string().into_bytes()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "configurationNamingContext".to_string(),
-                              vals: vec![base_dn.to_string().into_bytes()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "isGlobalCatalogReady".to_string(),
-                              vals: vec![b"false".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "subschemaSubentry".to_string(),
-                              vals: vec![b"cn=Subschema".to_vec()],
-                                  },
-                              ],
+        attributes: vec![
+            LdapPartialAttribute {
+                atype: "objectClass".to_string(),
+                vals: vec![b"top".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "vendorName".to_string(),
+                vals: vec![b"LLDAP".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "vendorVersion".to_string(),
+                vals: vec![concat!("lldap_", env!("CARGO_PKG_VERSION")).to_string().into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "supportedLDAPVersion".to_string(),
+                vals: vec![b"3".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "supportedExtension".to_string(),
+                vals: vec![
+                    OID_PASSWORD_MODIFY.as_bytes().to_vec(),
+                    OID_WHOAMI.as_bytes().to_vec(),
+                ],
+            },
+            LdapPartialAttribute {
+                atype: "supportedControl".to_string(),
+                vals: vec![],
+            },
+            LdapPartialAttribute {
+                atype: "supportedFeatures".to_string(),
+                vals: vec![b"1.3.6.1.4.1.4203.1.5.1".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "defaultNamingContext".to_string(),
+                vals: vec![base_dn.to_string().into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "namingContexts".to_string(),
+                vals: vec![base_dn.to_string().into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "schemaNamingContext".to_string(),
+                vals: vec![base_dn.to_string().into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "configurationNamingContext".to_string(),
+                vals: vec![base_dn.to_string().into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "isGlobalCatalogReady".to_string(),
+                vals: vec![b"false".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "subschemaSubentry".to_string(),
+                vals: vec![b"cn=Subschema".to_vec()],
+            },
+        ],
     })
 }
 
@@ -203,122 +214,122 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
     let current_time_utc = Utc::now().format("%Y%m%d%H%M%SZ").to_string().into_bytes();
     LdapOp::SearchResultEntry(LdapSearchResultEntry {
         dn: "cn=Subschema".to_string(),
-                              attributes: vec![
-                                  LdapPartialAttribute {
-                                      atype: "structuralObjectClass".to_string(),
-                              vals: vec![b"subentry".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "objectClass".to_string(),
-                              vals: vec![b"top".to_vec(), b"subentry".to_vec(), b"subschema".to_vec(), b"extensibleObject".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "cn".to_string(),
-                              vals: vec![b"Subschema".to_vec()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "createTimestamp".to_string(),
-                              vals: vec![current_time_utc.clone()],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "modifyTimestamp".to_string(),
-                              vals: vec![current_time_utc],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "ldapSyntaxes".to_string(),
-                              vals: vec![
-                                  b"( 1.3.6.1.1.16.1 DESC 'UUID' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.3 DESC 'Attribute Type Description' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.12 DESC 'Distinguished Name' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.24 DESC 'Generalized Time' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.27 DESC 'Integer' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.28 DESC 'JPEG' X-NOT-HUMAN-READABLE 'TRUE' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.34 DESC 'Name And Optional UID' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.37 DESC 'Object Class Description' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.38 DESC 'OID' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.54 DESC 'LDAP Syntax Description' )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.115.121.1.58 DESC 'Substring Assertion' )".to_vec(),
-                              ],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "matchingRules".to_string(),
-                              vals: vec![
-                                  b"( 1.3.6.1.1.16.2 NAME 'UUIDMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
-                              b"( 1.3.6.1.1.16.3 NAME 'UUIDOrderingMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
-                              b"( 2.5.13.0 NAME 'objectIdentifierMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                              b"( 2.5.13.1 NAME 'distinguishedNameMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                              b"( 2.5.13.2 NAME 'caseIgnoreMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                              b"( 2.5.13.4 NAME 'caseIgnoreSubstringsMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.58 )".to_vec(),
-                              b"( 2.5.13.23 NAME 'uniqueMemberMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                              b"( 2.5.13.27 NAME 'generalizedTimeMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                              b"( 2.5.13.28 NAME 'generalizedTimeOrderingMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                              b"( 2.5.13.30 NAME 'objectIdentifierFirstComponentMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                              ],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "attributeTypes".to_string(),
-                              vals: {
-                                  let hardcoded_attributes = [
-                                      b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' 'user_id' ) DESC 'RFC4519: user identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION )".to_vec(),
-                              b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group that the entry belongs to' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation X-ORIGIN 'iPlanet Delegated Administrator' )".to_vec(),
-                              b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID of the entry' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                              b"( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes' DESC 'RFC4512: LDAP syntaxes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.54 USAGE directoryOperation )".to_vec(),
-                              b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512: object classes of the entity' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                              b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                              b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256: last (family) name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                              b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256: organizational unit this object belongs to' SUP name )".to_vec(),
-                              b"( 2.5.4.41 NAME 'name' DESC 'RFC4519: common supertype of name attributes' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
-                              b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519: common supertype of DN attributes' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                              b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256: unique member of a group' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                              b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512: time which object was created' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                              b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512: time which object was last modified' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                              b"( 2.5.21.5 NAME 'attributeTypes' DESC 'RFC4512: attribute types' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.3 USAGE directoryOperation )".to_vec(),
-                              b"( 2.5.21.6 NAME 'objectClasses' DESC 'RFC4512: object classes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.37 USAGE directoryOperation )".to_vec(),
-                              b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512: structural object class of entry' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                              b"( 10.0 NAME 'String' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                              b"( 10.1 NAME 'Integer' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )".to_vec(),
-                              b"( 10.2 NAME 'Avatar' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
-                              b"( 10.3 NAME 'DateTime' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                                  ];
-                                  hardcoded_attributes.into_iter().chain(
-                                      ldap_schema_description
-                                      .formatted_attribute_list(
-                                          4, // The number of hardcoded attributes starting with "10." (LLDAP custom range)
-                                      vec!["creation_date", "display_name", "last_name", "user_id", "uuid"]
-                                      )
-                                  ).collect()
-                              }
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "objectClasses".to_string(),
-                              vals: vec![
-                                  format!(
-                                      "( 3.0 NAME ( {} ) DESC 'LLDAP builtin: a person' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
-                                          ldap_schema_description.user_object_classes().format_for_ldap_schema_description(),
-                                          ldap_schema_description.required_user_attributes().format_for_ldap_schema_description(),
-                                          ldap_schema_description.optional_user_attributes().format_for_ldap_schema_description(),
-                                  ).into_bytes(),
-                              format!(
-                                  "( 3.1 NAME ( {} ) DESC 'LLDAP builtin: a group' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
-                                      ldap_schema_description.group_object_classes().format_for_ldap_schema_description(),
-                                      ldap_schema_description.required_group_attributes().format_for_ldap_schema_description(),
-                                      ldap_schema_description.optional_group_attributes().format_for_ldap_schema_description(),
-                              ).into_bytes(),
-                              ],
-                                  },
-                                  LdapPartialAttribute {
-                                      atype: "subschemaSubentry".to_string(),
-                              vals: vec![b"cn=Subschema".to_vec()],
-                                  },
-                              ],
+        attributes: vec![
+            LdapPartialAttribute {
+                atype: "structuralObjectClass".to_string(),
+                vals: vec![b"subentry".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "objectClass".to_string(),
+                vals: vec![b"top".to_vec(), b"subentry".to_vec(), b"subschema".to_vec(), b"extensibleObject".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "cn".to_string(),
+                vals: vec![b"Subschema".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "createTimestamp".to_string(),
+                vals: vec![current_time_utc.clone()],
+            },
+            LdapPartialAttribute {
+                atype: "modifyTimestamp".to_string(),
+                vals: vec![current_time_utc],
+            },
+            LdapPartialAttribute {
+                atype: "ldapSyntaxes".to_string(),
+                vals: vec![
+                    b"( 1.3.6.1.1.16.1 DESC 'UUID' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.3 DESC 'Attribute Type Description' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.12 DESC 'Distinguished Name' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.24 DESC 'Generalized Time' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.27 DESC 'Integer' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.28 DESC 'JPEG' X-NOT-HUMAN-READABLE 'TRUE' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.34 DESC 'Name And Optional UID' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.37 DESC 'Object Class Description' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.38 DESC 'OID' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.54 DESC 'LDAP Syntax Description' )".to_vec(),
+                    b"( 1.3.6.1.4.1.1466.115.121.1.58 DESC 'Substring Assertion' )".to_vec(),
+                ],
+            },
+            LdapPartialAttribute {
+                atype: "matchingRules".to_string(),
+                vals: vec![
+                    b"( 1.3.6.1.1.16.2 NAME 'UUIDMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
+                    b"( 1.3.6.1.1.16.3 NAME 'UUIDOrderingMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
+                    b"( 2.5.13.0 NAME 'objectIdentifierMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
+                    b"( 2.5.13.1 NAME 'distinguishedNameMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
+                    b"( 2.5.13.2 NAME 'caseIgnoreMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
+                    b"( 2.5.13.4 NAME 'caseIgnoreSubstringsMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.58 )".to_vec(),
+                    b"( 2.5.13.23 NAME 'uniqueMemberMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
+                    b"( 2.5.13.27 NAME 'generalizedTimeMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
+                    b"( 2.5.13.28 NAME 'generalizedTimeOrderingMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
+                    b"( 2.5.13.30 NAME 'objectIdentifierFirstComponentMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
+                ],
+            },
+            LdapPartialAttribute {
+                atype: "attributeTypes".to_string(),
+                vals: {
+                    let hardcoded_attributes = [
+                        b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' 'user_id' ) DESC 'RFC4519: user identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION )".to_vec(),
+                        b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group that the entry belongs to' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation X-ORIGIN 'iPlanet Delegated Administrator' )".to_vec(),
+                        b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID of the entry' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                        b"( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes' DESC 'RFC4512: LDAP syntaxes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.54 USAGE directoryOperation )".to_vec(),
+                        b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512: object classes of the entity' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
+                        b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
+                        b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256: last (family) name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
+                        b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256: organizational unit this object belongs to' SUP name )".to_vec(),
+                        b"( 2.5.4.41 NAME 'name' DESC 'RFC4519: common supertype of name attributes' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
+                        b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519: common supertype of DN attributes' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
+                        b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256: unique member of a group' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
+                        b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512: time which object was created' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                        b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512: time which object was last modified' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                        b"( 2.5.21.5 NAME 'attributeTypes' DESC 'RFC4512: attribute types' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.3 USAGE directoryOperation )".to_vec(),
+                        b"( 2.5.21.6 NAME 'objectClasses' DESC 'RFC4512: object classes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.37 USAGE directoryOperation )".to_vec(),
+                        b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512: structural object class of entry' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                        b"( 10.0 NAME 'String' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
+                        b"( 10.1 NAME 'Integer' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )".to_vec(),
+                        b"( 10.2 NAME 'Avatar' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
+                        b"( 10.3 NAME 'DateTime' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
+                    ];
+                    hardcoded_attributes.into_iter().chain(
+                        ldap_schema_description
+                            .formatted_attribute_list(
+                                4,
+                                vec!["creation_date", "display_name", "last_name", "user_id", "uuid"],
+                            )
+                    ).collect()
+                },
+            },
+            LdapPartialAttribute {
+                atype: "objectClasses".to_string(),
+                vals: vec![
+                    format!(
+                        "( 3.0 NAME ( {} ) DESC 'LLDAP builtin: a person' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
+                        ldap_schema_description.user_object_classes().format_for_ldap_schema_description(),
+                        ldap_schema_description.required_user_attributes().format_for_ldap_schema_description(),
+                        ldap_schema_description.optional_user_attributes().format_for_ldap_schema_description(),
+                    ).into_bytes(),
+                    format!(
+                        "( 3.1 NAME ( {} ) DESC 'LLDAP builtin: a group' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
+                        ldap_schema_description.group_object_classes().format_for_ldap_schema_description(),
+                        ldap_schema_description.required_group_attributes().format_for_ldap_schema_description(),
+                        ldap_schema_description.optional_group_attributes().format_for_ldap_schema_description(),
+                    ).into_bytes(),
+                ],
+            },
+            LdapPartialAttribute {
+                atype: "subschemaSubentry".to_string(),
+                vals: vec![b"cn=Subschema".to_vec()],
+            },
+        ],
     })
 }
 
 pub(crate) fn is_root_dse_request(request: &LdapSearchRequest) -> bool {
     request.base.is_empty()
-    && request.scope == LdapSearchScope::Base
-    && matches!(&request.filter, LdapFilter::Present(attr) if attr.eq_ignore_ascii_case("objectclass"))
+        && request.scope == LdapSearchScope::Base
+        && matches!(&request.filter, LdapFilter::Present(attr) if attr.eq_ignore_ascii_case("objectclass"))
 }
 
 pub(crate) fn is_subschema_entry_request(request: &LdapSearchRequest) -> bool {
@@ -341,9 +352,11 @@ async fn do_search_internal(
             .attrs
             .iter()
             .any(|s| s.eq_ignore_ascii_case("memberof"));
+        // ← TURTLE STEP 7: automatically hide lldap_disabled users from normal LDAP searches
+        let final_filter = exclude_disabled_users_filter(filter.clone());
         get_user_list(
             ldap_info,
-            filter,
+            &final_filter,
             need_groups,
             &request.base,
             backend_handler,
