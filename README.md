@@ -68,6 +68,7 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 
 ## Future Plans
 - Continued integration of LLDAP features
+- Multifactor auth
 - SMB integration with kerberos auth 
 - Password / lockout policies
 - Account expiration

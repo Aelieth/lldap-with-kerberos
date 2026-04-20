@@ -34,7 +34,16 @@ where
     }
     debug!(?msg);
 
-    let is_real_work = !matches!(msg.op, LdapOp::SearchRequest(_)); // adjust if you want more types
+    // Real operations that matter to an admin (bind, modify, add, delete, extended)
+    // All SearchRequests (the 30-second idle keepalive pings) stay silent at debug level.
+    let is_real_operation = matches!(
+        msg.op,
+        LdapOp::BindRequest(_)
+        | LdapOp::ModifyRequest(_)
+        | LdapOp::AddRequest(_)
+        | LdapOp::DelRequest(_)
+        | LdapOp::ExtendedRequest(_)
+    );
 
     match session.handle_ldap_message(msg.op).await {
         None => return Ok(false),
@@ -42,15 +51,14 @@ where
             if result.is_empty() {
                 debug!("No response");
             }
-            let results: i64 = result.len().try_into().unwrap();
 
-            // Only promote idle sessions to INFO if they actually did something useful
-            if is_real_work || !result.is_empty() {
+            if is_real_operation {
                 info!("LDAP request session_id: {}", session.session_uuid());
             } else {
                 debug!("LDAP request [idle ping] session_id: {}", session.session_uuid());
             }
 
+            let results: i64 = result.len().try_into().unwrap();
             for response in result.into_iter() {
                 debug!(?response);
                 let controls = if matches!(response, LdapOp::SearchResultDone(_)) {

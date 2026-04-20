@@ -386,6 +386,22 @@ impl GroupBackendHandler for SqlBackendHandler {
 
     #[instrument(skip(self), level = "debug", err)]
     async fn delete_group(&self, group_id: GroupId) -> Result<()> {
+        let group_details = self.get_group_details(group_id).await?;
+
+        let protected = [
+            "lldap_admin",
+            "lldap_disabled",
+            "lldap_password_manager",
+            "lldap_strict_readonly",
+        ];
+
+        if protected.contains(&group_details.display_name.as_str()) {
+            return Err(DomainError::InternalError(format!(
+                "Cannot delete core group '{}'",
+                group_details.display_name
+            )));
+        }
+
         let res = model::Group::delete_by_id(group_id)
         .exec(&self.sql_pool)
         .await?;

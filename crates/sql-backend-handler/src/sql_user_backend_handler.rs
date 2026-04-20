@@ -10,7 +10,7 @@ use lldap_domain::{
 };
 use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
-    PosixBackendHandler, PosixSettings,
+    GroupBackendHandler, PosixBackendHandler, PosixSettings,
     ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler,
     UserListerBackendHandler, UserRequestFilter,
 };
@@ -971,6 +971,20 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip_all, level = "debug", err, fields(user_id = ?user_id.as_str(), group_id))]
     async fn add_user_to_group(&self, user_id: &UserId, group_id: GroupId) -> Result<()> {
+        // === CORE GROUP MUTUAL EXCLUSION ===
+        let user_groups = self.get_user_groups(user_id).await?;
+        let target_group_details = self.get_group_details(group_id).await?;
+
+        let target_name = target_group_details.display_name.as_str();
+        let has_admin = user_groups.iter().any(|g| g.display_name == "lldap_admin".into());
+        let has_disabled = user_groups.iter().any(|g| g.display_name == "lldap_disabled".into());
+
+        if (target_name == "lldap_admin" && has_disabled) || (target_name == "lldap_disabled" && has_admin) {
+            return Err(DomainError::InternalError(
+                "A user cannot be in both lldap_admin and lldap_disabled groups".to_string(),
+            ));
+        }
+
         let user_id = user_id.clone();
         self.sql_pool
         .transaction::<_, _, sea_orm::DbErr>(|transaction| {
