@@ -14,7 +14,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
-#[instrument(skip_all, level = "info", name = "LDAP request", fields(session_id = %session.session_uuid()))]
+#[instrument(skip_all, level = "debug", name = "LDAP request", fields(session_id = %session.session_uuid()))]
 async fn handle_ldap_message<Backend, Writer>(
     msg: Result<LdapMsg, std::io::Error>,
     resp: &mut Writer,
@@ -33,6 +33,9 @@ where
         }
     }
     debug!(?msg);
+
+    let is_real_work = !matches!(msg.op, LdapOp::SearchRequest(_)); // adjust if you want more types
+
     match session.handle_ldap_message(msg.op).await {
         None => return Ok(false),
         Some(result) => {
@@ -40,11 +43,19 @@ where
                 debug!("No response");
             }
             let results: i64 = result.len().try_into().unwrap();
+
+            // Only promote idle sessions to INFO if they actually did something useful
+            if is_real_work || !result.is_empty() {
+                info!("LDAP request session_id: {}", session.session_uuid());
+            } else {
+                debug!("LDAP request [idle ping] session_id: {}", session.session_uuid());
+            }
+
             for response in result.into_iter() {
                 debug!(?response);
                 let controls = if matches!(response, LdapOp::SearchResultDone(_)) {
                     vec![LdapControl::SimplePagedResults {
-                        size: results - 1, // Avoid counting SearchResultDone as a result
+                        size: results - 1,
                         cookie: vec![],
                     }]
                 } else {
@@ -78,7 +89,6 @@ where
 {
     use tokio_stream::StreamExt;
     let (r, w) = tokio::io::split(stream);
-    // Configure the codec etc.
     let mut requests = FramedRead::new(r, LdapCodec::default());
     let mut resp = FramedWrite::new(w, LdapCodec::default());
 
@@ -89,7 +99,8 @@ where
         session_uuid,
     );
 
-    info!("LDAP session start: {}", session_uuid);
+    debug!("LDAP session start: {}", session_uuid);
+
     while let Some(msg) = requests.next().await {
         if !handle_ldap_message(msg, &mut resp, &mut session)
             .await
@@ -98,7 +109,8 @@ where
             break;
         }
     }
-    info!("LDAP session end: {}", session_uuid);
+
+    debug!("LDAP session end: {}", session_uuid);
     Ok(requests.into_inner().unsplit(resp.into_inner()))
 }
 

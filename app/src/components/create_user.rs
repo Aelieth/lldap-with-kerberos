@@ -109,37 +109,26 @@ impl From<&Attribute> for GraphQlAttributeSchema {
 pub struct CreateUserForm {
     common: CommonComponentParts<Self>,
     form: yew_form::Form<CreateUserModel>,
-        attributes_schema: Option<Vec<Attribute>>,
-        form_ref: NodeRef,
-            fetched_schema: bool,
-            encrypted_password: Option<String>,
-            user_id: Option<String>,
-            opaque_data: Option<opaque::client::registration::ClientRegistration>,
-            kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
-            kerberossync_enabled: bool,
-            selected_ou: String,
-            ous: Vec<String>,
+    attributes_schema: Option<Vec<Attribute>>,
+    form_ref: NodeRef,
+    fetched_schema: bool,
+    encrypted_password: Option<String>,
+    user_id: Option<String>,
+    opaque_data: Option<opaque::client::registration::ClientRegistration>,
+    kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+    kerberossync_enabled: bool,
+    selected_ou: String,
+    ous: Vec<String>,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
 pub struct CreateUserModel {
     #[validate(length(min = 1, message = "Username is required"))]
     username: String,
-    #[validate(custom(
-    function = "empty_or_long",
-    message = "Password should be longer than 8 characters (or left empty)"
-    ))]
+    #[validate(length(min = 8, message = "Password must be at least 8 characters"))]
     password: String,
     #[validate(must_match(other = "password", message = "Passwords must match"))]
     confirm_password: String,
-}
-
-fn empty_or_long(value: &str) -> Result<(), validator::ValidationError> {
-    if value.is_empty() || value.len() >= 8 {
-        Ok(())
-    } else {
-        Err(validator::ValidationError::new(""))
-    }
 }
 
 pub enum Msg {
@@ -218,9 +207,9 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),
-                                                          &self.form_ref,
-                                                          IsAdmin(true),
-                                                          EmailIsRequired(true),
+                    &self.form_ref,
+                    IsAdmin(true),
+                    EmailIsRequired(true),
                 )?;
 
                 if let Some(avatar_attr) = all_values.iter().find(|a| a.name == "avatar") {
@@ -278,16 +267,15 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     }
                 }
 
-                // ← THIS IS THE MISSING PIECE: push the selected OU
                 attributes.push(GraphQLAttributeValue {
                     name: "ou".to_string(),
-                                value: vec![self.selected_ou.clone()],
+                    value: vec![self.selected_ou.clone()],
                 });
 
                 let kerb_value = if self.kerberossync_enabled { "1" } else { "0" };
                 attributes.push(GraphQLAttributeValue {
                     name: "kerberossync".to_string(),
-                                value: vec![kerb_value.to_string()],
+                    value: vec![kerb_value.to_string()],
                 });
 
                 let user = create_user::CreateUserInput {
@@ -310,13 +298,10 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::CreateUserResponse(res) => {
                 self.user_id = Some(res?.create_user.id);
-                if self.form.model().password.is_empty() {
-                    return self.handle_msg(ctx, Msg::SuccessfulCreation);
-                }
                 let mut rng = rand::rngs::OsRng;
                 let registration_start_request = opaque::client::registration::start_registration(
                     self.form.model().password.as_bytes(),
-                                                                                                  &mut rng,
+                    &mut rng,
                 )
                 .context("Could not initiate registration")?;
                 let req = registration::ClientRegistrationStartRequest {
@@ -327,7 +312,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
-                                         Msg::RegistrationStartResponse,
+                    Msg::RegistrationStartResponse,
                 );
                 Ok(false)
             }
@@ -348,7 +333,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.common.call_backend(
                     ctx,
                     HostService::register_finish(req),
-                                         Msg::RegistrationFinishResponse,
+                    Msg::RegistrationFinishResponse,
                 );
                 Ok(false)
             }
@@ -398,16 +383,16 @@ impl Component for CreateUserForm {
         CreateUserForm {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<CreateUserModel>::new(CreateUserModel::default()),
-                attributes_schema: None,
-                form_ref: NodeRef::default(),
-                    fetched_schema: false,
-                    encrypted_password: None,
-                    user_id: None,
-                    opaque_data: None,
-                    kerberos_info: None,
-                    kerberossync_enabled: true,
-                    selected_ou: "people".to_string(),
-                    ous: vec!["people".to_string()],
+            attributes_schema: None,
+            form_ref: NodeRef::default(),
+            fetched_schema: false,
+            encrypted_password: None,
+            user_id: None,
+            opaque_data: None,
+            kerberos_info: None,
+            kerberossync_enabled: true,
+            selected_ou: "people".to_string(),
+            ous: vec!["people".to_string()],
         }
     }
 
@@ -441,64 +426,64 @@ impl Component for CreateUserForm {
                     .map(|&a| get_custom_attribute_input(a))
                     .collect::<Vec<Html>>() }
 
-                    <div class="mb-3 row">
-                    <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
-                    {"Kerberos Sync :"}
-                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
-                    <i aria-label="Info" class="bi bi-info-circle"></i>
-                    </button>
-                    </label>
-                    <div class="col-8 d-flex align-items-center">
-                    <div class="btn-group" role="group" style="width: 120px;">
-                    <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
-                    {"On"}
-                    </button>
-                    <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
-                    {"Off"}
-                    </button>
-                    </div>
-                    </div>
-                    </div>
+                <div class="mb-3 row">
+                <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
+                {"Kerberos Sync :"}
+                <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
+                <i aria-label="Info" class="bi bi-info-circle"></i>
+                </button>
+                </label>
+                <div class="col-8 d-flex align-items-center">
+                <div class="btn-group" role="group" style="width: 120px;">
+                <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
+                {"On"}
+                </button>
+                <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
+                {"Off"}
+                </button>
+                </div>
+                </div>
+                </div>
 
-                    <div class="mb-3 row">
-                    <label class="form-label col-4 col-form-label">{"Organizational Unit :"}
-                    <button data-bs-placement="right" title="user_ou" type="button" class="btn btn-sm btn-link" aria-label="User OU Info">
-                    <i aria-label="Info" class="bi bi-info-circle"></i>
-                    </button>
-                    </label>
-                    <div class="col-8">
-                    <OuSelector
-                    ous={self.ous.clone()}
-                    current_ou={self.selected_ou.clone()}
-                    on_ou_changed={link.callback(Msg::OuChanged)}
-                    show_all={false} />
-                    </div>
-                    </div>
+                <div class="mb-3 row">
+                <label class="form-label col-4 col-form-label">{"Organizational Unit :"}
+                <button data-bs-placement="right" title="user_ou" type="button" class="btn btn-sm btn-link" aria-label="User OU Info">
+                <i aria-label="Info" class="bi bi-info-circle"></i>
+                </button>
+                </label>
+                <div class="col-8">
+                <OuSelector
+                ous={self.ous.clone()}
+                current_ou={self.selected_ou.clone()}
+                on_ou_changed={link.callback(Msg::OuChanged)}
+                show_all={false} />
+                </div>
+                </div>
 
-                    <Field<CreateUserModel>
-                    form={&self.form}
-                    label="Password"
-                    field_name="password"
-                    input_type="password"
-                    autocomplete="new-password"
-                    oninput={link.callback(|_| Msg::Update)} />
-                    <Field<CreateUserModel>
-                    form={&self.form}
-                    label="Confirm password"
-                    field_name="confirm_password"
-                    input_type="password"
-                    autocomplete="new-password"
-                    oninput={link.callback(|_| Msg::Update)} />
+                <Field<CreateUserModel>
+                form={&self.form}
+                label="Password"
+                field_name="password"
+                input_type="password"
+                autocomplete="new-password"
+                oninput={link.callback(|_| Msg::Update)} />
+                <Field<CreateUserModel>
+                form={&self.form}
+                label="Confirm password"
+                field_name="confirm_password"
+                input_type="password"
+                autocomplete="new-password"
+                oninput={link.callback(|_| Msg::Update)} />
 
-                    <Submit
-                    disabled={self.common.is_task_running()}
-                    onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
-                    </form>
+                <Submit
+                disabled={self.common.is_task_running()}
+                onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
+                </form>
 
-                    { if let Some(e) = &self.common.error {
-                        html! { <div class="alert alert-danger">{e.to_string()}</div> }
-                    } else { html! {} }}
-                    </div>
+                { if let Some(e) = &self.common.error {
+                    html! { <div class="alert alert-danger">{e.to_string()}</div> }
+                } else { html! {} }}
+                </div>
             }
         }
     }

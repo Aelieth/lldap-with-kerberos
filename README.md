@@ -10,7 +10,7 @@ Built with aid of Grok / xAI. Thanks Grok and all of my agents - Tasker, Curiell
 
 Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
 
-~12,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
+~14,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
 
 ## Schema System – Single Source of Truth
 - All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`
@@ -61,7 +61,6 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator."
 
 ## TODOs before release
-
 - #756 / #847 [BUG] Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
 - ldap specific testing for OU's, user account modification, etc TEST PASSWORD UPDATE, USER CREATION, DELETION ETC
 - Cleanup: Logging

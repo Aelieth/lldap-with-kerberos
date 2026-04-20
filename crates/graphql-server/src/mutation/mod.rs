@@ -276,7 +276,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         create_group_with_details(context, request, span).await
     }
 
-            async fn update_user(
+    async fn update_user(
         context: &Context<Handler>,
         user: UpdateUserInput,
     ) -> FieldResult<Success> {
@@ -316,13 +316,6 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             is_admin,
         )?;
 
-        let display_name = display_name.or_else(|| {
-            delete_attributes
-                .iter()
-                .find(|attr| *attr == "display_name")
-                .map(|_| String::new())
-        });
-
         handler
             .update_user(UpdateUserRequest {
                 user_id: user_id.clone(),
@@ -331,7 +324,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                 delete_attributes: delete_attributes
                     .clone()
                     .into_iter()
-                    .filter(|attr| attr != "mail" && attr != "display_name")
+                    .filter(|attr| attr != "mail" && attr.to_lowercase() != "displayname")
                     .map(|s| AttributeName::from(s))
                     .collect(),
                 insert_attributes: insert_attributes.clone(),
@@ -356,7 +349,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
         let new_display_name = group.display_name.clone().or_else(|| {
             group.insert_attributes.as_ref().and_then(|a| {
                 a.iter()
-                .find(|attr| attr.name == "display_name")
+                .find(|attr| attr.name == "displayname")
                 .map(|attr| attr.value[0].clone())
             })
         });
@@ -365,12 +358,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot change lldap_admin group name".into());
         }
 
-        let schema = handler.get_schema().await?;   // live PublicSchema — 17+ attributes (custom + POSIX + Kerberos)
+        let schema = handler.get_schema().await?;
         let insert_attributes = group
         .insert_attributes
         .unwrap_or_default()
         .into_iter()
-        .filter(|attr| attr.name != "display_name")
+        .filter(|attr| attr.name != "displayname")
         .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -382,7 +375,7 @@ impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
                       .remove_attributes
                       .unwrap_or_default()
                       .into_iter()
-                      .filter(|attr| attr != "display_name")
+                      .filter(|attr| attr != "displayname")
                       .map(|s| AttributeName::from(s))
                       .collect(),
                       insert_attributes,

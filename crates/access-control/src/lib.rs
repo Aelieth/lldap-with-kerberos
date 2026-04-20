@@ -19,7 +19,7 @@ use lldap_domain_handlers::handler::{
 use lldap_domain_model::error::Result;
 use lldap_schema::PublicSchema;
 use std::collections::HashSet;
-use tracing::info;
+use tracing::debug;
 use lldap_opaque_handler::OpaqueHandler;
 use lldap_auth::{login, registration};
 
@@ -228,7 +228,7 @@ impl<Handler: BackendHandler + OpaqueHandler + PasswordHandler> AccessControlled
             user_filter: if validation_result.can_read_all() {
                 None
             } else {
-                info!("Unprivileged search, limiting results");
+                debug!("Unprivileged search, limiting results");
                 Some(validation_result.user.clone())
             },
         }

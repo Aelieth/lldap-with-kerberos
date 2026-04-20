@@ -10,37 +10,28 @@ use crate::{
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
         form_utils::{AttributeValue, EmailIsRequired, IsAdmin, read_all_form_attributes},
-            schema::AttributeType,
+        schema::AttributeType,
     },
 };
 use anyhow::Result;
 use chrono::NaiveDateTime;
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
-use gloo_console::log;
 
-/// The GraphQL query sent to the server to update the user details.
 #[derive(GraphQLQuery)]
 #[graphql(
-schema_path = "../schema.graphql",
-query_path = "queries/update_user.graphql",
-response_derives = "Debug",
-variables_derives = "Clone,PartialEq,Eq",
-custom_scalars_module = "crate::infra::graphql"
+    schema_path = "../schema.graphql",
+    query_path = "queries/update_user.graphql",
+    response_derives = "Debug",
+    variables_derives = "Clone,PartialEq,Eq",
+    custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct UpdateUser;
 
 fn attribute_priority(name: &str) -> (i32, String) {
     let priorities = vec![
-        "firstname",
-        "lastname",
-        "displayname",
-        "mail",
-        "avatar",
-        "uidnumber",
-        "gidnumber",
-        "homedirectory",
-        "loginshell",
+        "firstname", "lastname", "displayname", "mail", "avatar",
+        "uidnumber", "gidnumber", "homedirectory", "loginshell",
     ];
     let index = priorities.iter().position(|&p| p == name).map(|i| i as i32).unwrap_or(100);
     (index, name.to_lowercase())
@@ -51,9 +42,9 @@ pub struct UserDetailsForm {
     just_updated: bool,
     user: User,
     form_ref: NodeRef,
-        kerberossync_enabled: bool,
-        original_kerberossync_enabled: bool,
-        show_kerberos_banner: bool,
+    kerberossync_enabled: bool,
+    original_kerberossync_enabled: bool,
+    show_kerberos_banner: bool,
 }
 
 pub enum Msg {
@@ -84,7 +75,6 @@ impl CommonComponent<UserDetailsForm> for UserDetailsForm {
                 if response.is_ok() {
                     self.show_kerberos_banner = false;
                     self.just_updated = true;
-                    // Keep original in sync here too (handles the CommonComponent path)
                     self.original_kerberossync_enabled = self.kerberossync_enabled;
                 }
                 Ok(true)
@@ -107,15 +97,15 @@ impl Component for UserDetailsForm {
 
     fn create(ctx: &Context<Self>) -> Self {
         let kerberossync_enabled = ctx.props().user.attributes.iter()
-        .any(|attr| attr.name == "kerberossync" && attr.value == vec!["1"]);
+            .any(|attr| attr.name.to_lowercase() == "kerberossync" && attr.value == vec!["1"]);
         Self {
             common: CommonComponentParts::<Self>::create(),
             just_updated: false,
             user: ctx.props().user.clone(),
             form_ref: NodeRef::default(),
-                kerberossync_enabled,
-                original_kerberossync_enabled: kerberossync_enabled,  // ← capture original
-                show_kerberos_banner: false,
+            kerberossync_enabled,
+            original_kerberossync_enabled: kerberossync_enabled,
+            show_kerberos_banner: false,
         }
     }
 
@@ -160,9 +150,9 @@ impl Component for UserDetailsForm {
         };
 
         let mut all_attrs: Vec<&AttributeSchema> = ctx.props().user_attributes_schema
-        .iter()
-        .filter(|a| a.name != "user_id" && a.name != "kerberossync")
-        .collect();
+            .iter()
+            .filter(|a| a.name != "userid" && a.name != "kerberossync")
+            .collect();
         all_attrs.sort_by_key(|a| attribute_priority(&a.name));
 
         html! {
@@ -197,7 +187,6 @@ impl Component for UserDetailsForm {
                     </div>
                     </div>
 
-                    // Flash banner — appears only when toggled to ON
                     { if self.show_kerberos_banner {
                         html! {
                             <div class="alert alert-info mt-2">
@@ -231,30 +220,20 @@ impl UserDetailsForm {
     fn submit_user_update_form(&mut self, ctx: &Context<Self>) -> bool {
         let form_values = read_all_form_attributes(
             ctx.props().user_attributes_schema.iter(),
-                                                   &self.form_ref,
-                                                   IsAdmin(ctx.props().is_admin),
-                                                   EmailIsRequired(!ctx.props().is_edited_user_admin),
+            &self.form_ref,
+            IsAdmin(ctx.props().is_admin),
+            EmailIsRequired(!ctx.props().is_edited_user_admin),
         ).unwrap_or_default();
 
-        // === DEBUG: WHAT THE FORM READER SAW ===
-        if let Some(avatar_attr) = form_values.iter().find(|a| a.name == "avatar") {
-            let avatar_val = avatar_attr.values.first().cloned().unwrap_or_default();
-            log!("EDIT_FORM_READER: avatar value length = {}", avatar_val.len());
-            if avatar_val.is_empty() {
-                log!("EDIT_FORM_READER: avatar is EMPTY — forcing removal");
-            }
-        }
-
         let base_attributes = &self.user.attributes;
-
         let empty: Vec<String> = vec![];
 
         let mut to_insert: Vec<AttributeValue> = vec![];
         let mut to_remove: Vec<String> = vec![];
 
         for attr in form_values {
-            let name = &attr.name;
-            let old_val = base_attributes.iter().find(|b| &b.name == name);
+            let name_lower = attr.name.to_lowercase();
+            let old_val = base_attributes.iter().find(|b| b.name.to_lowercase() == name_lower);
             let old_values = old_val.map_or(&empty, |v| &v.value);
 
             let has_changed = old_values != &attr.values;
@@ -263,58 +242,58 @@ impl UserDetailsForm {
                 continue;
             }
 
-            if name == "avatar" {
+            if name_lower == "avatar" {
                 if attr.values.is_empty() || attr.values.first().map_or(true, |s| s.trim().is_empty()) {
-                    to_remove.push(name.clone());
-                    log!("SUBMIT_FORM: forcing avatar removal");
+                    to_remove.push(attr.name.clone());
                     continue;
                 }
             }
 
-            if name == "kerberossync" {
+            if name_lower == "kerberossync" {
                 if self.kerberossync_enabled != self.original_kerberossync_enabled {
                     to_insert.push(AttributeValue {
                         name: "kerberossync".to_string(),
-                                   values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
+                        values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
                     });
                 }
                 continue;
             }
 
             if attr.values.is_empty() {
-                to_remove.push(name.clone());
+                to_remove.push(attr.name.clone());
             } else {
                 to_insert.push(attr);
             }
         }
 
-        log!("SUBMIT_FORM: to_remove = {:?}", to_remove.clone());  // ← CLONE FIX (prevents move)
-        log!("SUBMIT_FORM: to_insert contains avatar = {}", to_insert.iter().any(|a| a.name == "avatar"));
-
-        let remove_attributes = if to_remove.is_empty() {
-            None
-        } else {
-            Some(to_remove)
-        };
+        let remove_attributes = if to_remove.is_empty() { None } else { Some(to_remove) };
 
         let insert_attributes: Option<Vec<update_user::AttributeValueInput>> = if to_insert.is_empty() {
             None
         } else {
             Some(
                 to_insert
-                .into_iter()
-                .map(|AttributeValue { name, values }| update_user::AttributeValueInput {
-                    name,
-                    value: values,
-                })
-                .collect(),
+                    .into_iter()
+                    .map(|AttributeValue { name, values }| update_user::AttributeValueInput {
+                        name,
+                        value: values,
+                    })
+                    .collect(),
             )
         };
+
+        // === Extract displayname (and other special fields) to top-level like create_user does ===
+        let mut display_name = None;
+        if let Some(dn_attr) = insert_attributes.as_ref().and_then(|attrs| {
+            attrs.iter().find(|a| a.name.to_lowercase() == "displayname")
+        }) {
+            display_name = dn_attr.value.first().cloned();
+        }
 
         let user_input = update_user::UpdateUserInput {
             id: self.user.id.clone(),
             email: None,
-            displayName: None,
+            displayName: display_name,
             firstName: None,
             lastName: None,
             avatar: None,
@@ -338,10 +317,10 @@ fn get_custom_attribute_input(
     user_attributes: &[Attribute],
 ) -> Html {
     let values = user_attributes
-    .iter()
-    .find(|a| a.name == attribute_schema.name)
-    .map(|attribute| attribute.value.clone())
-    .unwrap_or_default();
+        .iter()
+        .find(|a| a.name.to_lowercase() == attribute_schema.name.to_lowercase())
+        .map(|attribute| attribute.value.clone())
+        .unwrap_or_default();
 
     if attribute_schema.is_list {
         html! {
@@ -367,10 +346,10 @@ fn get_custom_attribute_static(
     user_attributes: &[Attribute],
 ) -> Html {
     let values = user_attributes
-    .iter()
-    .find(|a| a.name == attribute_schema.name)
-    .map(|attribute| attribute.value.clone())
-    .unwrap_or_default();
+        .iter()
+        .find(|a| a.name.to_lowercase() == attribute_schema.name.to_lowercase())
+        .map(|attribute| attribute.value.clone())
+        .unwrap_or_default();
 
     let value_to_str = match attribute_schema.attribute_type {
         AttributeType::String | AttributeType::Integer => |v: String| v,
