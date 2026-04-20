@@ -60,12 +60,46 @@ impl SqlBackendHandler {
             .await?
             .and_then(|u| u.0))
     }
+
+    #[instrument(skip(self), level = "debug")]
+    async fn is_user_disabled(&self, user_id: &UserId) -> Result<bool> {
+        use lldap_domain_model::model::{groups, memberships};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        // Find the lldap_disabled group
+        let group = groups::Entity::find()
+            .filter(groups::Column::DisplayName.eq("lldap_disabled"))
+            .one(&self.sql_pool)
+            .await?;
+
+        let Some(group) = group else {
+            debug!("lldap_disabled group not found - treating as not disabled");
+            return Ok(false);
+        };
+
+        // Check if user is member
+        let membership = memberships::Entity::find()
+            .filter(memberships::Column::UserId.eq(user_id.as_str()))
+            .filter(memberships::Column::GroupId.eq(group.group_id))
+            .one(&self.sql_pool)
+            .await?;
+
+        Ok(membership.is_some())
+    }
 }
 
 #[async_trait]
 impl LoginHandler for SqlBackendHandler {
     #[instrument(skip_all, level = "debug", err)]
     async fn bind(&self, request: BindRequest) -> Result<()> {
+        if self.is_user_disabled(&request.name).await? {
+            warn!(r#"Login attempt denied for disabled user "{}""#, &request.name);
+            return Err(DomainError::AuthenticationError(format!(
+                r#"for user "{}" (account disabled)"#,
+                request.name
+            )));
+        }
+
         if let Some(password_hash) = self
             .get_password_file_for_user(request.name.clone())
             .await?
@@ -102,6 +136,15 @@ impl OpaqueHandler for SqlOpaqueHandler {
         request: login::ClientLoginStartRequest,
     ) -> Result<login::ServerLoginStartResponse> {
         let user_id = request.username;
+
+        if self.is_user_disabled(&user_id).await? {
+            warn!(r#"OPAQUE login attempt denied for disabled user "{}""#, &user_id);
+            return Err(DomainError::AuthenticationError(format!(
+                r#"for user "{}" (account disabled)"#,
+                user_id
+            )));
+        }
+
         info!(r#"OPAQUE login attempt for "{}""#, &user_id);
         let maybe_password_file = self
             .get_password_file_for_user(user_id.clone())
@@ -145,6 +188,16 @@ impl OpaqueHandler for SqlOpaqueHandler {
             &secret_key,
             &base64::engine::general_purpose::STANDARD.decode(&request.server_data)?,
         )?)?;
+
+        // Extra safety check (in case login_start check is ever bypassed)
+        if self.is_user_disabled(&username).await? {
+            warn!(r#"OPAQUE login_finish denied for disabled user "{}""#, &username);
+            return Err(DomainError::AuthenticationError(format!(
+                r#"for user "{}" (account disabled)"#,
+                username
+            )));
+        }
+
         // Finish the login: this makes sure the client data is correct, and gives a session key we
         // don't need.
         match opaque::server::login::finish_login(server_login, request.credential_finalization) {
