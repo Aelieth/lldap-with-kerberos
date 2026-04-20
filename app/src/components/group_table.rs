@@ -111,7 +111,9 @@ impl CommonComponent<GroupTable> for GroupTable {
                         let term = self.search_term.to_lowercase();
                         filtered.retain(|g| match self.search_field.as_str() {
                             "Group Name" => g.display_name.to_lowercase().contains(&term),
-                            "OU" => Self::get_ou(g).to_lowercase().contains(&term),
+                            "Creation Date" => Self::get_creation_date_str(g).contains(&term),
+                            "Member Count <" => Self::member_count_less_than(g, &term),
+                            "Member Count >" => Self::member_count_greater_than(g, &term),
                             _ => true,
                         });
                     }
@@ -162,9 +164,28 @@ impl GroupTable {
         Self::get_attribute_value(group, "ou").unwrap_or_default()
     }
 
-    fn get_member_count(group: &Group) -> String {
-        // member_count is now a plain integer from the backend (never null)
-        group.member_count.to_string()
+    fn get_creation_date_str(group: &Group) -> String {
+        group.creation_date.naive_local().date().to_string()
+    }
+
+    fn get_member_count(group: &Group) -> u64 {
+        group.member_count as u64
+    }
+
+    fn member_count_less_than(group: &Group, term: &str) -> bool {
+        if let Ok(num) = term.parse::<u64>() {
+            Self::get_member_count(group) < num
+        } else {
+            false
+        }
+    }
+
+    fn member_count_greater_than(group: &Group, term: &str) -> bool {
+        if let Ok(num) = term.parse::<u64>() {
+            Self::get_member_count(group) > num
+        } else {
+            false
+        }
     }
 }
 
@@ -214,7 +235,9 @@ impl Component for GroupTable {
                 let term = self.search_term.to_lowercase();
                 filtered.retain(|g| match self.search_field.as_str() {
                     "Group Name" => g.display_name.to_lowercase().contains(&term),
-                    "OU" => Self::get_ou(g).to_lowercase().contains(&term),
+                    "Creation Date" => Self::get_creation_date_str(g).contains(&term),
+                    "Member Count <" => Self::member_count_less_than(g, &term),
+                    "Member Count >" => Self::member_count_greater_than(g, &term),
                     _ => true,
                 });
             }
@@ -246,7 +269,9 @@ impl Component for GroupTable {
                 search_term={self.search_term.clone()}
                 search_fields={vec![
                     "Group Name".to_string(),
-                    "OU".to_string(),
+                    "Creation Date".to_string(),
+                    "Member Count <".to_string(),
+                    "Member Count >".to_string(),
                 ]}
                 on_search_field_changed={ctx.link().callback(Msg::SearchFieldChanged)}
                 on_search_term_changed={ctx.link().callback(Msg::SearchTermChanged)}

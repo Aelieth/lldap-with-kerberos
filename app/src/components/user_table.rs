@@ -42,7 +42,7 @@ pub struct UserTable {
     search_term: String,
     search_field: String,
     ous: Vec<String>,
-    bulk_selection: TableBulkSelection<String>,   // ← new reusable logic
+    bulk_selection: TableBulkSelection<String>,
 }
 
 pub enum Msg {
@@ -115,6 +115,7 @@ impl CommonComponent<UserTable> for UserTable {
                             "Display Name" => u.display_name.to_lowercase().contains(&term),
                             "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
                             "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
+                            "Creation Date" => Self::get_creation_date_str(u).contains(&term),
                             _ => true,
                         });
                     }
@@ -175,6 +176,10 @@ impl UserTable {
         Self::get_attribute_value(user, "ou").unwrap_or_else(|| "people".to_string())
     }
 
+    fn get_creation_date_str(user: &User) -> String {
+        user.creation_date.naive_local().date().to_string()
+    }
+
     fn is_user_disabled(user: &User) -> bool {
         user.is_disabled
     }
@@ -230,6 +235,7 @@ impl Component for UserTable {
                     "Display Name" => u.display_name.to_lowercase().contains(&term),
                     "First Name" => Self::get_attribute_value(u, "firstname").unwrap_or_default().to_lowercase().contains(&term),
                     "Last Name" => Self::get_attribute_value(u, "lastname").unwrap_or_default().to_lowercase().contains(&term),
+                    "Creation Date" => Self::get_creation_date_str(u).contains(&term),
                     _ => true,
                 });
             }
