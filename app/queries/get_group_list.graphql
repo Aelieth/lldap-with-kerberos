@@ -3,6 +3,7 @@ query GetGroupList {
     id
     displayName
     creationDate
+    memberCount
     attributes {
       name
       value

@@ -267,6 +267,7 @@ impl GroupBackendHandler for SqlBackendHandler {
         let now = chrono::Utc::now().naive_utc();
         let uuid = Uuid::from_name_and_date(request.display_name.as_str(), &now);
         let lower_display_name = request.display_name.as_str().to_lowercase();
+
         let new_group = model::groups::ActiveModel {
             display_name: Set(request.display_name),
             lowercase_display_name: Set(lower_display_name),
@@ -276,7 +277,9 @@ impl GroupBackendHandler for SqlBackendHandler {
             ..Default::default()
         };
 
-        let _default_ou = self.get_allowed_ous().await?
+        // Get default OU from allowed OUs (or fall back to "groups")
+        let allowed_ous = self.get_allowed_ous().await?;
+        let default_ou = allowed_ous
             .into_iter()
             .next()
             .unwrap_or_else(|| "groups".to_string());
@@ -320,6 +323,15 @@ impl GroupBackendHandler for SqlBackendHandler {
 
                     let mut final_attributes = request.attributes;
 
+                    // === GUARANTEE OU ATTRIBUTE (central enforcement) ===
+                    if !final_attributes.iter().any(|a| a.name.as_str() == "ou") {
+                        final_attributes.push(Attribute {
+                            name: "ou".into(),
+                            value: AttributeValue::String(Cardinality::Singleton(default_ou)),
+                        });
+                    }
+
+                    // === POSIX GID AUTO-ASSIGNMENT (restored exactly as original) ===
                     if settings.group_gidnumber_assign {
                         let already_has_gid = final_attributes.iter().any(|a| a.name.as_str() == "gidnumber");
                         if !already_has_gid {

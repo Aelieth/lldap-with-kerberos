@@ -79,8 +79,8 @@ pub struct CreateGroupForm {
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
 pub struct CreateGroupModel {
-    #[validate(length(min = 1, message = "Groupname is required"))]
-    groupname: String,
+    #[validate(length(min = 1, message = "Display name is required"))]
+    display_name: String,
 }
 
 pub enum Msg {
@@ -127,7 +127,7 @@ impl CommonComponent<CreateGroupForm> for CreateGroupForm {
                     })
                     .collect();
 
-                // Inject selected OU exactly like create_user.rs
+                // Always inject selected OU
                 attributes.push(create_group::AttributeValueInput {
                     name: "ou".to_string(),
                     value: vec![self.selected_ou.clone()],
@@ -136,7 +136,7 @@ impl CommonComponent<CreateGroupForm> for CreateGroupForm {
                 let model = self.form.model();
                 let req = create_group::Variables {
                     group: create_group::CreateGroupInput {
-                        displayName: model.groupname,
+                        displayName: model.display_name,
                         attributes: Some(attributes),
                     },
                 };
@@ -217,11 +217,10 @@ impl Component for CreateGroupForm {
             <Field<CreateGroupModel>
             form={&self.form}
             required=true
-            label="Group name"
-            field_name="groupname"
+            label="Display name"
+            field_name="display_name"
             oninput={link.callback(|_| Msg::Update)} />
 
-            // OU selector — now using clean OuSelector with show_all=false
             <div class="mb-3 row">
             <label class="form-label col-4 col-form-label">{"Organizational Unit :"}</label>
             <div class="col-8">
@@ -237,7 +236,7 @@ impl Component for CreateGroupForm {
                 self.attributes_schema
                     .iter()
                     .flatten()
-                    .filter(|a| !a.is_readonly && a.name != "display_name")
+                    .filter(|a| !a.is_readonly && a.name != "displayname" && a.name != "display_name" && a.name != "ou")
                     .map(get_custom_attribute_input)
                     .collect::<Vec<_>>()
             }

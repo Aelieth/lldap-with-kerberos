@@ -59,6 +59,8 @@ type Group {
   uuid: String!
   "Single-layer OU (defaults to \"groups\" — editable by admin only)"
   ou: String!
+  "Real member count (used by group_table.rs)"
+  memberCount: Int!
   "User-defined attributes (includes ou for legacy clients)."
   attributes: [AttributeValue!]!
   "The users that belong to this group."

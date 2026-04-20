@@ -20,6 +20,7 @@ pub struct Group<Handler: BackendHandler> {
     creation_date: chrono::NaiveDateTime,
     uuid: String,
     attributes: Vec<AttributeValue<Handler>>,
+    pub member_count: i32,          // ← NEW: real member count for group_table.rs
     pub schema: Arc<PublicSchema>,
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
@@ -34,11 +35,12 @@ impl<Handler: BackendHandler> Group<Handler> {
         Ok(Self {
             group_id: group.id.0,
             display_name: group.display_name.to_string(),
-           creation_date: group.creation_date,
-           uuid: group.uuid.into_string(),
-           attributes,
-           schema,
-           _phantom: std::marker::PhantomData,
+            creation_date: group.creation_date,
+            uuid: group.uuid.into_string(),
+            attributes,
+            member_count: group.users.len() as i32,   // ← computed from existing users vector
+            schema,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -53,11 +55,12 @@ impl<Handler: BackendHandler> Group<Handler> {
         Ok(Self {
             group_id: group_details.group_id.0,
             display_name: group_details.display_name.to_string(),
-           creation_date: group_details.creation_date,
-           uuid: group_details.uuid.into_string(),
-           attributes,
-           schema,
-           _phantom: std::marker::PhantomData,
+            creation_date: group_details.creation_date,
+            uuid: group_details.uuid.into_string(),
+            attributes,
+            member_count: 0,   // single-group details view does not preload the full list
+            schema,
+            _phantom: std::marker::PhantomData,
         })
     }
 }
@@ -85,6 +88,11 @@ impl<Handler: BackendHandler + OpaqueHandler> Group<Handler> {
         .and_then(|a| a.attribute.value.as_str())
         .unwrap_or("groups")
         .to_string()
+    }
+
+    /// Real member count (used by group_table.rs)
+    fn member_count(&self) -> i32 {
+        self.member_count
     }
 
     /// User-defined attributes (includes ou for legacy clients).

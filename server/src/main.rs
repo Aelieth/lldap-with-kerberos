@@ -37,6 +37,8 @@ use std::time::Duration;
 use tracing::{Instrument, Level, debug, error, info, instrument, span, warn};
 
 use lldap_domain::requests::{CreateGroupRequest, CreateUserRequest};
+use lldap_domain::types::Attribute;   // ← Exact domain type required by requests.rs
+
 use lldap_domain_handlers::handler::{
     GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, UserBackendHandler,
     UserListerBackendHandler, UserRequestFilter,
@@ -62,6 +64,10 @@ async fn create_admin_user(handler: &SqlBackendHandler, config: &Configuration) 
             user_id: config.ldap_user_dn.clone(),
             email: config.ldap_user_email.clone().into(),
             display_name: Some("Administrator".to_string()),
+            attributes: vec![Attribute {
+                name: "ou".into(),
+                value: "people".to_string().into(),
+            }],
             ..Default::default()
         })
         .and_then(|_| {
@@ -93,6 +99,10 @@ async fn ensure_group_exists(handler: &SqlBackendHandler, group_name: &str) -> R
         handler
             .create_group(CreateGroupRequest {
                 display_name: group_name.into(),
+                attributes: vec![Attribute {
+                    name: "ou".into(),
+                    value: "groups".to_string().into(),
+                }],
                 ..Default::default()
             })
             .await

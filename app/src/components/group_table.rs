@@ -2,7 +2,7 @@ use crate::{
     components::{
         router::{AppRoute, Link},
         ou_table::OuTable,
-        change_ou::{ChangeOu, OuChangeKind},
+        change_ou::OuChangeKind,
         delete_group::DeleteGroup,
         table_action_bar::TableActionBar,
         table_bulk_selection::TableBulkSelection,
@@ -13,7 +13,6 @@ use anyhow::{Error, Result};
 use graphql_client::GraphQLQuery;
 use list_ous_query::ResponseData as OusResponseData;
 use yew::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -160,11 +159,12 @@ impl GroupTable {
     }
 
     fn get_ou(group: &Group) -> String {
-        Self::get_attribute_value(group, "ou").unwrap_or_else(|| "groups".to_string())
+        Self::get_attribute_value(group, "ou").unwrap_or_default()
     }
 
-    fn get_member_count(_group: &Group) -> String {
-        "–".to_string()   // placeholder — expand when GraphQL adds real member count
+    fn get_member_count(group: &Group) -> String {
+        // member_count is now a plain integer from the backend (never null)
+        group.member_count.to_string()
     }
 }
 
