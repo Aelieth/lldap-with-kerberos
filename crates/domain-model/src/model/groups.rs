@@ -38,8 +38,8 @@ impl From<Model> for lldap_domain::types::Group {
             display_name: value.display_name,
             creation_date: value.creation_date,
             uuid: value.uuid,
-            users: vec![],           // populated later by relations
-            attributes: vec![],      // populated later by relations
+            users: vec![],
+            attributes: vec![],
             modified_date: value.modified_date,
         }
     }

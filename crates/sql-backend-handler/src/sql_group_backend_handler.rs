@@ -2,7 +2,7 @@ use crate::sql_backend_handler::SqlBackendHandler;
 use async_trait::async_trait;
 use lldap_domain::{
     requests::{CreateGroupRequest, UpdateGroupRequest},
-    types::{Attribute, AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid},
+    types::{Attribute, AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid, UserId},
 };
 use lldap_domain_handlers::handler::{
     GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler, SystemConfigBackendHandler,
@@ -177,10 +177,49 @@ impl GroupListerBackendHandler for SqlBackendHandler {
         .filter(filters.clone())
         .all(&self.sql_pool)
         .await?;
+        // Step 1: Collect all user IDs across all groups first
+        let all_user_ids: Vec<UserId> = results
+        .iter()
+        .flat_map(|(_, memberships)| {
+            memberships.iter().map(|m| m.user_id.clone())
+        })
+        .collect();
+
+        // Step 2: Fetch OU for all users in one query (efficient)
+        let member_ous: std::collections::HashMap<UserId, String> = if all_user_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let ou_attrs = model::UserAttributes::find()
+            .filter(model::UserAttributesColumn::UserId.is_in(all_user_ids.clone()))
+            .filter(model::UserAttributesColumn::AttributeName.eq("ou"))
+            .all(&self.sql_pool)
+            .await?;
+
+            ou_attrs
+            .into_iter()
+            .filter_map(|attr| {
+                String::from_utf8(attr.value.0.clone())
+                .ok()
+                .map(|ou| (attr.user_id, ou))
+            })
+            .collect()
+        };
+
+        // Step 3: Build groups with real GroupMember data
         let mut groups: Vec<_> = results
         .into_iter()
-        .map(|(group, users)| {
-            let users: Vec<_> = users.into_iter().map(|u| u.user_id).collect();
+        .map(|(group, memberships)| {
+            let users: Vec<lldap_domain::types::GroupMember> = memberships
+            .into_iter()
+            .map(|m| lldap_domain::types::GroupMember {
+                user_id: m.user_id.clone(),
+                 ou: member_ous
+                 .get(&m.user_id)
+                 .cloned()
+                 .unwrap_or_else(|| "people".to_string()),
+            })
+            .collect();
+
             Group {
                 users,
                 ..group.into()

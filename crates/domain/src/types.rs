@@ -555,13 +555,21 @@ impl User {
     }
 }
 
+/// Represents a single member of a group, including the user's current OU.
+/// This enables fully dynamic `member` / `uniqueMember` DN construction.
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub user_id: UserId,
+    pub ou: String,
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub id: GroupId,
     pub display_name: GroupName,
     pub creation_date: NaiveDateTime,
     pub uuid: Uuid,
-    pub users: Vec<UserId>,
+    pub users: Vec<GroupMember>,
     pub attributes: Vec<Attribute>,
     pub modified_date: NaiveDateTime,
 }

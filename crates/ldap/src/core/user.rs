@@ -72,8 +72,22 @@ pub fn get_user_attribute(
         .into_iter()
         .flatten()
         .map(|group| {
-            // Use the group's actual OU instead of hardcoding "groups"
-            let group_ou = "groups"; // TODO: improve later if groups get nested OUs
+            // Get the group's real OU from its attributes (fully dynamic)
+            let group_ou = group.attributes
+            .iter()
+            .find(|a| a.name.as_str() == "ou")
+            .and_then(|a| {
+                if let lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(s),
+                ) = &a.value
+                {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "groups".to_string());
+
             format!("cn={},ou={},{}", &group.display_name, group_ou, base_dn_str).into_bytes()
         })
         .collect(),

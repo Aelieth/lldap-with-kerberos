@@ -83,11 +83,10 @@ pub fn get_group_attribute(
         GroupFieldType::Member => group
         .users
         .iter()
-        .filter(|u| user_filter.as_ref().map(|f| *u == f).unwrap_or(true))
+        .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
         .map(|u| {
-            // Use actual user OU instead of hardcoding "people"
-            // For now we default to "people" until we pass user OU data
-            format!("uid={u},ou=people,{base_dn_str}").into_bytes()
+            // Fully dynamic: use the actual OU stored in GroupMember
+            format!("uid={},ou={},{}", u.user_id, u.ou, base_dn_str).into_bytes()
         })
         .collect(),
         GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
