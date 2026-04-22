@@ -113,5 +113,5 @@ CMD ["run"]
 HEALTHCHECK CMD ["/app/lldap", "healthcheck"]
 
 LABEL maintainer="Aelieth <https://github.com/Aelieth>" \
-      version="0.5.6-kerberos" \
-      description="LLDAP fork with MIT Kerberos and Keycloak integration"
+      version="0.7.0-federation-alpha" \
+      description="LLDAP Federation Edition"

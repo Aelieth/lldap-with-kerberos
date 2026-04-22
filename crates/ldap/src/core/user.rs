@@ -24,7 +24,7 @@ use tracing::{debug, instrument, warn};
 pub const REQUIRED_USER_ATTRIBUTES: &[&str] = &["user_id", "mail"];
 
 const DEFAULT_USER_OBJECT_CLASSES: &[&str] =
-    &["inetOrgPerson", "posixAccount", "mailAccount", "person"];
+    &["top", "inetOrgPerson", "posixAccount", "mailAccount", "person"];
 
 fn get_default_user_object_classes_vec_u8() -> Vec<Vec<u8>> {
     DEFAULT_USER_OBJECT_CLASSES
@@ -71,8 +71,10 @@ pub fn get_user_attribute(
         UserFieldType::MemberOf => groups
         .into_iter()
         .flatten()
-        .map(|id_and_name| {
-            format!("cn={},ou=groups,{}", &id_and_name.display_name, base_dn_str).into_bytes()
+        .map(|group| {
+            // Use the group's actual OU instead of hardcoding "groups"
+            let group_ou = "groups"; // TODO: improve later if groups get nested OUs
+            format!("cn={},ou={},{}", &group.display_name, group_ou, base_dn_str).into_bytes()
         })
         .collect(),
         UserFieldType::PrimaryField(UserColumn::UserId) => {
@@ -145,6 +147,10 @@ const ALL_USER_ATTRIBUTE_KEYS: &[&str] = &[
     "entryuuid",
     "ou",
     "sshpublickey",
+    "homedirectory",
+    "loginshell",
+    "uidnumber",
+    "gidnumber",
 ];
 
 fn make_ldap_search_user_result_entry(

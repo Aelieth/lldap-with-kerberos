@@ -84,7 +84,11 @@ pub fn get_group_attribute(
         .users
         .iter()
         .filter(|u| user_filter.as_ref().map(|f| *u == f).unwrap_or(true))
-        .map(|u| format!("uid={u},ou=people,{base_dn_str}").into_bytes())
+        .map(|u| {
+            // Use actual user OU instead of hardcoding "people"
+            // For now we default to "people" until we pass user OU data
+            format!("uid={u},ou=people,{base_dn_str}").into_bytes()
+        })
         .collect(),
         GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
         GroupFieldType::Attribute(attr, _, _) => get_custom_attribute(&group.attributes, &attr)?,
@@ -126,6 +130,7 @@ const ALL_GROUP_ATTRIBUTE_KEYS: &[&str] = &[
     "uniquemember",
     "entryuuid",
     "ou",
+    "gidnumber",
 ];
 
 fn expand_group_attribute_wildcards(attributes: &[String]) -> ExpandedAttributes {

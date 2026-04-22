@@ -2,27 +2,35 @@ use crate::core::error::{LdapError, LdapResult};
 use ldap3_proto::proto::{LdapCompareRequest, LdapOp, LdapResult as LdapResultOp, LdapResultCode};
 use lldap_domain::types::AttributeName;
 
+/// Performs an LDAP Compare operation against a previously executed search result.
+/// This function is generic and works for users, groups, and organizationalUnit containers.
 pub fn compare(
     request: LdapCompareRequest,
     search_results: Vec<LdapOp>,
-    base_dn_str: &str,
+    base_dn: &str,
 ) -> LdapResult<Vec<LdapOp>> {
     if search_results.len() > 2 {
-        // SearchResultEntry + SearchResultDone
         return Err(LdapError {
             code: LdapResultCode::OperationsError,
-            message: "Too many search results".to_string(),
+            message: format!(
+                "Compare operation found too many entries (expected 0 or 1, got {})",
+                search_results.len()
+            ),
         });
     }
-    let requested_attribute = AttributeName::from(&request.atype);
+
+    let attr_name = AttributeName::from(&request.atype);
+
     match search_results.first() {
         Some(LdapOp::SearchResultEntry(entry)) => {
-            let available = entry.attributes.iter().any(|attr| {
-                AttributeName::from(&attr.atype) == requested_attribute
+            // Check if the requested attribute + value exists on the entry
+            let attribute_exists = entry.attributes.iter().any(|attr| {
+                AttributeName::from(&attr.atype) == attr_name
                     && attr.vals.contains(&request.val)
             });
+
             Ok(vec![LdapOp::CompareResult(LdapResultOp {
-                code: if available {
+                code: if attribute_exists {
                     LdapResultCode::CompareTrue
                 } else {
                     LdapResultCode::CompareFalse
@@ -32,19 +40,22 @@ pub fn compare(
                 referral: vec![],
             })])
         }
+
         Some(LdapOp::SearchResultDone(_)) => Ok(vec![LdapOp::CompareResult(LdapResultOp {
             code: LdapResultCode::NoSuchObject,
-            matcheddn: base_dn_str.to_string(),
+            matcheddn: base_dn.to_string(),
             message: "".to_string(),
             referral: vec![],
         })]),
+
         None => Err(LdapError {
             code: LdapResultCode::OperationsError,
-            message: "Search request returned nothing".to_string(),
+            message: "Compare search returned no results (this should never happen)".to_string(),
         }),
+
         _ => Err(LdapError {
             code: LdapResultCode::OperationsError,
-            message: "Unexpected results from search".to_string(),
+            message: "Compare received unexpected result type from search".to_string(),
         }),
     }
 }

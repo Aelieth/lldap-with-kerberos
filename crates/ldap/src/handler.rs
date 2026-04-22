@@ -168,6 +168,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         .await
         .unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]);
 
+        debug!(?request.base, ?request.scope, "Handler calling do_search");
         search::do_search(&backend_handler, self.ldap_info, request, &allowed_ous).await
     }
 

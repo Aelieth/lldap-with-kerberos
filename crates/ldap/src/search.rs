@@ -2,8 +2,11 @@ use crate::core::{
     error::{LdapError, LdapResult},
     group::{convert_groups_to_ldap_op, get_groups_list},
     user::{convert_users_to_ldap_op, get_user_list},
-    utils::{LdapInfo, LdapSchemaDescription, internal_ou_to_ldap_rdn_chain,
-        is_subtree, parse_distinguished_name, ldap_rdn_chain_to_internal_ou},
+    utils::{
+        get_user_or_group_id_from_distinguished_name, is_container_dn, LdapInfo,
+        LdapSchemaDescription, internal_ou_to_ldap_rdn_chain, is_subtree,
+        ldap_rdn_chain_to_internal_ou, parse_distinguished_name, UserOrGroupName,
+    },
 };
 use chrono::Utc;
 use ldap3_proto::{
@@ -14,25 +17,21 @@ use ldap3_proto::{
     },
 };
 use lldap_access_control::UserAndGroupListerBackendHandler;
-use lldap_domain::types::{Group, UserAndGroups};
+//use lldap_domain::types::{Group, UserAndGroups};
 use lldap_schema::PublicSchema;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug)]
 enum SearchScope {
-    Global,
-    Users,
-    Groups,
-    User(LdapFilter),
-    Group(LdapFilter),
-    UserOuOnly,
-    GroupOuOnly,
-    Unknown,
+    Root,
+    Container,
+    LeafUser,
+    LeafGroup,
     Invalid,
+    Unknown,
 }
 
 enum InternalSearchResults {
-    UsersAndGroups(Vec<UserAndGroups>, Vec<Group>),
     Raw(Vec<LdapOp>),
     Empty,
 }
@@ -48,72 +47,84 @@ fn exclude_disabled_users_filter(original_filter: LdapFilter) -> LdapFilter {
     ])
 }
 
+fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
+    let mut entries = vec![];
+    for ou_str in allowed_ous {
+        let rdn_chain = internal_ou_to_ldap_rdn_chain(ou_str);
+        let ou_part: String = rdn_chain
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(",");
+        let dn = if ou_part.is_empty() {
+            base_dn_str.to_string()
+        } else {
+            format!("{},{}", ou_part, base_dn_str)
+        };
+
+        // The first element in rdn_chain is the RDN of *this* container (leaf-most in its DN)
+        let leaf_ou_val = rdn_chain
+            .first()
+            .map(|(_, v)| v.as_bytes().to_vec())
+            .unwrap_or_else(|| b"people".to_vec());
+
+        entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
+            dn,
+            attributes: vec![
+                LdapPartialAttribute {
+                    atype: "objectClass".to_string(),
+                    vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
+                },
+                LdapPartialAttribute {
+                    atype: "ou".to_string(),
+                    vals: vec![leaf_ou_val],
+                },
+            ],
+        }));
+    }
+    entries
+}
+
 fn get_search_scope(
     base_dn: &[(String, String)],
     dn_parts: &[(String, String)],
     ldap_scope: &LdapSearchScope,
     allowed_ous: &[String],
 ) -> SearchScope {
-    let base_dn_len = base_dn.len();
     if !is_subtree(dn_parts, base_dn) {
-        SearchScope::Invalid
-    } else if dn_parts.len() == base_dn_len {
-        SearchScope::Global
-    } else {
-        let ou_chain: Vec<(String, String)> = dn_parts
-            .iter()
-            .filter(|(k, _)| k.eq_ignore_ascii_case("ou"))
-            .cloned()
-            .collect();
-        let internal_ou = ldap_rdn_chain_to_internal_ou(&ou_chain);
-        let is_allowed = allowed_ous.iter().any(|allowed| {
-            allowed.to_ascii_lowercase() == internal_ou.to_ascii_lowercase()
-        });
-        if !is_allowed {
-            SearchScope::Unknown
-        } else if dn_parts.len() == base_dn_len + ou_chain.len() + 1 {
-            // Secondary OU base scope
-            if matches!(ldap_scope, LdapSearchScope::Base) {
-                SearchScope::UserOuOnly
-            } else if internal_ou.to_ascii_lowercase().starts_with("people") {
-                SearchScope::Users
-            } else if internal_ou.to_ascii_lowercase().starts_with("groups") {
-                SearchScope::Groups
-            } else {
-                SearchScope::Unknown
-            }
-        } else if dn_parts.len() == base_dn_len + 1 {
-            if matches!(ldap_scope, LdapSearchScope::Base) {
-                if internal_ou.to_ascii_lowercase().starts_with("groups") {
-                    SearchScope::GroupOuOnly
-                } else {
-                    SearchScope::UserOuOnly
-                }
-            } else if internal_ou.to_ascii_lowercase().starts_with("people") {
-                SearchScope::Users
-            } else if internal_ou.to_ascii_lowercase().starts_with("groups") {
-                SearchScope::Groups
-            } else {
-                SearchScope::Unknown
-            }
-        } else if dn_parts.len() == base_dn_len + 2 {
-            if dn_parts[1].0.eq_ignore_ascii_case("ou") && dn_parts[1].1.eq_ignore_ascii_case("people") {
-                SearchScope::User(LdapFilter::Equality(
-                    dn_parts[0].0.clone(),
-                    dn_parts[0].1.clone(),
-                ))
-            } else if dn_parts[1].0.eq_ignore_ascii_case("ou") && dn_parts[1].1.eq_ignore_ascii_case("groups") {
-                SearchScope::Group(LdapFilter::Equality(
-                    dn_parts[0].0.clone(),
-                    dn_parts[0].1.clone(),
-                ))
-            } else {
-                SearchScope::Unknown
-            }
-        } else {
-            SearchScope::Unknown
+        return SearchScope::Invalid;
+    }
+
+    if dn_parts == base_dn {
+        return SearchScope::Root;
+    }
+
+    // Handle OneLevel and Subtree on base DN or direct children
+    if matches!(ldap_scope, LdapSearchScope::OneLevel | LdapSearchScope::Subtree) {
+        if dn_parts.len() == base_dn.len() + 1 {
+            // Direct child of base (should be an OU)
+            return SearchScope::Container;
         }
     }
+
+    // Existing leaf detection for Base scope
+    if matches!(ldap_scope, LdapSearchScope::Base) && dn_parts.len() > base_dn.len() {
+        let full_dn = dn_parts.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(",");
+        match get_user_or_group_id_from_distinguished_name(&full_dn, base_dn) {
+            UserOrGroupName::User(_) => return SearchScope::LeafUser,
+            UserOrGroupName::Group(_) => return SearchScope::LeafGroup,
+            _ => {}
+        }
+    }
+
+    if is_container_dn(dn_parts, base_dn, allowed_ous) {
+        return SearchScope::Container;
+    }
+
+    SearchScope::Unknown
 }
 
 pub(crate) fn make_search_request<S: Into<String>>(
@@ -147,6 +158,25 @@ pub(crate) fn make_search_error(code: LdapResultCode, message: String) -> LdapOp
 }
 
 pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
+    // Compute Kerberos realm exactly as we do in kerberos/lib.rs
+    let realm = {
+        let base_dn = base_dn;
+        let domain = base_dn
+            .split(',')
+            .filter_map(|part| part.strip_prefix("dc="))
+            .collect::<Vec<_>>()
+            .join(".")
+            .to_lowercase();
+        std::env::var("LLDAP_KERB_REALM_NAME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| domain.to_uppercase())
+            .to_uppercase()
+    };
+
+    let realm_bytes = realm.into_bytes();
+    let full_subschema_dn = format!("cn=Subschema,{}", base_dn);
+
     LdapOp::SearchResultEntry(LdapSearchResultEntry {
         dn: "".to_string(),
         attributes: vec![
@@ -175,11 +205,10 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
             },
             LdapPartialAttribute {
                 atype: "supportedControl".to_string(),
-                vals: vec![],
-            },
-            LdapPartialAttribute {
-                atype: "supportedFeatures".to_string(),
-                vals: vec![b"1.3.6.1.4.1.4203.1.5.1".to_vec()],
+                vals: vec![
+                    b"1.2.840.113556.1.4.319".to_vec(),
+                    b"1.3.6.1.4.1.4203.1.9.1".to_vec(),
+                ],
             },
             LdapPartialAttribute {
                 atype: "defaultNamingContext".to_string(),
@@ -191,7 +220,7 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
             },
             LdapPartialAttribute {
                 atype: "schemaNamingContext".to_string(),
-                vals: vec![base_dn.to_string().into_bytes()],
+                vals: vec![full_subschema_dn.clone().into_bytes()],
             },
             LdapPartialAttribute {
                 atype: "configurationNamingContext".to_string(),
@@ -203,7 +232,23 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
             },
             LdapPartialAttribute {
                 atype: "subschemaSubentry".to_string(),
-                vals: vec![b"cn=Subschema".to_vec()],
+                vals: vec![full_subschema_dn.into_bytes()],
+            },
+            LdapPartialAttribute {
+                atype: "krb5RealmName".to_string(),
+                vals: vec![realm_bytes.clone()],
+            },
+            LdapPartialAttribute {
+                atype: "supportedSASLMechanisms".to_string(),
+                vals: vec![
+                        b"GSSAPI".to_vec(),
+                        b"GSS-SPNEGO".to_vec(),
+                        b"DIGEST-MD5".to_vec(),
+                ],
+            },
+            LdapPartialAttribute {
+                atype: "defaultRealm".to_string(),
+                vals: vec![realm_bytes],
             },
         ],
     })
@@ -212,6 +257,7 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
 pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
     let ldap_schema_description: LdapSchemaDescription = LdapSchemaDescription::from(schema);
     let current_time_utc = Utc::now().format("%Y%m%d%H%M%SZ").to_string().into_bytes();
+
     LdapOp::SearchResultEntry(LdapSearchResultEntry {
         dn: "cn=Subschema".to_string(),
         attributes: vec![
@@ -269,37 +315,24 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
             },
             LdapPartialAttribute {
                 atype: "attributeTypes".to_string(),
-                vals: {
-                    let hardcoded_attributes = [
-                        b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' 'user_id' ) DESC 'RFC4519: user identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION )".to_vec(),
-                        b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group that the entry belongs to' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation X-ORIGIN 'iPlanet Delegated Administrator' )".to_vec(),
-                        b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID of the entry' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                        b"( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes' DESC 'RFC4512: LDAP syntaxes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.54 USAGE directoryOperation )".to_vec(),
-                        b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512: object classes of the entity' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                        b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                        b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256: last (family) name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                        b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256: organizational unit this object belongs to' SUP name )".to_vec(),
-                        b"( 2.5.4.41 NAME 'name' DESC 'RFC4519: common supertype of name attributes' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
-                        b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519: common supertype of DN attributes' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                        b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256: unique member of a group' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                        b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512: time which object was created' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                        b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512: time which object was last modified' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                        b"( 2.5.21.5 NAME 'attributeTypes' DESC 'RFC4512: attribute types' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.3 USAGE directoryOperation )".to_vec(),
-                        b"( 2.5.21.6 NAME 'objectClasses' DESC 'RFC4512: object classes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.37 USAGE directoryOperation )".to_vec(),
-                        b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512: structural object class of entry' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                        b"( 10.0 NAME 'String' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                        b"( 10.1 NAME 'Integer' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )".to_vec(),
-                        b"( 10.2 NAME 'Avatar' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
-                        b"( 10.3 NAME 'DateTime' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                    ];
-                    hardcoded_attributes.into_iter().chain(
-                        ldap_schema_description
-                            .formatted_attribute_list(
-                                4,
-                                vec!["creation_date", "display_name", "last_name", "user_id", "uuid"],
-                            )
-                    ).collect()
-                },
+                vals: vec![
+                    b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
+                    b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
+                    b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
+                    b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
+                    b"( 2.5.4.41 NAME 'name' DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
+                    b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
+                    b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
+                    b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                    b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                    b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
+                    b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group membership' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation )".to_vec(),
+                    b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'user_id' ) DESC 'User identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
+                    b"( 2.5.4.42 NAME 'givenName' DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
+                    b"( 0.9.2342.19200300.100.1.3 NAME 'mail' DESC 'RFC4524' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
+                    b"( 10.0 NAME 'avatar' DESC 'LLDAP avatar' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
+                    b"( 10.1 NAME 'sshPublicKey' DESC 'LLDAP SSH key' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )".to_vec(),
+                ],
             },
             LdapPartialAttribute {
                 atype: "objectClasses".to_string(),
@@ -333,7 +366,9 @@ pub(crate) fn is_root_dse_request(request: &LdapSearchRequest) -> bool {
 }
 
 pub(crate) fn is_subschema_entry_request(request: &LdapSearchRequest) -> bool {
-    request.base == "cn=Subschema" && request.scope == LdapSearchScope::Base
+    let base_lower = request.base.to_ascii_lowercase();
+    (base_lower == "cn=subschema" || base_lower.starts_with("cn=subschema,"))
+        && request.scope == LdapSearchScope::Base
 }
 
 async fn do_search_internal(
@@ -345,127 +380,209 @@ async fn do_search_internal(
 ) -> LdapResult<InternalSearchResults> {
     let dn_parts = parse_distinguished_name(&request.base.to_ascii_lowercase())?;
     let scope = get_search_scope(&ldap_info.base_dn, &dn_parts, &request.scope, allowed_ous);
-    debug!(?request.base, ?scope);
+    debug!(?request.base, ?request.scope, ?scope);
+
+    let ou_chain: Vec<(String, String)> = dn_parts
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("ou"))
+        .cloned()
+        .collect();
+    let internal_ou = ldap_rdn_chain_to_internal_ou(&ou_chain);
 
     let get_user_list = async |filter: &LdapFilter| {
-        let need_groups = request
-            .attrs
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case("memberof"));
-        // ← TURTLE STEP 7: automatically hide lldap_disabled users from normal LDAP searches
-        let final_filter = exclude_disabled_users_filter(filter.clone());
-        get_user_list(
-            ldap_info,
-            &final_filter,
-            need_groups,
-            &request.base,
-            backend_handler,
-            schema,
-        )
-        .await
-    };
-    let get_group_list = async |filter: &LdapFilter| {
-        get_groups_list(ldap_info, filter, &request.base, backend_handler, schema).await
+        let need_groups = request.attrs.iter().any(|s| s.eq_ignore_ascii_case("memberof"));
+        let effective_filter = if matches!(scope, SearchScope::Container) {
+            LdapFilter::And(vec![
+                filter.clone(),
+                LdapFilter::Equality("ou".to_string(), internal_ou.clone()),
+            ])
+        } else {
+            filter.clone()
+        };
+        let final_filter = exclude_disabled_users_filter(effective_filter);
+        get_user_list(ldap_info, &final_filter, need_groups, &request.base, backend_handler, schema).await
     };
 
-    Ok(match scope {
-        SearchScope::Global => {
-            let is_ou_filter = matches!(&request.filter, LdapFilter::Equality(attr, val)
-                if attr.eq_ignore_ascii_case("objectclass") && val.eq_ignore_ascii_case("organizationalunit"));
-            let is_group_filter = matches!(&request.filter, LdapFilter::Equality(attr, val)
-                if attr.eq_ignore_ascii_case("objectclass") && val.eq_ignore_ascii_case("groupofuniquenames"));
+    let get_groups_list = async |filter: &LdapFilter| {
+        let effective_filter = if matches!(scope, SearchScope::Container) {
+            LdapFilter::And(vec![
+                filter.clone(),
+                LdapFilter::Equality("ou".to_string(), internal_ou.clone()),
+            ])
+        } else {
+            filter.clone()
+        };
+        get_groups_list(ldap_info, &effective_filter, &request.base, backend_handler, schema).await
+    };
 
-            if is_ou_filter {
-                let mut entries = vec![];
-                for ou_str in allowed_ous {
-                    let rdn_chain = internal_ou_to_ldap_rdn_chain(ou_str);
-                    let ou_part = rdn_chain
-                        .into_iter()
-                        .map(|(k, v)| format!("{}={}", k, v))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let dn = format!("{},{}", ou_part, ldap_info.base_dn_str);
-                    entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                        dn,
-                        attributes: vec![LdapPartialAttribute {
-                            atype: "objectClass".to_owned(),
-                            vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
-                        }],
-                    }));
-                }
-                InternalSearchResults::Raw(entries)
-            } else if is_group_filter {
-                InternalSearchResults::UsersAndGroups(Vec::new(), get_group_list(&request.filter).await?)
-            } else {
-                let users = get_user_list(&request.filter).await;
-                let groups = get_group_list(&request.filter).await;
-                match (users, groups) {
-                    (Ok(users), Err(e)) => {
-                        warn!("Error while getting groups: {:#}", e);
-                        InternalSearchResults::UsersAndGroups(users, Vec::new())
-                    }
-                    (Err(e), Ok(groups)) => {
-                        warn!("Error while getting users: {:#}", e);
-                        InternalSearchResults::UsersAndGroups(Vec::new(), groups)
-                    }
-                    (Err(user_error), Err(_)) => InternalSearchResults::Raw(vec![make_search_error(
-                        user_error.code,
-                        user_error.message,
-                    )]),
-                    (Ok(users), Ok(groups)) => InternalSearchResults::UsersAndGroups(users, groups),
-                }
-            }
-        }
-        SearchScope::Users => {
-            InternalSearchResults::UsersAndGroups(get_user_list(&request.filter).await?, Vec::new())
-        }
-        SearchScope::Groups => InternalSearchResults::UsersAndGroups(
-            Vec::new(),
-            get_group_list(&request.filter).await?,
-        ),
-        SearchScope::User(filter) => {
-            let filter = LdapFilter::And(vec![request.filter.clone(), filter]);
-            InternalSearchResults::UsersAndGroups(get_user_list(&filter).await?, Vec::new())
-        }
-        SearchScope::Group(filter) => {
-            let filter = LdapFilter::And(vec![request.filter.clone(), filter]);
-            InternalSearchResults::UsersAndGroups(Vec::new(), get_group_list(&filter).await?)
-        }
-        SearchScope::UserOuOnly | SearchScope::GroupOuOnly => {
+    match scope {
+        SearchScope::Invalid => Err(LdapError {
+            code: LdapResultCode::NoSuchObject,
+            message: "".to_string(),
+        }),
+
+        SearchScope::Root => {
             let mut entries = vec![];
-            for ou_str in allowed_ous {
-                let rdn_chain = internal_ou_to_ldap_rdn_chain(ou_str);
-                let ou_part = rdn_chain
-                    .into_iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let dn = format!("{},{}", ou_part, ldap_info.base_dn_str);
+
+            // Base or Subtree: include the root entry itself (Apache DS + standard LDAP)
+            if matches!(
+                request.scope,
+                LdapSearchScope::Base | LdapSearchScope::Subtree
+            ) {
+                let dc_value = ldap_info
+                    .base_dn
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("dc"))
+                    .map(|(_, v)| v.as_bytes().to_vec())
+                    .unwrap_or_else(|| b"lldap".to_vec());
+
+                let org_name = std::env::var("LLDAP_ORGANIZATION_NAME")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        ldap_info
+                            .base_dn
+                            .iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("dc"))
+                            .map(|(_, v)| {
+                                let mut name = v.clone();
+                                if let Some(first) = name.get_mut(0..1) {
+                                    first.make_ascii_uppercase();
+                                }
+                                name
+                            })
+                    })
+                    .unwrap_or_else(|| "LLDAP Directory".to_string())
+                    .into_bytes();
+
                 entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn,
-                    attributes: vec![LdapPartialAttribute {
-                        atype: "objectClass".to_owned(),
-                        vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
-                    }],
+                    dn: ldap_info.base_dn_str.clone(),
+                    attributes: vec![
+                        LdapPartialAttribute {
+                            atype: "objectClass".to_string(),
+                            vals: vec![b"top".to_vec(), b"dcObject".to_vec(), b"organization".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "dc".to_string(),
+                            vals: vec![dc_value],
+                        },
+                        LdapPartialAttribute {
+                            atype: "o".to_string(),
+                            vals: vec![org_name],
+                        },
+                        LdapPartialAttribute {
+                            atype: "entryDN".to_string(),
+                            vals: vec![ldap_info.base_dn_str.clone().into_bytes()],
+                        },
+                    ],
                 }));
             }
-            InternalSearchResults::Raw(entries)
+
+            // OneLevel or Subtree on root: return top-level OU containers (direct children)
+            if matches!(
+                request.scope,
+                LdapSearchScope::OneLevel | LdapSearchScope::Subtree
+            ) {
+                let top_level_ous: Vec<String> = allowed_ous
+                    .iter()
+                    .filter(|ou| !ou.contains('\\'))
+                    .cloned()
+                    .collect();
+                entries.extend(build_ou_entries(&top_level_ous, &ldap_info.base_dn_str));
+            }
+
+            if matches!(request.scope, LdapSearchScope::Subtree) {
+                let users = get_user_list(&request.filter).await?;
+                entries.extend(convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema));
+
+                let groups = get_groups_list(&request.filter).await?;
+                entries.extend(convert_groups_to_ldap_op(
+                    groups,
+                    &request.attrs,
+                    ldap_info,
+                    &None,
+                    schema,
+                ));
+            }
+
+            Ok(InternalSearchResults::Raw(entries))
         }
-        SearchScope::Unknown => {
-            warn!(
-                r#"The requested search tree "{}" matches neither the user subtree "ou=people,{}" nor the group subtree "ou=groups,{}""#,
-                &request.base, &ldap_info.base_dn_str, &ldap_info.base_dn_str
-            );
-            InternalSearchResults::Empty
+
+        SearchScope::Container => {
+            let mut entries = vec![];
+
+            // Base or Subtree: include the current container entry itself
+            if matches!(
+                request.scope,
+                LdapSearchScope::Base | LdapSearchScope::Subtree
+            ) {
+                entries.extend(build_ou_entries(&[internal_ou.clone()], &ldap_info.base_dn_str));
+            }
+
+            // OneLevel or Subtree: include direct child OU containers under this one
+            if matches!(
+                request.scope,
+                LdapSearchScope::OneLevel | LdapSearchScope::Subtree
+            ) {
+                let child_ous: Vec<String> = allowed_ous
+                    .iter()
+                    .filter(|ou| {
+                        if internal_ou.is_empty() {
+                            !ou.contains('\\')
+                        } else {
+                            ou.starts_with(&format!("{}\\", internal_ou))
+                                && ou.split('\\').count() == internal_ou.split('\\').count() + 1
+                        }
+                    })
+                    .cloned()
+                    .collect();
+                entries.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str));
+            }
+
+            if !matches!(request.scope, LdapSearchScope::Base) {
+                let users = get_user_list(&request.filter).await?;
+                entries.extend(convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema));
+
+                let groups = get_groups_list(&request.filter).await?;
+                entries.extend(convert_groups_to_ldap_op(
+                    groups,
+                    &request.attrs,
+                    ldap_info,
+                    &None,
+                    schema,
+                ));
+            }
+
+            Ok(InternalSearchResults::Raw(entries))
         }
-        SearchScope::Invalid => {
-            warn!(
-                "The specified search tree {:?} is not under the common subtree {:?}",
-                &dn_parts, &ldap_info.base_dn
-            );
-            InternalSearchResults::Empty
+
+        SearchScope::LeafUser => {
+            let users = get_user_list(&request.filter).await?;
+            if users.is_empty() {
+                return Err(LdapError {
+                    code: LdapResultCode::NoSuchObject,
+                    message: "".to_string(),
+                });
+            }
+            let entries: Vec<_> = convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema).collect();
+            Ok(InternalSearchResults::Raw(entries))
         }
-    })
+
+        SearchScope::LeafGroup => {
+            let groups = get_groups_list(&request.filter).await?;
+            if groups.is_empty() {
+                return Err(LdapError {
+                    code: LdapResultCode::NoSuchObject,
+                    message: "".to_string(),
+                });
+            }
+            let entries: Vec<_> =
+                convert_groups_to_ldap_op(groups, &request.attrs, ldap_info, &None, schema).collect();
+            Ok(InternalSearchResults::Raw(entries))
+        }
+
+        SearchScope::Unknown => Ok(InternalSearchResults::Empty),
+    }
 }
 
 pub async fn do_search(
@@ -479,27 +596,16 @@ pub async fn do_search(
         message: format!("Unable to get schema: {e:#}"),
     })?;
     let search_results = do_search_internal(ldap_info, backend_handler, request, &schema, allowed_ous).await?;
+
     let mut results = match search_results {
-        InternalSearchResults::UsersAndGroups(users, groups) => {
-            convert_users_to_ldap_op(users, &request.attrs, ldap_info, &schema)
-                .chain(convert_groups_to_ldap_op(
-                    groups,
-                    &request.attrs,
-                    ldap_info,
-                    backend_handler.user_filter(),
-                    &schema,
-                ))
-                .collect()
-        }
         InternalSearchResults::Raw(raw_results) => raw_results,
         InternalSearchResults::Empty => Vec::new(),
     };
+
     if results.is_empty() && request.scope == LdapSearchScope::Base {
-        return Err(LdapError {
-            code: LdapResultCode::NoSuchObject,
-            message: "".to_string(),
-        });
+        return Ok(vec![make_search_success()]);
     }
+
     if !matches!(results.last(), Some(LdapOp::SearchResultDone(_))) {
         results.push(make_search_success());
     }
