@@ -209,19 +209,28 @@ impl GroupListerBackendHandler for SqlBackendHandler {
         let mut groups: Vec<_> = results
         .into_iter()
         .map(|(group, memberships)| {
-            let users: Vec<lldap_domain::types::GroupMember> = memberships
-            .into_iter()
-            .map(|m| lldap_domain::types::GroupMember {
-                user_id: m.user_id.clone(),
-                 ou: member_ous
-                 .get(&m.user_id)
-                 .cloned()
-                 .unwrap_or_else(|| "people".to_string()),
-            })
-            .collect();
+            use std::collections::BTreeSet;
+
+            // Deduplicate by user_id (sufficient for uniquemember)
+            let mut seen = BTreeSet::new();
+            let mut unique_users = Vec::new();
+
+            for m in memberships {
+                if seen.insert(m.user_id.clone()) {
+                    let ou = member_ous
+                    .get(&m.user_id)
+                    .cloned()
+                    .unwrap_or_else(|| "people".to_string());
+
+                    unique_users.push(lldap_domain::types::GroupMember {
+                        user_id: m.user_id,
+                        ou,
+                    });
+                }
+            }
 
             Group {
-                users,
+                users: unique_users,
                 ..group.into()
             }
         })

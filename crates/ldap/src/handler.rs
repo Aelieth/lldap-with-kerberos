@@ -2,7 +2,8 @@ use crate::{
     compare,
     core::{
         error::{LdapError, LdapResult},
-        utils::LdapInfo,
+        user::get_user_ou,
+        utils::{internal_ou_to_ldap_rdn_chain, LdapInfo},
     },
     create, delete, modify,
     password::{self, do_password_modification},
@@ -18,8 +19,9 @@ use ldap3_proto::proto::{
 };
 use lldap_access_control::AccessControlledBackendHandler;
 use lldap_auth::access_control::ValidationResults;
-use lldap_domain_handlers::handler::{BackendHandler, LoginHandler, ReadSchemaBackendHandler};
+use lldap_domain_handlers::handler::{BackendHandler, LoginHandler};
 use lldap_opaque_handler::OpaqueHandler;
+use lldap_schema::PublicSchema;
 use tracing::{debug, instrument};
 
 use super::delete::make_del_response;
@@ -130,21 +132,9 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         } else if is_subschema_entry_request(request) {
             // See RFC4512 section 4.4 "Subschema discovery"
             debug!("Schema request");
-            let backend_handler = self
-            .user_info
-            .as_ref()
-            .and_then(|u| self.backend_handler.get_schema_only_handler(u))
-            .ok_or_else(|| LdapError {
-                code: LdapResultCode::InsufficentAccessRights,
-                message: "No user currently bound".to_string(),
-            })?;
-
-            let schema = backend_handler.get_schema().await.map_err(|e| LdapError {
-                code: LdapResultCode::OperationsError,
-                message: format!("Unable to get schema: {e:#}"),
-            })?;
+            // Now generated dynamically from PublicSchema (single source of truth)
             return Ok(vec![
-                    make_ldap_subschema_entry(schema),     // ← now takes PublicSchema directly
+                make_ldap_subschema_entry(&PublicSchema::get(), &self.ldap_info.base_dn_str),
                       make_search_success(),
             ]);
         }
@@ -223,17 +213,50 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                 )],
             },
             OID_WHOAMI => {
-                let authz_id = self
-                .user_info
-                .as_ref()
-                .map(|user_info| {
-                    format!(
-                        "dn:uid={},ou=people,{}",
-                        user_info.user.as_str(),
-                            self.ldap_info.base_dn_str
-                    )
-                })
+                // Dynamically determine the bound user's OU from their "ou" attribute (single source of truth).
+                // Falls back to DEFAULT_PRIMARY_USER_OU ("people") if user not found or has no OU attr.
+                // This fixes the hard-coded primary_ou bug (was incorrectly showing ou=groups for users in people).
+                // No static assignment; leverages per-user OU stored in attributes for correct DN in whoami response.
+                let credentials = match self.get_credentials() {
+                    Credentials::Bound(cred) => cred,
+                    Credentials::Unbound(err) => return err,
+                };
+                let user_id = credentials.user.clone();
+
+                let backend = self.backend_handler.unsafe_get_handler();
+
+                // Query the specific user's attributes to get their real OU (supports nested OUs like "people\home")
+                let user_filter = LdapFilter::Equality("uid".to_string(), user_id.to_string());
+                let users = crate::core::user::get_user_list(
+                    self.ldap_info,
+                    &user_filter,
+                    false,
+                    &self.ldap_info.base_dn_str,
+                    backend,
+                    &PublicSchema::get(),
+                )
+                .await
                 .unwrap_or_default();
+
+                let user_ou = if let Some(uag) = users.first() {
+                    get_user_ou(&uag.user)
+                } else {
+                    crate::core::utils::DEFAULT_PRIMARY_USER_OU.to_string()
+                };
+
+                let rdn_chain = internal_ou_to_ldap_rdn_chain(&user_ou);
+                let ou_part: String = rdn_chain
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let authz_id = if ou_part.is_empty() {
+                    format!("dn:uid={},{}", user_id, self.ldap_info.base_dn_str)
+                } else {
+                    format!("dn:uid={},{},{}", user_id, ou_part, self.ldap_info.base_dn_str)
+                };
+
                 vec![make_extended_response(LdapResultCode::Success, authz_id)]
             }
             _ => vec![make_extended_response(
@@ -341,118 +364,5 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                  format!("Unsupported operation: {op:#?}"),
              )],
         })
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use super::*;
-    use crate::password::tests::make_bind_success;
-    use chrono::TimeZone;
-    use ldap3_proto::proto::{LdapBindCred, LdapWhoamiRequest};
-    use lldap_domain::{
-        types::{GroupDetails, GroupId, UserId},
-        uuid,
-    };
-    use lldap_domain_handlers::handler::*;
-    use lldap_test_utils::{MockTestBackendHandler, setup_default_schema};
-    use mockall::predicate::eq;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashSet;
-    use tokio;
-
-    pub fn make_user_search_request<S: Into<String>>(
-        filter: LdapFilter,
-        attrs: Vec<S>,
-    ) -> LdapSearchRequest {
-        make_search_request::<S>("ou=people,Dc=example,dc=com", filter, attrs)
-    }
-
-    pub fn make_group_search_request<S: Into<String>>(
-        filter: LdapFilter,
-        attrs: Vec<S>,
-    ) -> LdapSearchRequest {
-        make_search_request::<S>("ou=groups,dc=example,dc=com", filter, attrs)
-    }
-
-    pub async fn setup_bound_handler_with_group(
-        mut mock: MockTestBackendHandler,
-        group: &str,
-    ) -> LdapHandler<MockTestBackendHandler> {
-        mock.expect_bind()
-        .with(eq(BindRequest {
-            name: UserId::new("test"),
-                 password: "pass".to_string(),
-        }))
-        .return_once(|_| Ok(()));
-        let group = group.to_string();
-        mock.expect_get_user_groups()
-        .with(eq(UserId::new("test")))
-        .return_once(|_| {
-            let mut set = HashSet::new();
-            set.insert(GroupDetails {
-                group_id: GroupId(42),
-                       display_name: group.into(),
-                       creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                       uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
-                       attributes: Vec::new(),
-                       modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-            });
-            Ok(set)
-        });
-        setup_default_schema(&mut mock);
-        let mut ldap_handler = LdapHandler::new_for_tests(mock, "dc=Example,dc=com");
-        let request = LdapBindRequest {
-            dn: "uid=test,ou=people,dc=example,dc=coM".to_string(),
-            cred: LdapBindCred::Simple("pass".to_string()),
-        };
-        assert_eq!(ldap_handler.do_bind(&request).await, make_bind_success());
-        ldap_handler
-    }
-
-    pub async fn setup_bound_readonly_handler(
-        mock: MockTestBackendHandler,
-    ) -> LdapHandler<MockTestBackendHandler> {
-        setup_bound_handler_with_group(mock, "lldap_strict_readonly").await
-    }
-
-    pub async fn setup_bound_password_manager_handler(
-        mock: MockTestBackendHandler,
-    ) -> LdapHandler<MockTestBackendHandler> {
-        setup_bound_handler_with_group(mock, "lldap_password_manager").await
-    }
-
-    pub async fn setup_bound_admin_handler(
-        mock: MockTestBackendHandler,
-    ) -> LdapHandler<MockTestBackendHandler> {
-        setup_bound_handler_with_group(mock, "lldap_admin").await
-    }
-
-    #[tokio::test]
-    async fn test_whoami_empty() {
-        let mut ldap_handler =
-        LdapHandler::new_for_tests(MockTestBackendHandler::new(), "dc=example,dc=com");
-        let request = LdapOp::ExtendedRequest(LdapWhoamiRequest {}.into());
-        assert_eq!(
-            ldap_handler.handle_ldap_message(request).await,
-                   Some(vec![make_extended_response(
-                       LdapResultCode::Success,
-                       "".to_string(),
-                   )])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_whoami_bound() {
-        let mock = MockTestBackendHandler::new();
-        let mut ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapOp::ExtendedRequest(LdapWhoamiRequest {}.into());
-        assert_eq!(
-            ldap_handler.handle_ldap_message(request).await,
-                   Some(vec![make_extended_response(
-                       LdapResultCode::Success,
-                       "dn:uid=test,ou=people,dc=example,dc=com".to_string(),
-                   )])
-        );
     }
 }

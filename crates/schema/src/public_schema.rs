@@ -22,7 +22,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "creationdate".into(),
-                        aliases: vec!["creation_date".into(), "createtimestamp".into()],
+                        aliases: vec!["creation_date".into(), "createTimestamp".into()],
                         attribute_type: AttributeType::DateTime,
                         is_list: false,
                         is_visible: true,
@@ -42,7 +42,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "firstname".into(),
-                        aliases: vec!["first_name".into(), "givenname".into(), "givenName".into()],
+                        aliases: vec!["first_name".into(), "givenName".into()],
                         attribute_type: AttributeType::String,
                         is_list: false,
                         is_visible: true,
@@ -72,7 +72,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "modifieddate".into(),
-                        aliases: vec!["modified_date".into(), "modifytimestamp".into()],
+                        aliases: vec!["modified_date".into(), "modifyTimestamp".into()],
                         attribute_type: AttributeType::DateTime,
                         is_list: false,
                         is_visible: true,
@@ -82,7 +82,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "passwordmodifieddate".into(),
-                        aliases: vec!["password_modified_date".into(), "pwdchangedtime".into()],
+                        aliases: vec!["password_modified_date".into(), "pwdChangedTime".into()],
                         attribute_type: AttributeType::DateTime,
                         is_list: false,
                         is_visible: true,
@@ -102,7 +102,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "uuid".into(),
-                        aliases: vec!["entryuuid".into()],
+                        aliases: vec!["entryuuid".into(), "entryUUID".into()],
                         attribute_type: AttributeType::String,
                         is_list: false,
                         is_visible: true,
@@ -207,7 +207,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "creationdate".into(),
-                        aliases: vec!["creation_date".into(), "createtimestamp".into()],
+                        aliases: vec!["creation_date".into(), "createTimestamp".into()],
                         attribute_type: AttributeType::DateTime,
                         is_list: false,
                         is_visible: true,
@@ -217,7 +217,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "modifieddate".into(),
-                        aliases: vec!["modified_date".into(), "modifytimestamp".into()],
+                        aliases: vec!["modified_date".into(), "modifyTimestamp".into()],
                         attribute_type: AttributeType::DateTime,
                         is_list: false,
                         is_visible: true,
@@ -227,7 +227,7 @@ impl PublicSchema {
                     },
                     AttributeSchema {
                         name: "uuid".into(),
-                        aliases: vec!["entryuuid".into()],
+                        aliases: vec!["entryuuid".into(), "entryUUID".into()],
                         attribute_type: AttributeType::String,
                         is_list: false,
                         is_visible: true,

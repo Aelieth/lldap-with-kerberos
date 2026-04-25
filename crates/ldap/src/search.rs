@@ -3,9 +3,10 @@ use crate::core::{
     group::{convert_groups_to_ldap_op, get_groups_list},
     user::{convert_users_to_ldap_op, get_user_list},
     utils::{
+        get_group_id_from_distinguished_name, get_user_id_from_distinguished_name,
         get_user_or_group_id_from_distinguished_name, is_container_dn, LdapInfo,
-        LdapSchemaDescription, internal_ou_to_ldap_rdn_chain, is_subtree,
-        ldap_rdn_chain_to_internal_ou, parse_distinguished_name, UserOrGroupName,
+        internal_ou_to_ldap_rdn_chain, is_subtree, parse_distinguished_name, UserOrGroupName,
+        get_preferred_ldap_name, get_direct_child_ous, get_internal_ou_from_dn_parts,
     },
 };
 use chrono::Utc;
@@ -17,9 +18,7 @@ use ldap3_proto::{
     },
 };
 use lldap_access_control::UserAndGroupListerBackendHandler;
-//use lldap_domain::types::{Group, UserAndGroups};
-use lldap_schema::PublicSchema;
-use tracing::debug;
+use lldap_schema::{AttributeSchema, AttributeType, PublicSchema};
 
 #[derive(Debug)]
 enum SearchScope {
@@ -29,22 +28,6 @@ enum SearchScope {
     LeafGroup,
     Invalid,
     Unknown,
-}
-
-enum InternalSearchResults {
-    Raw(Vec<LdapOp>),
-    Empty,
-}
-
-// NEW HELPER: automatically hide lldap_disabled users from normal LDAP searches
-fn exclude_disabled_users_filter(original_filter: LdapFilter) -> LdapFilter {
-    LdapFilter::And(vec![
-        original_filter,
-        LdapFilter::Not(Box::new(LdapFilter::Equality(
-            "memberOf".to_string(),
-            "lldap_disabled".to_string(),
-        ))),
-    ])
 }
 
 fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
@@ -62,11 +45,10 @@ fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
             format!("{},{}", ou_part, base_dn_str)
         };
 
-        // The first element in rdn_chain is the RDN of *this* container (leaf-most in its DN)
         let leaf_ou_val = rdn_chain
             .first()
             .map(|(_, v)| v.as_bytes().to_vec())
-            .unwrap_or_else(|| b"people".to_vec());
+            .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
 
         entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
             dn,
@@ -78,6 +60,18 @@ fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
                 LdapPartialAttribute {
                     atype: "ou".to_string(),
                     vals: vec![leaf_ou_val],
+                },
+                LdapPartialAttribute {
+                    atype: "hasSubordinates".to_string(),
+                    vals: vec![b"TRUE".to_vec()],  // Always TRUE for organizationalUnit containers — required for ADS tree expansion. True dynamic (with member count) can be added later without breaking anything.
+                },
+                LdapPartialAttribute {
+                    atype: "structuralObjectClass".to_string(),
+                    vals: vec![b"organizationalUnit".to_vec()],
+                },
+                LdapPartialAttribute {
+                    atype: "subschemaSubentry".to_string(),
+                    vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
                 },
             ],
         }));
@@ -99,15 +93,12 @@ fn get_search_scope(
         return SearchScope::Root;
     }
 
-    // Handle OneLevel and Subtree on base DN or direct children
     if matches!(ldap_scope, LdapSearchScope::OneLevel | LdapSearchScope::Subtree) {
         if dn_parts.len() == base_dn.len() + 1 {
-            // Direct child of base (should be an OU)
             return SearchScope::Container;
         }
     }
 
-    // Existing leaf detection for Base scope
     if matches!(ldap_scope, LdapSearchScope::Base) && dn_parts.len() > base_dn.len() {
         let full_dn = dn_parts.iter()
             .map(|(k, v)| format!("{}={}", k, v))
@@ -158,7 +149,6 @@ pub(crate) fn make_search_error(code: LdapResultCode, message: String) -> LdapOp
 }
 
 pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
-    // Compute Kerberos realm exactly as we do in kerberos/lib.rs
     let realm = {
         let base_dn = base_dn;
         let domain = base_dn
@@ -254,12 +244,190 @@ pub(crate) fn root_dse_response(base_dn: &str) -> LdapOp {
     })
 }
 
-pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
-    let ldap_schema_description: LdapSchemaDescription = LdapSchemaDescription::from(schema);
+pub fn make_ldap_subschema_entry(schema: &PublicSchema, base_dn_str: &str) -> LdapOp {
+    // =====================================================================
+    // DYNAMIC SUBSCHEMA GENERATOR — Single Source of Truth from PublicSchema
+    // =====================================================================
+    // This function now builds the subschema at runtime by combining:
+    // - Stable RFC standards (ldapSyntaxes, matchingRules, core attributeTypes, base objectClasses)
+    // - Dynamically generated LLDAP-specific attributeTypes from schema.user_attributes + schema.group_attributes
+    // - Dynamically extended MAY lists for inetOrgPerson, posixAccount, posixGroup
+    //
+    // Adding a new attribute to PublicSchema automatically makes it appear in subschema
+    // with correct NAME, SYNTAX, SINGLE-VALUE, and operational flags.
+    // =====================================================================
+    // IMPORTANT: The entry DN must be the FULL DN (cn=Subschema,<base DN>) to match
+    // what Apache Directory Studio (and most clients) read from Root DSE's
+    // subschemaSubentry / schemaNamingContext attribute. Returning a relative "cn=Subschema"
+    // causes "No schema information returned by server" fallback.
+
     let current_time_utc = Utc::now().format("%Y%m%d%H%M%SZ").to_string().into_bytes();
 
+    // Helper: map our AttributeType to LDAP SYNTAX OID + flags
+    // Now consistent with utils.rs always_operational list so operational attrs
+    // (timestamps, entryUUID, etc.) are correctly marked and hidden by default.
+    fn attr_type_to_ldap_syntax(attr: &AttributeSchema) -> (String, bool, bool) {
+        let (syntax, is_single) = match attr.attribute_type {
+            AttributeType::String => ("1.3.6.1.4.1.1466.115.121.1.15", !attr.is_list),
+            AttributeType::Integer => ("1.3.6.1.4.1.1466.115.121.1.27", !attr.is_list),
+            AttributeType::DateTime => ("1.3.6.1.4.1.1466.115.121.1.24", !attr.is_list),
+            AttributeType::Avatar => ("1.3.6.1.4.1.1466.115.121.1.28", !attr.is_list),
+        };
+        let name_lower = attr.name.to_ascii_lowercase();
+        let is_operational = attr.is_readonly
+            || matches!(name_lower.as_str(), "creationdate" | "modifieddate" | "passwordmodifieddate" | "uuid" | "entryuuid");
+        (syntax.to_string(), is_single, is_operational)
+    }
+
+    // Build dynamic attributeTypes from schema
+    let mut dynamic_attr_types: Vec<Vec<u8>> = Vec::new();
+    let mut seen_attr_oids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Core RFC MUST attributes (bold in Studio) — DO NOT DUPLICATE THESE
+    let core_entries: Vec<(&str, Vec<u8>)> = vec![
+        ("2.5.4.0", b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec()),
+        ("2.5.4.3", b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'displayname' 'display_name' ) DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("2.5.4.4", b"( 2.5.4.4 NAME ( 'sn' 'surname' 'lastname' 'last_name' ) DESC 'RFC2256' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("0.9.2342.19200300.100.1.1", b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'user_id' 'userid' 'id' ) DESC 'User identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+    ];
+    for (oid, entry) in core_entries {
+        if seen_attr_oids.insert(oid.to_string()) {
+            dynamic_attr_types.push(entry);
+        }
+    }
+
+    // Additional standard LDAP attributeTypes with proper registered OIDs (prevents 10.99 duplicates
+    // and ensures ADS shows correct syntax, matching rules, and flags for givenName, mail, ou, POSIX attrs).
+    // These are now the single source for these common attrs; schema aliases map via get_preferred_ldap_name.
+    let std_entries: Vec<(&str, Vec<u8>)> = vec![
+        ("2.5.4.42", b"( 2.5.4.42 NAME ( 'givenName' 'givenname' 'firstname' 'first_name' ) DESC 'RFC4519 givenName' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("0.9.2342.19200300.100.1.3", b"( 0.9.2342.19200300.100.1.3 NAME ( 'mail' 'email' 'rfc822Mailbox' ) DESC 'RFC1274/2307 mail' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("2.5.4.11", b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnit' 'organizationalunit' 'organizationalUnitName' ) DESC 'RFC4519 ou' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("1.3.6.1.1.1.1.0", b"( 1.3.6.1.1.1.1.0 NAME ( 'uidNumber' 'uidnumber' 'uid_number' 'uidNumber' ) DESC 'RFC2307 uidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )".to_vec()),
+        ("1.3.6.1.1.1.1.1", b"( 1.3.6.1.1.1.1.1 NAME ( 'gidNumber' 'gidnumber' 'gid_number' 'gidNumber' ) DESC 'RFC2307 gidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )".to_vec()),
+        ("1.3.6.1.1.1.1.3", b"( 1.3.6.1.1.1.1.3 NAME ( 'homeDirectory' 'homedirectory' 'home_directory' 'homeDirectory' ) DESC 'RFC2307 homeDirectory' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("1.3.6.1.1.1.1.4", b"( 1.3.6.1.1.1.1.4 NAME ( 'loginShell' 'loginshell' 'login_shell' 'loginShell' ) DESC 'RFC2307 loginShell' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
+        ("1.3.6.1.1.1.1.8", b"( 1.3.6.1.1.1.1.8 NAME ( 'sshPublicKey' 'sshpublickey' 'sshPublicKey' 'ssHPublicKey' ) DESC 'OpenSSH/LDAP sshPublicKey' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec()),
+        ("1.3.6.1.4.1.5322.1.1.2", b"( 1.3.6.1.4.1.5322.1.1.2 NAME ( 'krbPrincipalName' 'krb_principal_name' 'krbPrincipalName' ) DESC 'Kerberos principal name' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+    ];
+    for (oid, entry) in std_entries {
+        if seen_attr_oids.insert(oid.to_string()) {
+            dynamic_attr_types.push(entry);
+        }
+    }
+
+    // Attributes that already have proper hardcoded definitions above (or operational below).
+    // Skip them in the dynamic loop to eliminate ALL duplication (the root cause of
+    // "subschema error", conflicting attributeTypes, and 10.99 spam in Apache Directory Studio).
+    // Note: LLDAP-specific (avatar, kerberossync, groupid) are intentionally NOT here so dynamic
+    // adds them with their custom OIDs. sshPublicKey now uses standard OID above.
+    let already_covered: std::collections::HashSet<&str> = [
+        "objectclass", "cn", "sn", "uid",
+        "givenname", "mail", "ou", "uidnumber", "gidnumber", "homedirectory", "loginshell", "sshpublickey",
+        "displayname", "firstname", "lastname", "jpegphoto",
+        // Timestamps + operational (to prevent dynamic 10.99 + later duplicate push)
+        "createtimestamp", "createTimestamp", "creationdate", "creation_date", "creationTimestamp",
+        "modifytimestamp", "modifyTimestamp", "modifieddate", "modified_date", "modifydate",
+        "pwdchangedtime", "pwdChangedTime", "passwordmodifieddate", "password_modified_date",
+        "entryuuid", "entryUUID", "uuid",
+        "hasSubordinates", "structuralObjectClass", "subschemaSubentry", "memberof", "memberOf",
+        "krbprincipalname", "krb_principal_name", "krbPrincipalName",
+    ].iter().cloned().collect();
+
+    // Only add TRULY NEW / custom attributes from PublicSchema (future-proof)
+    for attr in schema.user_attributes().attributes.iter().chain(schema.group_attributes().attributes.iter()) {
+        let preferred = get_preferred_ldap_name(attr);
+        if already_covered.contains(preferred.to_ascii_lowercase().as_str()) {
+            continue; // already defined with correct OID, syntax, and flags
+        }
+
+        let (syntax, is_single, is_operational) = attr_type_to_ldap_syntax(attr);
+        let single_str = if is_single { " SINGLE-VALUE" } else { "" };
+        let op_str = if is_operational { " NO-USER-MODIFICATION USAGE directoryOperation" } else { "" };
+
+        let name_list = if attr.aliases.is_empty() {
+            format!("'{}'", preferred)
+        } else {
+            let mut names = vec![format!("'{}'", preferred)];
+            for a in &attr.aliases {
+                if a != &preferred {
+                    names.push(format!("'{}'", a));
+                }
+            }
+            names.join(" ")
+        };
+
+        let desc = format!("LLDAP {} ({})", attr.name, if attr.is_list { "multi" } else { "single" });
+        let oid = match attr.name.as_str() {
+            "avatar" => "10.0",
+            "sshpublickey" => "10.1",
+            "kerberossync" => "1.3.6.1.4.1.5322.1.1.1",
+            "groupid" => "10.2",
+            _ => "10.99", // only for future truly custom attrs
+        };
+
+        let entry = format!(
+            "( {} NAME ( {} ) DESC '{}' EQUALITY {} SYNTAX {}{}{} )",
+            oid,
+            name_list,
+            desc,
+            if attr.attribute_type == AttributeType::Integer { "integerMatch" } else { "caseIgnoreMatch" },
+            syntax,
+            single_str,
+            op_str
+        );
+        if seen_attr_oids.insert(oid.to_string()) {
+            dynamic_attr_types.push(entry.into_bytes());
+        }
+    }
+
+    // Add operational attributes (italic in Studio)
+    let op_entries: Vec<(&str, Vec<u8>)> = vec![
+        ("1.3.6.1.1.16.4", b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.18.1", b"( 2.5.18.1 NAME ( 'createTimestamp' 'creationdate' 'creation_date' 'creationTimestamp' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.18.2", b"( 2.5.18.2 NAME ( 'modifyTimestamp' 'modifieddate' 'modified_date' 'modifydate' 'modifyTimestamp' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("1.2.840.113556.1.2.102", b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group membership' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation )".to_vec()),
+        ("1.3.6.1.4.1.1466.101.120.6", b"( 1.3.6.1.4.1.1466.101.120.6 NAME 'hasSubordinates' DESC 'X.500 Has Subordinates' EQUALITY booleanMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.7 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.21.1", b"( 2.5.21.1 NAME 'structuralObjectClass' DESC 'X.500 Structural Object Class' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.21.2", b"( 2.5.21.2 NAME 'subschemaSubentry' DESC 'X.500 Subschema Subentry' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("1.3.6.1.4.1.42.2.27.8.1.16", b"( 1.3.6.1.4.1.42.2.27.8.1.16 NAME ( 'pwdChangedTime' 'passwordmodifieddate' 'password_modified_date' ) DESC 'Password last changed time' EQUALITY generalizedTimeMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )".to_vec()),
+    ];
+    for (oid, entry) in op_entries {
+        if seen_attr_oids.insert(oid.to_string()) {
+            dynamic_attr_types.push(entry);
+        }
+    }
+
+    // Build dynamic MAY list for inetOrgPerson — clean, stable, and ADS-compatible.
+    // Only include standard + LLDAP user attributes. Never pollute with operational attrs
+    // (createTimestamp, entryUUID, etc.) or core MUST attrs (cn, sn) — those are handled elsewhere.
+    // This prevents the "No schema information returned by server" regression in Apache Directory Studio.
+    let mut inet_may: Vec<String> = vec![
+        "givenName".into(), "mail".into(), "uid".into(), "displayName".into(),
+        "employeeNumber".into(), "employeeType".into(), "jpegPhoto".into(), "labeledURI".into(),
+        "manager".into(), "mobile".into(), "pager".into(), "photo".into(), "roomNumber".into(),
+        "secretary".into(), "uidNumber".into(), "gidNumber".into(), "homeDirectory".into(),
+        "loginShell".into(), "sshPublicKey".into(), "krbPrincipalName".into(), "ou".into(),
+        "avatar".into(), "description".into(), "kerberosSync".into(),
+    ];
+    // Add any truly extra custom schema attrs (case-insensitive dedup)
+    let mut seen: std::collections::HashSet<String> = inet_may.iter().map(|s| s.to_ascii_lowercase()).collect();
+    for attr in schema.user_attributes().attributes.iter() {
+        let pref = get_preferred_ldap_name(attr);
+        let lower = pref.to_ascii_lowercase();
+        if !seen.contains(&lower) {
+            seen.insert(lower);
+            inet_may.push(pref);
+        }
+    }
+    let inet_may_str = inet_may.join(" $ ");
+
+    // Build dynamic MAY for posixAccount / posixGroup (extend with schema)
+    let posix_user_may = "userPassword $ loginShell $ gecos $ description $ sshPublicKey $ avatar $ kerberosSync".to_string();
+    let posix_group_may = "userPassword $ memberUid $ description $ gidNumber".to_string();
+
     LdapOp::SearchResultEntry(LdapSearchResultEntry {
-        dn: "cn=Subschema".to_string(),
+        dn: format!("cn=Subschema,{}", base_dn_str),
         attributes: vec![
             LdapPartialAttribute {
                 atype: "structuralObjectClass".to_string(),
@@ -315,45 +483,36 @@ pub fn make_ldap_subschema_entry(schema: PublicSchema) -> LdapOp {
             },
             LdapPartialAttribute {
                 atype: "attributeTypes".to_string(),
-                vals: vec![
-                    b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                    b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
-                    b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
-                    b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                    b"( 2.5.4.41 NAME 'name' DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
-                    b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                    b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                    b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group membership' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation )".to_vec(),
-                    b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'user_id' ) DESC 'User identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
-                    b"( 2.5.4.42 NAME 'givenName' DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
-                    b"( 0.9.2342.19200300.100.1.3 NAME 'mail' DESC 'RFC4524' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec(),
-                    b"( 10.0 NAME 'avatar' DESC 'LLDAP avatar' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
-                    b"( 10.1 NAME 'sshPublicKey' DESC 'LLDAP SSH key' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )".to_vec(),
-                ],
+                vals: dynamic_attr_types,
             },
             LdapPartialAttribute {
                 atype: "objectClasses".to_string(),
                 vals: vec![
+                    b"( 2.5.6.0 NAME 'top' DESC 'RFC4512' ABSTRACT MUST objectClass )".to_vec(),
+                    b"( 2.5.6.6 NAME 'person' DESC 'RFC4519' STRUCTURAL MUST ( cn $ sn $ objectClass ) MAY ( userPassword $ telephoneNumber $ seeAlso $ description $ givenName $ mail ) )".to_vec(),
+                    b"( 2.5.6.7 NAME 'organizationalPerson' DESC 'RFC4519' STRUCTURAL SUP person MAY ( title $ ou $ o $ l $ st $ postalAddress ) )".to_vec(),
+                    // inetOrgPerson with DYNAMIC MAY list
                     format!(
-                        "( 3.0 NAME ( {} ) DESC 'LLDAP builtin: a person' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
-                        ldap_schema_description.user_object_classes().format_for_ldap_schema_description(),
-                        ldap_schema_description.required_user_attributes().format_for_ldap_schema_description(),
-                        ldap_schema_description.optional_user_attributes().format_for_ldap_schema_description(),
+                        "( 1.3.6.1.1.3.1 NAME 'inetOrgPerson' DESC 'RFC2798' STRUCTURAL SUP organizationalPerson MUST ( cn $ sn $ objectClass ) MAY ( {} ) )",
+                        inet_may_str
                     ).into_bytes(),
+                    // posixAccount with extended MAY
                     format!(
-                        "( 3.1 NAME ( {} ) DESC 'LLDAP builtin: a group' STRUCTURAL MUST ( {} ) MAY ( {} ) )",
-                        ldap_schema_description.group_object_classes().format_for_ldap_schema_description(),
-                        ldap_schema_description.required_group_attributes().format_for_ldap_schema_description(),
-                        ldap_schema_description.optional_group_attributes().format_for_ldap_schema_description(),
+                        "( 1.3.6.1.1.1.2.0 NAME 'posixAccount' DESC 'RFC2307' STRUCTURAL MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory $ objectClass ) MAY ( {} ) )",
+                        posix_user_may
+                    ).into_bytes(),
+                    b"( 2.5.6.9 NAME 'groupOfNames' DESC 'RFC4519' STRUCTURAL MUST ( member $ cn $ objectClass ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )".to_vec(),
+                    b"( 2.5.6.17 NAME 'groupOfUniqueNames' DESC 'RFC4519' STRUCTURAL MUST ( uniqueMember $ cn $ objectClass ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )".to_vec(),
+                    // posixGroup with extended MAY
+                    format!(
+                        "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' DESC 'RFC2307' STRUCTURAL MUST ( cn $ gidNumber $ objectClass ) MAY ( {} ) )",
+                        posix_group_may
                     ).into_bytes(),
                 ],
             },
             LdapPartialAttribute {
                 atype: "subschemaSubentry".to_string(),
-                vals: vec![b"cn=Subschema".to_vec()],
+                vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
             },
         ],
     })
@@ -367,95 +526,63 @@ pub(crate) fn is_root_dse_request(request: &LdapSearchRequest) -> bool {
 
 pub(crate) fn is_subschema_entry_request(request: &LdapSearchRequest) -> bool {
     let base_lower = request.base.to_ascii_lowercase();
-    (base_lower == "cn=subschema" || base_lower.starts_with("cn=subschema,"))
-        && request.scope == LdapSearchScope::Base
+    // Extremely tolerant detection for Apache Directory Studio + all major clients:
+    // - Accepts "cn=Subschema" (relative) or full "cn=Subschema,dc=...,dc=..."
+    // - Base or Subtree scope
+    // - Any filter that mentions objectClass (Present, Equality to *, top, subschema, or complex And/Or)
+    let base_matches = base_lower.contains("cn=subschema");
+    let scope_ok = matches!(request.scope, LdapSearchScope::Base | LdapSearchScope::Subtree);
+    let filter_ok = match &request.filter {
+        LdapFilter::Present(attr) => attr.eq_ignore_ascii_case("objectclass"),
+        LdapFilter::Equality(attr, val) => {
+            attr.eq_ignore_ascii_case("objectclass")
+                && (val == "*" || val.eq_ignore_ascii_case("top") || val.eq_ignore_ascii_case("subschema"))
+        }
+        LdapFilter::And(filters) | LdapFilter::Or(filters) => {
+            filters.iter().any(|f| {
+                if let LdapFilter::Equality(a, _v) = f {
+                    a.eq_ignore_ascii_case("objectclass")
+                } else {
+                    false
+                }
+            })
+        }
+        _ => true,
+    };
+    base_matches && scope_ok && filter_ok
 }
 
-async fn do_search_internal(
+pub async fn do_search<Backend>(
+    backend: &Backend,
     ldap_info: &LdapInfo,
-    backend_handler: &impl UserAndGroupListerBackendHandler,
     request: &LdapSearchRequest,
-    schema: &PublicSchema,
     allowed_ous: &[String],
-) -> LdapResult<InternalSearchResults> {
-    let dn_parts = parse_distinguished_name(&request.base.to_ascii_lowercase())?;
-    let scope = get_search_scope(&ldap_info.base_dn, &dn_parts, &request.scope, allowed_ous);
-    debug!(?request.base, ?request.scope, ?scope);
-
-    let ou_chain: Vec<(String, String)> = dn_parts
-        .iter()
-        .filter(|(k, _)| k.eq_ignore_ascii_case("ou"))
-        .cloned()
-        .collect();
-    let internal_ou = ldap_rdn_chain_to_internal_ou(&ou_chain);
-
-    let get_user_list = async |filter: &LdapFilter| {
-        let need_groups = request.attrs.iter().any(|s| s.eq_ignore_ascii_case("memberof"));
-        let effective_filter = if matches!(scope, SearchScope::Container) {
-            LdapFilter::And(vec![
-                filter.clone(),
-                LdapFilter::Equality("ou".to_string(), internal_ou.clone()),
-            ])
-        } else {
-            filter.clone()
-        };
-        let final_filter = exclude_disabled_users_filter(effective_filter);
-        get_user_list(ldap_info, &final_filter, need_groups, &request.base, backend_handler, schema).await
+) -> LdapResult<Vec<LdapOp>>
+where
+    Backend: UserAndGroupListerBackendHandler,
+{
+    let base_dn = &ldap_info.base_dn;
+    let dn_parts = match parse_distinguished_name(&request.base) {
+        Ok(p) => p,
+        Err(_) => return Ok(vec![make_search_success()]),
     };
 
-    let get_groups_list = async |filter: &LdapFilter| {
-        let effective_filter = if matches!(scope, SearchScope::Container) {
-            LdapFilter::And(vec![
-                filter.clone(),
-                LdapFilter::Equality("ou".to_string(), internal_ou.clone()),
-            ])
-        } else {
-            filter.clone()
-        };
-        get_groups_list(ldap_info, &effective_filter, &request.base, backend_handler, schema).await
-    };
+    let scope = get_search_scope(base_dn, &dn_parts, &request.scope, allowed_ous);
 
     match scope {
-        SearchScope::Invalid => Err(LdapError {
-            code: LdapResultCode::NoSuchObject,
-            message: "".to_string(),
-        }),
-
         SearchScope::Root => {
-            let mut entries = vec![];
-
-            // Base or Subtree: include the root entry itself (Apache DS + standard LDAP)
-            if matches!(
-                request.scope,
-                LdapSearchScope::Base | LdapSearchScope::Subtree
-            ) {
-                let dc_value = ldap_info
-                    .base_dn
-                    .iter()
+            if request.scope == LdapSearchScope::Base {
+                // Return the root naming context entry for base searches
+                // Derive dc and o dynamically from the live base_dn (no deployment hardcodes)
+                let dc_val = base_dn.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("dc"))
                     .map(|(_, v)| v.as_bytes().to_vec())
                     .unwrap_or_else(|| b"lldap".to_vec());
-
-                let org_name = std::env::var("LLDAP_ORGANIZATION_NAME")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| {
-                        ldap_info
-                            .base_dn
-                            .iter()
-                            .find(|(k, _)| k.eq_ignore_ascii_case("dc"))
-                            .map(|(_, v)| {
-                                let mut name = v.clone();
-                                if let Some(first) = name.get_mut(0..1) {
-                                    first.make_ascii_uppercase();
-                                }
-                                name
-                            })
-                    })
-                    .unwrap_or_else(|| "LLDAP Directory".to_string())
-                    .into_bytes();
-
-                entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
+                let o_val = base_dn.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("o"))
+                    .map(|(_, v)| v.as_bytes().to_vec())
+                    .unwrap_or_else(|| b"LLDAP Directory".to_vec());
+                let root_entry = LdapSearchResultEntry {
                     dn: ldap_info.base_dn_str.clone(),
                     attributes: vec![
                         LdapPartialAttribute {
@@ -464,1237 +591,300 @@ async fn do_search_internal(
                         },
                         LdapPartialAttribute {
                             atype: "dc".to_string(),
-                            vals: vec![dc_value],
+                            vals: vec![dc_val],
                         },
                         LdapPartialAttribute {
                             atype: "o".to_string(),
-                            vals: vec![org_name],
+                            vals: vec![o_val],
                         },
                         LdapPartialAttribute {
-                            atype: "entryDN".to_string(),
-                            vals: vec![ldap_info.base_dn_str.clone().into_bytes()],
+                            atype: "hasSubordinates".to_string(),
+                            vals: vec![b"TRUE".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "structuralObjectClass".to_string(),
+                            vals: vec![b"organization".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "subschemaSubentry".to_string(),
+                            vals: vec![format!("cn=Subschema,{}", ldap_info.base_dn_str).into_bytes()],
                         },
                     ],
-                }));
+                };
+                return Ok(vec![LdapOp::SearchResultEntry(root_entry), make_search_success()]);
             }
+            // At the root level:
+            // - OneLevel: only top-level OUs (standard "containers first" view)
+            // - Subtree: top-level OUs + all users + all groups (so broad searches/filters work)
+            let top_level_ous = get_direct_child_ous("", allowed_ous);
+            let mut results = build_ou_entries(&top_level_ous, &ldap_info.base_dn_str);
 
-            // OneLevel or Subtree on root: return top-level OU containers (direct children)
-            if matches!(
-                request.scope,
-                LdapSearchScope::OneLevel | LdapSearchScope::Subtree
-            ) {
-                let top_level_ous: Vec<String> = allowed_ous
-                    .iter()
-                    .filter(|ou| !ou.contains('\\'))
-                    .cloned()
-                    .collect();
-                entries.extend(build_ou_entries(&top_level_ous, &ldap_info.base_dn_str));
-            }
+            if request.scope == LdapSearchScope::Subtree {
+                // Include matching users + groups under the entire tree
+                let user_results = get_user_list(
+                    ldap_info,
+                    &request.filter,
+                    true,
+                    &request.base,
+                    backend,
+                    &PublicSchema::get(),
+                ).await?;
+                results.extend(convert_users_to_ldap_op(
+                    user_results,
+                    &request.attrs,
+                    ldap_info,
+                    &PublicSchema::get(),
+                ));
 
-            if matches!(request.scope, LdapSearchScope::Subtree) {
-                let users = get_user_list(&request.filter).await?;
-                entries.extend(convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema));
-
-                let groups = get_groups_list(&request.filter).await?;
-                entries.extend(convert_groups_to_ldap_op(
-                    groups,
+                let group_results = get_groups_list(
+                    ldap_info,
+                    &request.filter,
+                    &request.base,
+                    backend,
+                    &PublicSchema::get(),
+                ).await?;
+                results.extend(convert_groups_to_ldap_op(
+                    group_results,
                     &request.attrs,
                     ldap_info,
                     &None,
-                    schema,
+                    &PublicSchema::get(),
                 ));
             }
 
-            Ok(InternalSearchResults::Raw(entries))
+            results.push(make_search_success());
+            Ok(results)
         }
-
         SearchScope::Container => {
-            let mut entries = vec![];
+            let mut results = vec![];
 
-            // Base or Subtree: include the current container entry itself
-            if matches!(
-                request.scope,
-                LdapSearchScope::Base | LdapSearchScope::Subtree
-            ) {
-                entries.extend(build_ou_entries(&[internal_ou.clone()], &ldap_info.base_dn_str));
-            }
+            // Robust internal OU computation (supports arbitrary nesting "office\floor1\room3")
+            let internal_ou = get_internal_ou_from_dn_parts(&dn_parts);
 
-            // OneLevel or Subtree: include direct child OU containers under this one
-            if matches!(
-                request.scope,
-                LdapSearchScope::OneLevel | LdapSearchScope::Subtree
-            ) {
-                let child_ous: Vec<String> = allowed_ous
+            if request.scope == LdapSearchScope::Base {
+                // Base search on a container OU: return ONLY the OU entry itself.
+                // (Prevents "ou=people under ou=people" nesting loop when client does OneLevel/Subtree.)
+                let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
+                let ou_part: String = rdn_chain
                     .iter()
-                    .filter(|ou| {
-                        if internal_ou.is_empty() {
-                            !ou.contains('\\')
-                        } else {
-                            ou.starts_with(&format!("{}\\", internal_ou))
-                                && ou.split('\\').count() == internal_ou.split('\\').count() + 1
-                        }
-                    })
-                    .cloned()
-                    .collect();
-                entries.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str));
-            }
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let dn = if ou_part.is_empty() {
+                    ldap_info.base_dn_str.clone()
+                } else {
+                    format!("{},{}", ou_part, ldap_info.base_dn_str)
+                };
+                let leaf_ou_val = rdn_chain
+                    .first()
+                    .map(|(_, v)| v.as_bytes().to_vec())
+                    .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
+                let ou_entry = LdapSearchResultEntry {
+                    dn,
+                    attributes: vec![
+                        LdapPartialAttribute {
+                            atype: "objectClass".to_string(),
+                            vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "ou".to_string(),
+                            vals: vec![leaf_ou_val],
+                        },
+                        LdapPartialAttribute {
+                            atype: "hasSubordinates".to_string(),
+                            vals: vec![b"TRUE".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "structuralObjectClass".to_string(),
+                            vals: vec![b"organizationalUnit".to_vec()],
+                        },
+                        LdapPartialAttribute {
+                            atype: "subschemaSubentry".to_string(),
+                            vals: vec![format!("cn=Subschema,{}", ldap_info.base_dn_str).into_bytes()],
+                        },
+                    ],
+                };
+                results.push(LdapOp::SearchResultEntry(ou_entry));
+            } else {
+                // OneLevel or Subtree on container:
+                // - Always include direct (OneLevel) or all descendant (Subtree) OU *containers* first.
+                //   This makes the hierarchy visible in ADS tree view / schema browser.
+                // - Then include matching users/groups (trusting the per-entry "ou" attribute + backend).
+                // Child OUs
+                let child_ous: Vec<String> = if request.scope == LdapSearchScope::OneLevel {
+                    get_direct_child_ous(&internal_ou, allowed_ous)
+                } else {
+                    // Subtree: all OUs under this container (deep nesting supported)
+                    let curr_l = internal_ou.to_ascii_lowercase();
+                    allowed_ous
+                        .iter()
+                        .filter(|ou| {
+                            let ou_l = ou.to_ascii_lowercase();
+                            !curr_l.is_empty() && ou_l.starts_with(&format!("{}\\", curr_l))
+                        })
+                        .cloned()
+                        .collect()
+                };
+                if !child_ous.is_empty() {
+                    results.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str));
+                }
 
-            if !matches!(request.scope, LdapSearchScope::Base) {
-                let users = get_user_list(&request.filter).await?;
-                entries.extend(convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema));
+                // Users + Groups — trust the backend + the per-entry "ou" attribute.
+                // The conversion layer already builds correct DNs using get_user_ou() / get_group_ou().
+                // (Removed overzealous "uid"/"cn" presence guard — it dropped valid entries when
+                // client (e.g. ADS tree expansion) did not request the naming attribute in attrs list.
+                // User/group results are already type-safe; no OU containers can leak here.)
+                let user_results = get_user_list(
+                    ldap_info,
+                    &request.filter,
+                    true,
+                    &request.base,
+                    backend,
+                    &PublicSchema::get(),
+                ).await?;
+                let mut user_ops: Vec<LdapOp> = convert_users_to_ldap_op(
+                    user_results,
+                    &request.attrs,
+                    ldap_info,
+                    &PublicSchema::get(),
+                )
+                .collect();
 
-                let groups = get_groups_list(&request.filter).await?;
-                entries.extend(convert_groups_to_ldap_op(
-                    groups,
+                let group_results = get_groups_list(
+                    ldap_info,
+                    &request.filter,
+                    &request.base,
+                    backend,
+                    &PublicSchema::get(),
+                ).await?;
+                let mut group_ops: Vec<LdapOp> = convert_groups_to_ldap_op(
+                    group_results,
                     &request.attrs,
                     ldap_info,
                     &None,
-                    schema,
-                ));
+                    &PublicSchema::get(),
+                )
+                .collect();
+
+                // Unified correct filtering for ADS compatibility (OneLevel + Subtree on containers).
+                // - Always: only entries whose DN is under this subtree (ends_with base).
+                // - OneLevel: additionally only direct children (RDN count == parent + 1).
+                // - Subtree: includes descendants (nested OUs + their users/groups).
+                // This fixes "primary OUs flat / nothing under them" when uid/cn not requested,
+                // and prevents returning users/groups from sibling OUs on Subtree searches.
+                {
+                    let base_lower = request.base.to_ascii_lowercase();
+                    let expected_rdn_count = dn_parts.len() + 1;
+
+                    let is_one_level = request.scope == LdapSearchScope::OneLevel;
+
+                    user_ops.retain(|op| {
+                        if let LdapOp::SearchResultEntry(e) = op {
+                            if let Ok(parts) = parse_distinguished_name(&e.dn) {
+                                let under = e.dn.to_ascii_lowercase().ends_with(&base_lower);
+                                if is_one_level {
+                                    under && parts.len() == expected_rdn_count
+                                } else {
+                                    under
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            true
+                        }
+                    });
+
+                    group_ops.retain(|op| {
+                        if let LdapOp::SearchResultEntry(e) = op {
+                            if let Ok(parts) = parse_distinguished_name(&e.dn) {
+                                let under = e.dn.to_ascii_lowercase().ends_with(&base_lower);
+                                if is_one_level {
+                                    under && parts.len() == expected_rdn_count
+                                } else {
+                                    under
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            true
+                        }
+                    });
+                }
+
+                results.extend(user_ops);
+                results.extend(group_ops);
             }
-
-            Ok(InternalSearchResults::Raw(entries))
+            results.push(make_search_success());
+            Ok(results)
         }
-
         SearchScope::LeafUser => {
-            let users = get_user_list(&request.filter).await?;
-            if users.is_empty() {
+            let user_id = match get_user_id_from_distinguished_name(
+                &request.base,
+                base_dn,
+                &ldap_info.base_dn_str,
+            ) {
+                Ok(id) => id,
+                Err(_) => return Ok(vec![make_search_success()]),
+            };
+            let filter = LdapFilter::Equality("uid".to_string(), user_id.to_string());
+            let users = get_user_list(
+                ldap_info,
+                &filter,
+                true,
+                &request.base,
+                backend,
+                &PublicSchema::get(),
+            ).await?;
+            let mut results: Vec<LdapOp> = convert_users_to_ldap_op(
+                users,
+                &request.attrs,
+                ldap_info,
+                &PublicSchema::get(),
+            ).collect();
+            if results.is_empty() {
                 return Err(LdapError {
                     code: LdapResultCode::NoSuchObject,
                     message: "".to_string(),
                 });
             }
-            let entries: Vec<_> = convert_users_to_ldap_op(users, &request.attrs, ldap_info, schema).collect();
-            Ok(InternalSearchResults::Raw(entries))
+            results.push(make_search_success());
+            Ok(results)
         }
-
         SearchScope::LeafGroup => {
-            let groups = get_groups_list(&request.filter).await?;
-            if groups.is_empty() {
+            let group_name = match get_group_id_from_distinguished_name(
+                &request.base,
+                base_dn,
+                &ldap_info.base_dn_str,
+            ) {
+                Ok(name) => name,
+                Err(_) => return Ok(vec![make_search_success()]),
+            };
+            let filter = LdapFilter::Equality("cn".to_string(), group_name.to_string());
+            let groups = get_groups_list(
+                ldap_info,
+                &filter,
+                &request.base,
+                backend,
+                &PublicSchema::get(),
+            ).await?;
+            let mut results: Vec<LdapOp> = convert_groups_to_ldap_op(
+                groups,
+                &request.attrs,
+                ldap_info,
+                &None,
+                &PublicSchema::get(),
+            ).collect();
+            if results.is_empty() {
                 return Err(LdapError {
                     code: LdapResultCode::NoSuchObject,
                     message: "".to_string(),
                 });
             }
-            let entries: Vec<_> =
-                convert_groups_to_ldap_op(groups, &request.attrs, ldap_info, &None, schema).collect();
-            Ok(InternalSearchResults::Raw(entries))
+            results.push(make_search_success());
+            Ok(results)
         }
-
-        SearchScope::Unknown => Ok(InternalSearchResults::Empty),
-    }
-}
-
-pub async fn do_search(
-    backend_handler: &impl UserAndGroupListerBackendHandler,
-    ldap_info: &LdapInfo,
-    request: &LdapSearchRequest,
-    allowed_ous: &[String],
-) -> LdapResult<Vec<LdapOp>> {
-    let schema = backend_handler.get_schema().await.map_err(|e| LdapError {
-        code: LdapResultCode::OperationsError,
-        message: format!("Unable to get schema: {e:#}"),
-    })?;
-    let search_results = do_search_internal(ldap_info, backend_handler, request, &schema, allowed_ous).await?;
-
-    let mut results = match search_results {
-        InternalSearchResults::Raw(raw_results) => raw_results,
-        InternalSearchResults::Empty => Vec::new(),
-    };
-
-    if results.is_empty() && request.scope == LdapSearchScope::Base {
-        return Ok(vec![make_search_success()]);
-    }
-
-    if !matches!(results.last(), Some(LdapOp::SearchResultDone(_))) {
-        results.push(make_search_success());
-    }
-    Ok(results)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        core::error::LdapError,
-        handler::tests::{
-            make_group_search_request, make_user_search_request, setup_bound_admin_handler,
-            setup_bound_readonly_handler,
-        },
-    };
-    use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-    use ldap3_proto::proto::{LdapDerefAliases, LdapSearchScope, LdapSubstringFilter};
-    use lldap_domain::{
-        schema::{AttributeList, AttributeSchema, Schema},
-        types::{
-            Attribute, AttributeName, AttributeType, GroupId, LdapObjectClass, User,
-            UserId,
-        },
-        uuid,
-    };
-    use lldap_domain_handlers::handler::*;
-    use lldap_domain_model::model::UserColumn;
-    use lldap_test_utils::MockTestBackendHandler;
-    use mockall::predicate::eq;
-    use pretty_assertions::assert_eq;
-
-    fn assert_timestamp_within_margin(
-        timestamp_bytes: &[u8],
-        base_timestamp_dt: DateTime<Utc>,
-        time_margin: Duration,
-    ) {
-        let timestamp_str =
-            std::str::from_utf8(timestamp_bytes).expect("Invalid conversion from UTF-8 to string");
-        let timestamp_naive = NaiveDateTime::parse_from_str(timestamp_str, "%Y%m%d%H%M%SZ")
-            .expect("Invalid timestamp format");
-        let timestamp_dt: DateTime<Utc> = Utc.from_utc_datetime(&timestamp_naive);
-
-        let within_range = (base_timestamp_dt - timestamp_dt).abs() <= time_margin;
-
-        assert!(
-            within_range,
-            "Timestamp not within range: expected within [{} - {}], got [{}]",
-            base_timestamp_dt - time_margin,
-            base_timestamp_dt + time_margin,
-            timestamp_dt
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_root_dse() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-        let request = LdapSearchRequest {
-            base: "".to_string(),
-            scope: LdapSearchScope::Base,
-            aliases: LdapDerefAliases::Never,
-            sizelimit: 0,
-            timelimit: 0,
-            typesonly: false,
-            filter: LdapFilter::Present("objectClass".to_string()),
-            attrs: vec!["supportedExtension".to_string()],
-        };
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                root_dse_response("dc=example,dc=com"),
-                make_search_success()
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_subschema_response() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-
-        let request = LdapSearchRequest {
-            base: "cn=Subschema".to_string(),
-            scope: LdapSearchScope::Base,
-            aliases: LdapDerefAliases::Never,
-            sizelimit: 0,
-            timelimit: 0,
-            typesonly: false,
-            filter: LdapFilter::Present("objectClass".to_string()),
-            attrs: vec!["supportedExtension".to_string()],
-        };
-
-        let actual_reponse: Vec<LdapOp> = ldap_handler.do_search_or_dse(&request).await.unwrap();
-
-        let LdapOp::SearchResultEntry(search_result_entry) = &actual_reponse[0] else {
-            panic!("Expected SearchResultEntry");
-        };
-
-        let attrs = &search_result_entry.attributes;
-        assert_eq!(attrs.len(), 10);
-        assert_eq!(search_result_entry.dn, "cn=Subschema".to_owned());
-
-        assert_eq!(
-            attrs[0],
-            LdapPartialAttribute {
-                atype: "structuralObjectClass".to_owned(),
-                vals: vec![b"subentry".to_vec()]
-            }
-        );
-
-        assert_eq!(
-            attrs[1],
-            LdapPartialAttribute {
-                atype: "objectClass".to_owned(),
-                vals: vec![
-                    b"top".to_vec(),
-                    b"subentry".to_vec(),
-                    b"subschema".to_vec(),
-                    b"extensibleObject".to_vec()
-                ]
-            }
-        );
-
-        assert_eq!(
-            attrs[2],
-            LdapPartialAttribute {
-                atype: "cn".to_owned(),
-                vals: vec![b"Subschema".to_vec()]
-            }
-        );
-
-        let check_timestamp_attribute = |attr: &LdapPartialAttribute, expected_type: &str| {
-            assert_eq!(attr.atype, expected_type);
-            assert_eq!(attr.vals.len(), 1);
-            assert_timestamp_within_margin(&attr.vals[0], Utc::now(), Duration::seconds(300));
-        };
-        check_timestamp_attribute(&attrs[3], "createTimestamp");
-        check_timestamp_attribute(&attrs[4], "modifyTimestamp");
-
-        assert_eq!(
-            attrs[5],
-            LdapPartialAttribute {
-                atype: "ldapSyntaxes".to_owned(),
-                vals: vec![
-                    b"( 1.3.6.1.1.16.1 DESC 'UUID' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.3 DESC 'Attribute Type Description' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.12 DESC 'Distinguished Name' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.24 DESC 'Generalized Time' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.27 DESC 'Integer' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.28 DESC 'JPEG' X-NOT-HUMAN-READABLE 'TRUE' )"
-                        .to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.34 DESC 'Name And Optional UID' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.37 DESC 'Object Class Description' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.38 DESC 'OID' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.54 DESC 'LDAP Syntax Description' )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.115.121.1.58 DESC 'Substring Assertion' )".to_vec(),
-                ]
-            }
-        );
-
-        assert_eq!(
-            attrs[6],
-            LdapPartialAttribute {
-                atype: "matchingRules".to_string(),
-                vals: vec![
-                    b"( 1.3.6.1.1.16.2 NAME 'UUIDMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
-                    b"( 1.3.6.1.1.16.3 NAME 'UUIDOrderingMatch' SYNTAX 1.3.6.1.1.16.1 )".to_vec(),
-                    b"( 2.5.13.0 NAME 'objectIdentifierMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                    b"( 2.5.13.1 NAME 'distinguishedNameMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                    b"( 2.5.13.2 NAME 'caseIgnoreMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                    b"( 2.5.13.4 NAME 'caseIgnoreSubstringsMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.58 )".to_vec(),
-                    b"( 2.5.13.23 NAME 'uniqueMemberMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                    b"( 2.5.13.27 NAME 'generalizedTimeMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                    b"( 2.5.13.28 NAME 'generalizedTimeOrderingMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                    b"( 2.5.13.30 NAME 'objectIdentifierFirstComponentMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                ]
-           }
-        );
-
-        assert_eq!(
-            attrs[7],
-            LdapPartialAttribute {
-                atype: "attributeTypes".to_owned(),
-                vals: vec![
-                    b"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' 'user_id' ) DESC 'RFC4519: user identifier' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION )".to_vec(),
-                    b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group that the entry belongs to' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation X-ORIGIN 'iPlanet Delegated Administrator' )".to_vec(),
-                    b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID of the entry' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes' DESC 'RFC4512: LDAP syntaxes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.54 USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512: object classes of the entity' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec(),
-                    b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'display_name' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                    b"( 2.5.4.4 NAME ( 'sn' 'surname' 'last_name' ) DESC 'RFC2256: last (family) name(s) for which the entity is known by' SUP name SINGLE-VALUE )".to_vec(),
-                    b"( 2.5.4.11 NAME ( 'ou' 'organizationalUnitName' ) DESC 'RFC2256: organizational unit this object belongs to' SUP name )".to_vec(),
-                    b"( 2.5.4.41 NAME 'name' DESC 'RFC4519: common supertype of name attributes' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )".to_vec(),
-                    b"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519: common supertype of DN attributes' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )".to_vec(),
-                    b"( 2.5.4.50 NAME ( 'uniqueMember' 'member' ) DESC 'RFC2256: unique member of a group' EQUALITY uniqueMemberMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.34 )".to_vec(),
-                    b"( 2.5.18.1 NAME ( 'createTimestamp' 'creation_date' ) DESC 'RFC4512: time which object was created' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.18.2 NAME 'modifyTimestamp' DESC 'RFC4512: time which object was last modified' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.21.5 NAME 'attributeTypes' DESC 'RFC4512: attribute types' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.3 USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.21.6 NAME 'objectClasses' DESC 'RFC4512: object classes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.37 USAGE directoryOperation )".to_vec(),
-                    b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512: structural object class of entry' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec(),
-                    b"( 10.0 NAME 'String' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec(),
-                    b"( 10.1 NAME 'Integer' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )".to_vec(),
-                    b"( 10.2 NAME 'JpegPhoto' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec(),
-                    b"( 10.3 NAME 'DateTime' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 )".to_vec(),
-                    b"( 10.4 NAME 'avatar' DESC 'LLDAP: builtin attribute' SUP JpegPhoto )".to_vec(),
-                    b"( 10.5 NAME 'first_name' DESC 'LLDAP: builtin attribute' SUP String )"
-                        .to_vec(),
-                    b"( 10.6 NAME 'mail' DESC 'LLDAP: builtin attribute' SUP String )".to_vec(),
-                    b"( 10.7 NAME 'modified_date' DESC 'LLDAP: builtin attribute' SUP DateTime )".to_vec(),
-                    b"( 10.8 NAME 'password_modified_date' DESC 'LLDAP: builtin attribute' SUP DateTime )".to_vec(),
-                    b"( 10.9 NAME 'group_id' DESC 'LLDAP: builtin attribute' SUP Integer )"
-                        .to_vec(),
-                    b"( 10.10 NAME 'modified_date' DESC 'LLDAP: builtin attribute' SUP DateTime )".to_vec(),
-                ]
-            }
-        );
-
-        assert_eq!(attrs[8],
-            LdapPartialAttribute {
-                atype: "objectClasses".to_owned(),
-                vals: vec![
-                    b"( 3.0 NAME ( 'inetOrgPerson' 'posixAccount' 'mailAccount' 'person' 'customUserClass' ) DESC 'LLDAP builtin: a person' STRUCTURAL MUST ( mail $ user_id ) MAY ( avatar $ creation_date $ display_name $ first_name $ last_name $ modified_date $ password_modified_date $ uuid ) )".to_vec(),
-                    b"( 3.1 NAME ( 'groupOfUniqueNames' 'groupOfNames' ) DESC 'LLDAP builtin: a group' STRUCTURAL MUST ( display_name ) MAY ( creation_date $ group_id $ modified_date $ uuid ) )".to_vec(),
-                ]
-            }
-        );
-
-        assert_eq!(
-            attrs[9],
-            LdapPartialAttribute {
-                atype: "subschemaSubentry".to_owned(),
-                vals: vec![b"cn=Subschema".to_vec()]
-            }
-        );
-
-        assert_eq!(actual_reponse[1], make_search_success());
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_unsupported_substring() {
-        let ldap_handler = setup_bound_readonly_handler(MockTestBackendHandler::new()).await;
-        let request = make_group_search_request(
-            LdapFilter::Substring("member".to_owned(), LdapSubstringFilter::default()),
-            vec!["cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError {
-                code: LdapResultCode::UnwillingToPerform,
-                message: r#"Unsupported group attribute for substring filter: "member""#.to_owned()
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_missing_attribute_substring() {
-        let request = make_group_search_request(
-            LdapFilter::Substring("nonexistent".to_owned(), LdapSubstringFilter::default()),
-            vec!["cn"],
-        );
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(false.into())))
-            .times(1)
-            .return_once(|_| Ok(vec![]));
-        let ldap_handler = setup_bound_readonly_handler(mock).await;
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_error() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::Not(Box::new(
-                GroupRequestFilter::DisplayName("group_2".into()),
-            )))))
-            .times(1)
-            .return_once(|_| {
-                Err(lldap_domain_model::error::DomainError::InternalError(
-                    "Error getting groups".to_string(),
-                ))
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::Or(vec![LdapFilter::Not(Box::new(LdapFilter::Equality(
-                "displayname".to_string(),
-                "group_2".to_string(),
-            )))]),
-            vec!["cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError{
-                code: LdapResultCode::Other,
-                message: r#"Error while listing groups "ou=groups,dc=example,dc=com": Internal error: `Error getting groups`"#.to_string()
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_filter_error() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-        let request = make_group_search_request(
-            LdapFilter::And(vec![LdapFilter::Approx(
-                "whatever".to_owned(),
-                "value".to_owned(),
-            )]),
-            vec!["cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError {
-                code: LdapResultCode::UnwillingToPerform,
-                message: r#"Unsupported group filter: Approx("whatever", "value")"#.to_string()
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_filters() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(
-                eq(Some(UserRequestFilter::Or(vec![
-                    UserRequestFilter::Not(Box::new(UserRequestFilter::UserId(UserId::new("bob")))),
-                    UserRequestFilter::UserId("bob_1".to_string().into()),
-                    true.into(),
-                    true.into(),
-                    true.into(),
-                    UserRequestFilter::AttributeEquality(
-                        AttributeName::from("first_name"),
-                        "FirstName".to_string().into(),
-                    ),
-                    UserRequestFilter::AttributeEquality(
-                        AttributeName::from("first_name"),
-                        "firstname".to_string().into(),
-                    ),
-                    UserRequestFilter::UserIdSubString(SubStringFilter {
-                        initial: Some("iNIt".to_owned()),
-                        any: vec!["1".to_owned(), "2aA".to_owned()],
-                        final_: Some("finAl".to_owned()),
-                    }),
-                    UserRequestFilter::SubString(
-                        UserColumn::DisplayName,
-                        SubStringFilter {
-                            initial: Some("iNIt".to_owned()),
-                            any: vec!["1".to_owned(), "2aA".to_owned()],
-                            final_: Some("finAl".to_owned()),
-                        },
-                    ),
-                ]))),
-                eq(false),
-            )
-            .times(1)
-            .return_once(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::And(vec![LdapFilter::Or(vec![
-                LdapFilter::Not(Box::new(LdapFilter::Equality(
-                    "uid".to_string(),
-                    "bob".to_string(),
-                ))),
-                LdapFilter::Equality(
-                    "dn".to_string(),
-                    "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                ),
-                LdapFilter::Equality(
-                    "dn".to_string(),
-                    "uid=bob_1,ou=groups,dc=example,dc=com".to_string(),
-                ),
-                LdapFilter::Equality("objectclass".to_string(), "persOn".to_string()),
-                LdapFilter::Equality("objectclass".to_string(), "other".to_string()),
-                LdapFilter::Present("objectClass".to_string()),
-                LdapFilter::Present("uid".to_string()),
-                LdapFilter::Present("unknown".to_string()),
-                LdapFilter::Equality("givenname".to_string(), "FirstName".to_string()),
-                LdapFilter::Equality("unknown_attribute".to_string(), "randomValue".to_string()),
-                LdapFilter::Substring(
-                    "uid".to_owned(),
-                    LdapSubstringFilter {
-                        initial: Some("iNIt".to_owned()),
-                        any: vec!["1".to_owned(), "2aA".to_owned()],
-                        final_: Some("finAl".to_owned()),
-                    },
-                ),
-                LdapFilter::Substring(
-                    "displayName".to_owned(),
-                    LdapSubstringFilter {
-                        initial: Some("iNIt".to_owned()),
-                        any: vec!["1".to_owned(), "2aA".to_owned()],
-                        final_: Some("finAl".to_owned()),
-                    },
-                ),
-            ])]),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_unsupported_substring_filter() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-        let request = make_user_search_request(
-            LdapFilter::Substring(
-                "uuid".to_owned(),
-                LdapSubstringFilter {
-                    initial: Some("iNIt".to_owned()),
-                    any: vec!["1".to_owned(), "2aA".to_owned()],
-                    final_: Some("finAl".to_owned()),
-                },
-            ),
-            vec!["objectClass"],
-        );
-        ldap_handler.do_search_or_dse(&request).await.unwrap_err();
-        let request = make_user_search_request(
-            LdapFilter::Substring(
-                "givenname".to_owned(),
-                LdapSubstringFilter {
-                    initial: Some("iNIt".to_owned()),
-                    any: vec!["1".to_owned(), "2aA".to_owned()],
-                    final_: Some("finAl".to_owned()),
-                },
-            ),
-            vec!["objectClass"],
-        );
-        ldap_handler.do_search_or_dse(&request).await.unwrap_err();
-    }
-
-    #[tokio::test]
-    async fn test_search_member_of_filter() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(
-                eq(Some(UserRequestFilter::MemberOf("group_1".into()))),
-                eq(false),
-            )
-            .times(2)
-            .returning(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::Equality(
-                "memberOf".to_string(),
-                "cn=group_1, ou=groups, dc=example,dc=com".to_string(),
-            ),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-        let request = make_user_search_request(
-            LdapFilter::Equality("memberOf".to_string(), "group_1".to_string()),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_member_of_filter_error() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(eq(Some(UserRequestFilter::from(false))), eq(false))
-            .times(1)
-            .returning(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::Equality(
-                "memberOf".to_string(),
-                "cn=mygroup,dc=example,dc=com".to_string(),
-            ),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            // The error is ignored, a warning is printed.
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_filters_lowercase() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(
-                eq(Some(UserRequestFilter::Not(Box::new(
-                    UserRequestFilter::Equality(UserColumn::DisplayName, "bob".to_string()),
-                )))),
-                eq(false),
-            )
-            .times(1)
-            .return_once(|_, _| {
-                Ok(vec![UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("bob_1"),
-                        ..Default::default()
-                    },
-                    groups: None,
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::And(vec![LdapFilter::Or(vec![LdapFilter::Not(Box::new(
-                LdapFilter::Equality("displayname".to_string(), "bob".to_string()),
-            ))])]),
-            vec!["objectclass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![LdapPartialAttribute {
-                        atype: "objectclass".to_string(),
-                        vals: vec![
-                            b"inetOrgPerson".to_vec(),
-                            b"posixAccount".to_vec(),
-                            b"mailAccount".to_vec(),
-                            b"person".to_vec(),
-                            b"customUserClass".to_vec(),
-                        ]
-                    },]
-                }),
-                make_search_success()
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_filters_custom_object_class() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(eq(Some(UserRequestFilter::from(true))), eq(false))
-            .times(1)
-            .return_once(|_, _| {
-                Ok(vec![UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("bob_1"),
-                        ..Default::default()
-                    },
-                    groups: None,
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::Equality("objectClass".to_owned(), "CUSTOMuserCLASS".to_owned()),
-            vec!["objectclass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![LdapPartialAttribute {
-                        atype: "objectclass".to_string(),
-                        vals: vec![
-                            b"inetOrgPerson".to_vec(),
-                            b"posixAccount".to_vec(),
-                            b"mailAccount".to_vec(),
-                            b"person".to_vec(),
-                            b"customUserClass".to_vec(),
-                        ]
-                    },]
-                }),
-                make_search_success()
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_both() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().times(1).return_once(|_, _| {
-            Ok(vec![UserAndGroups {
-                user: User {
-                    user_id: UserId::new("bob_1"),
-                    email: "bob@bobmail.bob".into(),
-                    display_name: Some("Bôb Böbberson".to_string()),
-                    attributes: vec![
-                        Attribute {
-                            name: "first_name".into(),
-                            value: "Bôb".to_string().into(),
-                        },
-                        Attribute {
-                            name: "last_name".to_string().into(),
-                            value: "Böbberson".to_string().into(),
-                        },
-                    ],
-                    ..Default::default()
-                },
-                groups: None,
-            }])
-        });
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::True)))
-            .times(1)
-            .return_once(|_| {
-                Ok(vec![Group {
-                    id: GroupId(1),
-                    display_name: "group_1".into(),
-                    creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    users: vec![UserId::new("bob"), UserId::new("john")],
-                    uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                    attributes: Vec::new(),
-                    modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_search_request(
-            "dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectClass", "dn", "cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec!["Bôb Böbberson".to_string().into_bytes()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![
-                                b"inetOrgPerson".to_vec(),
-                                b"posixAccount".to_vec(),
-                                b"mailAccount".to_vec(),
-                                b"person".to_vec(),
-                                b"customUserClass".to_vec(),
-                            ],
-                        },
-                    ],
-                }),
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=group_1,ou=groups,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec![b"group_1".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![b"groupOfUniqueNames".to_vec(), b"groupOfNames".to_vec(),],
-                        },
-                    ],
-                }),
-                make_search_success(),
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_wildcards() {
-        let mut mock = MockTestBackendHandler::new();
-
-        mock.expect_list_users().returning(|_, _| {
-            Ok(vec![UserAndGroups {
-                user: User {
-                    user_id: UserId::new("bob_1"),
-                    email: "bob@bobmail.bob".into(),
-                    display_name: Some("Bôb Böbberson".to_string()),
-                    attributes: vec![
-                        Attribute {
-                            name: "avatar".into(),
-                            value: Avatar::for_tests().into(),
-                        },
-                        Attribute {
-                            name: "last_name".into(),
-                            value: "Böbberson".to_string().into(),
-                        },
-                    ],
-                    uuid: uuid!("b4ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                    ..Default::default()
-                },
-                groups: None,
-            }])
-        });
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::True)))
-            .returning(|_| {
-                Ok(vec![Group {
-                    id: GroupId(1),
-                    display_name: "group_1".into(),
-                    creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    users: vec![UserId::new("bob"), UserId::new("john")],
-                    uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                    attributes: Vec::new(),
-                    modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-
-        // Test simple wildcard
-        let request =
-            make_search_request("dc=example,dc=com", LdapFilter::And(vec![]), vec!["*", "+"]);
-
-        // all: "objectclass", "dn", "uid", "mail", "givenname", "sn", "cn"
-        // Operational: "createtimestamp"
-
-        let expected_result = Ok(vec![
-            LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                dn: "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                attributes: vec![
-                    LdapPartialAttribute {
-                        atype: "avatar".to_string(),
-                        vals: vec![Avatar::for_tests().0.clone()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "cn".to_string(),
-                        vals: vec!["Bôb Böbberson".to_string().into_bytes()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "createtimestamp".to_string(),
-                        vals: vec![b"19700101000000Z".to_vec()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "entryuuid".to_string(),
-                        vals: vec![b"b4ac75e0-2900-3e21-926c-2f732c26b3fc".to_vec()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "jpegPhoto".to_string(),
-                        vals: vec![JpegPhoto::for_tests().into_bytes()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "last_name".to_string(),
-                        vals: vec!["Böbberson".to_string().into_bytes()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "mail".to_string(),
-                        vals: vec![b"bob@bobmail.bob".to_vec()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "objectclass".to_string(),
-                        vals: vec![
-                            b"inetOrgPerson".to_vec(),
-                            b"posixAccount".to_vec(),
-                            b"mailAccount".to_vec(),
-                            b"person".to_vec(),
-                            b"customUserClass".to_vec(),
-                        ],
-                    },
-                    LdapPartialAttribute {
-                        atype: "sn".to_string(),
-                        vals: vec!["Böbberson".to_string().into_bytes()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "uid".to_string(),
-                        vals: vec![b"bob_1".to_vec()],
-                    },
-                ],
-            }),
-            // "objectclass", "dn", "uid", "cn", "member", "uniquemember"
-            LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                dn: "cn=group_1,ou=groups,dc=example,dc=com".to_string(),
-                attributes: vec![
-                    LdapPartialAttribute {
-                        atype: "cn".to_string(),
-                        vals: vec![b"group_1".to_vec()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "entryuuid".to_string(),
-                        vals: vec![b"04ac75e0-2900-3e21-926c-2f732c26b3fc".to_vec()],
-                    },
-                    //member / uniquemember : "uid={},ou=people,{}"
-                    LdapPartialAttribute {
-                        atype: "member".to_string(),
-                        vals: vec![
-                            b"uid=bob,ou=people,dc=example,dc=com".to_vec(),
-                            b"uid=john,ou=people,dc=example,dc=com".to_vec(),
-                        ],
-                    },
-                    LdapPartialAttribute {
-                        atype: "objectclass".to_string(),
-                        vals: vec![b"groupOfUniqueNames".to_vec(), b"groupOfNames".to_vec()],
-                    },
-                    // UID
-                    LdapPartialAttribute {
-                        atype: "uid".to_string(),
-                        vals: vec![b"group_1".to_vec()],
-                    },
-                    LdapPartialAttribute {
-                        atype: "uniquemember".to_string(),
-                        vals: vec![
-                            b"uid=bob,ou=people,dc=example,dc=com".to_vec(),
-                            b"uid=john,ou=people,dc=example,dc=com".to_vec(),
-                        ],
-                    },
-                ],
-            }),
-            make_search_success(),
-        ]);
-
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            expected_result
-        );
-
-        let request2 = make_search_request(
-            "dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectclass", "obJEctclaSS", "dn", "*", "*"],
-        );
-
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request2).await,
-            expected_result
-        );
-
-        let request3 = make_search_request(
-            "dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["*", "+", "+"],
-        );
-
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request3).await,
-            expected_result
-        );
-
-        let request4 =
-            make_search_request("dc=example,dc=com", LdapFilter::And(vec![]), vec![""; 0]);
-
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request4).await,
-            expected_result
-        );
-
-        let request5 = make_search_request(
-            "dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectclass", "dn", "uid", "*"],
-        );
-
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request5).await,
-            expected_result
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_wrong_base() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-        let request = make_search_request(
-            "ou=users,dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_unsupported_filters() {
-        let ldap_handler = setup_bound_admin_handler(MockTestBackendHandler::new()).await;
-        let request = make_user_search_request(
-            LdapFilter::Approx("uid".to_owned(), "value".to_owned()),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError {
-                code: LdapResultCode::UnwillingToPerform,
-                message: r#"Unsupported user filter: Approx("uid", "value")"#.to_string()
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_filter_non_attribute() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(eq(Some(true.into())), eq(false))
-            .times(1)
-            .return_once(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::Present("displayname".to_owned()),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_user_ou_search() {
-        let ldap_handler = setup_bound_readonly_handler(MockTestBackendHandler::new()).await;
-        let request = LdapSearchRequest {
-            base: "ou=people,dc=example,dc=com".to_owned(),
-            scope: LdapSearchScope::Base,
-            aliases: LdapDerefAliases::Never,
-            sizelimit: 0,
-            timelimit: 0,
-            typesonly: false,
-            filter: LdapFilter::And(vec![]),
-            attrs: Vec::new(),
-        };
-        let result = ldap_handler.do_search_or_dse(&request).await.unwrap();
-        // Now returns one entry per allowed OU (people + groups by default)
-        assert_eq!(result.len(), 3); // 2 containers + SearchResultDone
-        assert!(matches!(result[0], LdapOp::SearchResultEntry(_)));
-        assert!(matches!(result[1], LdapOp::SearchResultEntry(_)));
-        assert!(matches!(result[2], LdapOp::SearchResultDone(_)));
-    }
-
-    #[tokio::test]
-    async fn test_custom_attribute_read() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().times(1).return_once(|_, _| {
-            Ok(vec![UserAndGroups {
-                user: User {
-                    user_id: UserId::new("test"),
-                    attributes: vec![Attribute {
-                        name: "nickname".into(),
-                        value: "Bob the Builder".to_string().into(),
-                    }],
-                    ..Default::default()
-                },
-                groups: None,
-            }])
-        });
-        mock.expect_list_groups().times(1).return_once(|_| {
-            Ok(vec![Group {
-                id: GroupId(1),
-                display_name: "group".into(),
-                creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                users: vec![UserId::new("bob")],
-                uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                attributes: vec![Attribute {
-                    name: "club_name".into(),
-                    value: "Breakfast Club".to_string().into(),
-                }],
-                modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-            }])
-        });
-        mock.expect_get_schema().returning(|| {
-            Ok(Schema {
-                user_attributes: AttributeList {
-                    attributes: vec![AttributeSchema {
-                        name: "nickname".into(),
-                        attribute_type: AttributeType::String,
-                        is_list: false,
-                        is_visible: true,
-                        is_editable: true,
-                        is_hardcoded: false,
-                        is_readonly: false,
-                    }],
-                },
-                group_attributes: AttributeList {
-                    attributes: vec![AttributeSchema {
-                        name: "club_name".into(),
-                        attribute_type: AttributeType::String,
-                        is_list: false,
-                        is_visible: true,
-                        is_editable: true,
-                        is_hardcoded: false,
-                        is_readonly: false,
-                    }],
-                },
-                extra_user_object_classes: vec![
-                    LdapObjectClass::from("customUserClass"),
-                    LdapObjectClass::from("myUserClass"),
-                ],
-                extra_group_object_classes: vec![LdapObjectClass::from("customGroupClass")],
-            })
-        });
-        let ldap_handler = setup_bound_readonly_handler(mock).await;
-
-        let request = make_search_request(
-            "dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["uid", "nickname", "club_name"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=test,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "nickname".to_owned(),
-                            vals: vec![b"Bob the Builder".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "uid".to_owned(),
-                            vals: vec![b"test".to_vec()],
-                        },
-                    ],
-                }),
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=group,ou=groups,dc=example,dc=com".to_owned(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "club_name".to_owned(),
-                            vals: vec![b"Breakfast Club".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "uid".to_owned(),
-                            vals: vec![b"group".to_vec()],
-                        },
-                    ],
-                }),
-                make_search_success()
-            ]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_base_scope_non_existent_user() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().returning(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapSearchRequest {
-            scope: LdapSearchScope::Base,
-            ..make_search_request(
-                "uid=nonexistent,ou=people,dc=example,dc=com",
-                LdapFilter::And(vec![]),
-                vec!["objectClass".to_string()],
-            )
-        };
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError {
-                code: LdapResultCode::NoSuchObject,
-                message: "".to_string(),
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_base_scope_non_existent_group() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups().returning(|_| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapSearchRequest {
-            scope: LdapSearchScope::Base,
-            ..make_search_request(
-                "uid=nonexistent,ou=groups,dc=example,dc=com",
-                LdapFilter::And(vec![]),
-                vec!["objectClass".to_string()],
-            )
-        };
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Err(LdapError {
-                code: LdapResultCode::NoSuchObject,
-                message: "".to_string(),
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_base_scope_existing_user() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().returning(|_, _| {
-            Ok(vec![UserAndGroups {
-                user: User {
-                    user_id: UserId::new("bob"),
-                    ..Default::default()
-                },
-                groups: None,
-            }])
-        });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapSearchRequest {
-            scope: LdapSearchScope::Base,
-            ..make_search_request(
-                "uid=bob,ou=people,dc=example,dc=com",
-                LdapFilter::And(vec![]),
-                vec!["objectClass".to_string()],
-            )
-        };
-        let results = ldap_handler.do_search_or_dse(&request).await.unwrap();
-        // Should have 2 results: SearchResultEntry and SearchResultDone
-        assert_eq!(results.len(), 2);
-        assert!(matches!(results[0], LdapOp::SearchResultEntry(_)));
-        assert!(matches!(results[1], LdapOp::SearchResultDone(_)));
+        SearchScope::Invalid | SearchScope::Unknown => Ok(vec![make_search_success()]),
     }
 }

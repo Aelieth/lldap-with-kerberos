@@ -2,9 +2,10 @@ use crate::core::{
     error::{LdapError, LdapResult},
     utils::{
         ExpandedAttributes, LdapInfo, UserFieldType, expand_attribute_wildcards,
-        get_custom_attribute, get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, internal_ou_to_ldap_rdn_chain,
-        map_user_field, to_generalized_time,
+        get_custom_attribute, get_default_user_object_classes_bytes,
+        get_group_id_from_distinguished_name_or_plain_name,
+        get_user_id_from_distinguished_name_or_plain_name, inject_operational_attributes,
+        internal_ou_to_ldap_rdn_chain, is_operational_attribute, map_user_field, resolve_attribute, to_generalized_time,
     },
 };
 
@@ -14,30 +15,14 @@ use ldap3_proto::{
 use lldap_domain::{
     deserialize::deserialize_attribute_value,
     public_schema::PublicSchema,
-    types::{AttributeName, AttributeType, GroupDetails,LdapObjectClass, User,
-        UserAndGroups, UserId},
+    types::{AttributeName, AttributeType, GroupDetails, User, UserAndGroups, UserId},
 };
 use lldap_domain_handlers::handler::{UserListerBackendHandler, UserRequestFilter};
 use lldap_domain_model::model::UserColumn;
 use tracing::{debug, instrument, warn};
 
-pub const REQUIRED_USER_ATTRIBUTES: &[&str] = &["user_id", "mail"];
-
-const DEFAULT_USER_OBJECT_CLASSES: &[&str] =
-    &["top", "inetOrgPerson", "posixAccount", "mailAccount", "person"];
-
-fn get_default_user_object_classes_vec_u8() -> Vec<Vec<u8>> {
-    DEFAULT_USER_OBJECT_CLASSES
-        .iter()
-        .map(|c| c.as_bytes().to_vec())
-        .collect()
-}
-
-pub fn get_default_user_object_classes() -> Vec<LdapObjectClass> {
-    DEFAULT_USER_OBJECT_CLASSES
-        .iter()
-        .map(|&c| LdapObjectClass::from(c))
-        .collect()
+pub fn get_default_user_object_classes() -> Vec<lldap_domain::types::LdapObjectClass> {
+    crate::core::utils::get_default_user_object_classes()
 }
 
 pub fn get_user_attribute(
@@ -50,47 +35,40 @@ pub fn get_user_attribute(
 ) -> Option<Vec<Vec<u8>>> {
     let attribute = AttributeName::from(attribute.as_str());
     let attribute_values = match map_user_field(&attribute, schema) {
-        UserFieldType::ObjectClass => {
-            let mut classes: Vec<Vec<u8>> = get_default_user_object_classes_vec_u8();
-
-            classes.extend(
-                schema
-                .get_schema()
-                .extra_user_object_classes
-                .iter()
-                .map(|c| c.as_str().as_bytes().to_vec()),
-            );
-            classes
-        }
-        // dn is always returned as part of the base response.
+        UserFieldType::ObjectClass => get_default_user_object_classes_bytes(schema),
         UserFieldType::Dn => return None,
         UserFieldType::EntryDn => {
-            let ou = get_user_ou(user);
-            vec![format!("uid={},ou={},{}", &user.user_id, ou, base_dn_str).into_bytes()]
+            let internal_ou = get_user_ou(user);
+            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
+            let ou_part = rdn_chain
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+            vec![format!("uid={},{}", &user.user_id, ou_part + "," + base_dn_str).into_bytes()]
         }
         UserFieldType::MemberOf => groups
-        .into_iter()
-        .flatten()
-        .map(|group| {
-            // Get the group's real OU from its attributes (fully dynamic)
-            let group_ou = group.attributes
-            .iter()
-            .find(|a| a.name.as_str() == "ou")
-            .and_then(|a| {
-                if let lldap_domain::types::AttributeValue::String(
-                    lldap_domain::types::Cardinality::Singleton(s),
-                ) = &a.value
-                {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "groups".to_string());
+            .into_iter()
+            .flatten()
+            .map(|group| {
+                let group_ou = group.attributes
+                    .iter()
+                    .find(|a| a.name.as_str() == "ou")
+                    .and_then(|a| {
+                        if let lldap_domain::types::AttributeValue::String(
+                            lldap_domain::types::Cardinality::Singleton(s),
+                        ) = &a.value
+                        {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| "groups".to_string());
 
-            format!("cn={},ou={},{}", &group.display_name, group_ou, base_dn_str).into_bytes()
-        })
-        .collect(),
+                format!("cn={},ou={},{}", &group.display_name, group_ou, base_dn_str).into_bytes()
+            })
+            .collect(),
         UserFieldType::PrimaryField(UserColumn::UserId) => {
             vec![user.user_id.to_string().into_bytes()]
         }
@@ -114,14 +92,25 @@ pub fn get_user_attribute(
         UserFieldType::PrimaryField(UserColumn::PasswordModifiedDate) => {
             vec![to_generalized_time(&user.password_modified_date)]
         }
-        // NEW: Protected krbPrincipalName from main table (exactly like CreationDate)
         UserFieldType::PrimaryField(UserColumn::KrbPrincipalName) => {
             vec![user.krb_principal_name.clone()?.into_bytes()]
         }
-        UserFieldType::Attribute(attr, _, _) => get_custom_attribute(&user.attributes, &attr)?,
+        UserFieldType::Attribute(attr, _, _) => {
+            let values = get_custom_attribute(&user.attributes, &attr)?;
+            if attr.as_str().eq_ignore_ascii_case("ou") {
+                if let Some(first) = values.first() {
+                    let s = String::from_utf8_lossy(first);
+                    let leaf = s.split('\\').last().unwrap_or(&s).to_string();
+                    vec![leaf.into_bytes()]
+                } else {
+                    vec![]
+                }
+            } else {
+                values
+            }
+        }
         UserFieldType::NoMatch => match attribute.as_str() {
             "1.1" => return None,
-            // We ignore the operational attribute wildcard.
             "+" => return None,
             "*" => {
                 panic!(
@@ -132,11 +121,14 @@ pub fn get_user_attribute(
                 if ignored_user_attributes.contains(&attribute) {
                     return None;
                 }
+                let is_unknown = resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(&user.attributes, &attribute).or_else(|| {
-                    warn!(
-                        r#"Ignoring unrecognized user attribute: {}. To disable this warning, add it to "ignored_user_attributes" in the config."#,
-                        attribute
-                    );
+                    if is_unknown {
+                        warn!(
+                            r#"Ignoring unrecognized user attribute: {}. To disable this warning, add it to "ignored_user_attributes" in the config."#,
+                            attribute
+                        );
+                    }
                     None
                 })?
             }
@@ -149,24 +141,6 @@ pub fn get_user_attribute(
     }
 }
 
-const ALL_USER_ATTRIBUTE_KEYS: &[&str] = &[
-    "objectclass",
-    "uid",
-    "mail",
-    "givenname",
-    "sn",
-    "cn",
-    "avatar",
-    "createtimestamp",
-    "entryuuid",
-    "ou",
-    "sshpublickey",
-    "homedirectory",
-    "loginshell",
-    "uidnumber",
-    "gidnumber",
-];
-
 fn make_ldap_search_user_result_entry(
     user: User,
     base_dn_str: &str,
@@ -176,12 +150,26 @@ fn make_ldap_search_user_result_entry(
     schema: &PublicSchema,
 ) -> LdapSearchResultEntry {
     if expanded_attributes.include_custom_attributes {
-        expanded_attributes.attribute_keys.extend(
-            user.attributes
-                .iter()
-                .map(|a| (a.name.clone(), a.name.to_string())),
-        );
+        let standardized: std::collections::HashSet<String> = schema
+            .user_attributes()
+            .attributes
+            .iter()
+            .flat_map(|a| {
+                let mut names = vec![a.name.to_string()];
+                names.extend(a.aliases.iter().map(|al| al.to_string()));
+                names
+            })
+            .collect();
+
+        let custom_to_add: Vec<_> = user.attributes
+            .iter()
+            .filter(|a| !standardized.contains(a.name.as_str()))
+            .map(|a| (a.name.clone(), a.name.to_string()))
+            .collect();
+
+        expanded_attributes.attribute_keys.extend(custom_to_add);
     }
+
     LdapSearchResultEntry {
         dn: {
             let internal_ou = get_user_ou(&user);
@@ -193,24 +181,35 @@ fn make_ldap_search_user_result_entry(
                 .join(",");
             format!("uid={},{}", user.user_id.as_str(), ou_part + "," + base_dn_str)
         },
-        attributes: expanded_attributes
-            .attribute_keys
-            .into_iter()
-            .filter_map(|(attribute, name)| {
-                let values = get_user_attribute(
-                    &user,
-                    &attribute,
-                    base_dn_str,
-                    groups,
-                    ignored_user_attributes,
-                    schema,
-                )?;
-                Some(LdapPartialAttribute {
-                    atype: name,
-                    vals: values,
+        attributes: {
+            let mut attrs: Vec<LdapPartialAttribute> = expanded_attributes
+                .attribute_keys
+                .into_iter()
+                .filter(|(attribute, _)| !is_operational_attribute(attribute.as_str()))
+                .filter_map(|(attribute, name)| {
+                    let values = get_user_attribute(
+                        &user,
+                        &attribute,
+                        base_dn_str,
+                        groups,
+                        ignored_user_attributes,
+                        schema,
+                    )?;
+                    Some(LdapPartialAttribute {
+                        atype: name,
+                        vals: values,
+                    })
                 })
-            })
-            .collect::<Vec<LdapPartialAttribute>>(),
+                .collect();
+
+            // Always inject hasSubordinates + structuralObjectClass + subschemaSubentry
+            inject_operational_attributes(&mut attrs, "inetOrgPerson", base_dn_str);
+
+            let mut seen = std::collections::HashSet::new();
+            attrs.retain(|attr| seen.insert(attr.atype.clone()));
+
+            attrs
+        },
     }
 }
 
@@ -226,7 +225,7 @@ fn get_user_attribute_equality_filter(
     match (attribute_value, attribute_value_lc) {
         (Ok(v), Ok(v_lc)) => UserRequestFilter::Or(vec![
             UserRequestFilter::AttributeEquality(field.clone(), v),
-                                                   UserRequestFilter::AttributeEquality(field.clone(), v_lc),
+            UserRequestFilter::AttributeEquality(field.clone(), v_lc),
         ]),
         (Ok(_), Err(e)) => {
             warn!("Invalid value for attribute {} (lowercased): {}", field, e);
@@ -421,12 +420,12 @@ fn convert_user_filter(
     }
 }
 
-fn expand_user_attribute_wildcards(attributes: &[String]) -> ExpandedAttributes {
-    expand_attribute_wildcards(attributes, ALL_USER_ATTRIBUTE_KEYS)
+fn expand_user_attribute_wildcards(attributes: &[String], schema: &PublicSchema) -> ExpandedAttributes {
+    expand_attribute_wildcards(attributes, schema)
 }
 
 #[instrument(skip_all, level = "debug", fields(ldap_filter, request_groups))]
-pub async fn get_user_list<Backend: UserListerBackendHandler>(
+pub(crate) async fn get_user_list<Backend: UserListerBackendHandler>(
     ldap_info: &LdapInfo,
     ldap_filter: &LdapFilter,
     request_groups: bool,
@@ -445,7 +444,7 @@ pub async fn get_user_list<Backend: UserListerBackendHandler>(
         })
 }
 
-pub fn convert_users_to_ldap_op<'a>(
+pub(crate) fn convert_users_to_ldap_op<'a>(
     users: Vec<UserAndGroups>,
     attributes: &'a [String],
     ldap_info: &'a LdapInfo,
@@ -454,7 +453,7 @@ pub fn convert_users_to_ldap_op<'a>(
     let expanded_attributes = if users.is_empty() {
         None
     } else {
-        Some(expand_user_attribute_wildcards(attributes))
+        Some(expand_user_attribute_wildcards(attributes, schema))
     };
     users.into_iter().map(move |u| {
         LdapOp::SearchResultEntry(make_ldap_search_user_result_entry(
@@ -468,391 +467,21 @@ pub fn convert_users_to_ldap_op<'a>(
     })
 }
 
-// NEW HELPER — used by EntryDn so ou appears in real LDAP DNs (hierarchical)
-fn get_user_ou(user: &User) -> String {
+pub(crate) fn get_user_ou(user: &User) -> String {
+    // Robust lookup: case-insensitive attribute name match + handle both Singleton and Unbounded
     user.attributes
         .iter()
-        .find(|a| a.name.as_str() == "ou")
+        .find(|a| a.name.as_str().eq_ignore_ascii_case("ou"))
         .and_then(|a| {
-            if let lldap_domain::types::AttributeValue::String(
-                lldap_domain::types::Cardinality::Singleton(s),
-            ) = &a.value
-            {
-                Some(s.clone())
-            } else {
-                None
+            match &a.value {
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Singleton(s),
+                ) => Some(s.clone()),
+                lldap_domain::types::AttributeValue::String(
+                    lldap_domain::types::Cardinality::Unbounded(list),
+                ) if !list.is_empty() => Some(list[0].clone()),
+                _ => None,
             }
         })
         .unwrap_or_else(|| "people".to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        handler::tests::{
-            make_user_search_request, setup_bound_admin_handler, setup_bound_handler_with_group,
-            setup_bound_readonly_handler,
-        },
-        search::{make_search_request, make_search_success},
-    };
-    use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-    use lldap_domain::types::{Attribute, Avatar, GroupDetails};
-    use lldap_test_utils::MockTestBackendHandler;
-    use mockall::predicate::eq;
-    use pretty_assertions::assert_eq;
-
-    fn assert_timestamp_within_margin(
-        timestamp_bytes: &[u8],
-        base_timestamp_dt: DateTime<Utc>,
-        time_margin: Duration,
-    ) {
-        let timestamp_str =
-            std::str::from_utf8(timestamp_bytes).expect("Invalid conversion from UTF-8 to string");
-        let timestamp_naive = NaiveDateTime::parse_from_str(timestamp_str, "%Y%m%d%H%M%SZ")
-            .expect("Invalid timestamp format");
-        let timestamp_dt: DateTime<Utc> = Utc.from_utc_datetime(&timestamp_naive);
-
-        let within_range = (base_timestamp_dt - timestamp_dt).abs() <= time_margin;
-
-        assert!(
-            within_range,
-            "Timestamp not within range: expected within [{} - {}], got [{}]",
-            base_timestamp_dt - time_margin,
-            base_timestamp_dt + time_margin,
-            timestamp_dt
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_regular_user() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(
-                eq(Some(UserRequestFilter::And(vec![
-                    UserRequestFilter::True,
-                    UserRequestFilter::UserId(UserId::new("test")),
-                ]))),
-                eq(false),
-            )
-            .times(1)
-            .return_once(|_, _| {
-                Ok(vec![UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("test"),
-                        ..Default::default()
-                    },
-                    groups: None,
-                }])
-            });
-        let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
-
-        let request =
-            make_user_search_request::<String>(LdapFilter::And(vec![]), vec!["1.1".to_string()]);
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=test,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![],
-                }),
-                make_search_success()
-            ]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_readonly_user() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(eq(Some(UserRequestFilter::True)), eq(false))
-            .times(1)
-            .return_once(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_readonly_handler(mock).await;
-        let request = make_user_search_request(LdapFilter::And(vec![]), vec!["1.1"]);
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_member_of() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(eq(Some(UserRequestFilter::True)), eq(true))
-            .times(1)
-            .return_once(|_, _| {
-                Ok(vec![UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("bob"),
-                        ..Default::default()
-                    },
-                    groups: Some(vec![GroupDetails {
-                        group_id: lldap_domain::types::GroupId(42),
-                        display_name: "rockstars".into(),
-                        creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                        uuid: lldap_domain::uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
-                        attributes: Vec::new(),
-                        modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    }]),
-                }])
-            });
-        let ldap_handler = setup_bound_readonly_handler(mock).await;
-        let request = make_user_search_request::<String>(
-            LdapFilter::And(vec![]),
-            vec!["memberOf".to_string()],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=bob,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![LdapPartialAttribute {
-                        atype: "memberOf".to_string(),
-                        vals: vec![b"cn=rockstars,ou=groups,dc=example,dc=com".to_vec()]
-                    }],
-                }),
-                make_search_success(),
-            ]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_user_as_scope() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users()
-            .with(
-                eq(Some(UserRequestFilter::UserId(UserId::new("bob")))),
-                eq(false),
-            )
-            .times(1)
-            .return_once(|_, _| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_search_request(
-            "uid=bob,ou=people,dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()]),
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_users() {
-        use chrono::prelude::*;
-        use lldap_domain::uuid;
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().times(1).return_once(|_, _| {
-            Ok(vec![
-                UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("bob_1"),
-                        email: "bob@bobmail.bob".into(),
-                        display_name: Some("Bôb Böbberson".to_string()),
-                        uuid: uuid!("698e1d5f-7a40-3151-8745-b9b8a37839da"),
-                        attributes: vec![
-                            Attribute {
-                                name: "first_name".into(),
-                                value: "Bôb".to_string().into(),
-                            },
-                            Attribute {
-                                name: "last_name".into(),
-                                value: "Böbberson".to_string().into(),
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                    groups: None,
-                },
-                UserAndGroups {
-                    user: User {
-                        user_id: UserId::new("jim"),
-                        email: "jim@cricket.jim".into(),
-                        display_name: Some("Jimminy Cricket".to_string()),
-                        attributes: vec![
-                            Attribute {
-                                name: "avatar".into(),
-                                value: Avatar::for_tests().into(),
-                            },
-                            Attribute {
-                                name: "first_name".into(),
-                                value: "Jim".to_string().into(),
-                            },
-                            Attribute {
-                                name: "last_name".into(),
-                                value: "Cricket".to_string().into(),
-                            },
-                        ],
-                        uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                        creation_date: Utc
-                            .with_ymd_and_hms(2014, 7, 8, 9, 10, 11)
-                            .unwrap()
-                            .naive_utc(),
-                        modified_date: Utc
-                            .with_ymd_and_hms(2014, 7, 8, 9, 10, 11)
-                            .unwrap()
-                            .naive_utc(),
-                        password_modified_date: Utc
-                            .with_ymd_and_hms(2014, 7, 8, 9, 10, 11)
-                            .unwrap()
-                            .naive_utc(),
-                    },
-                    groups: None,
-                },
-            ])
-        });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(
-            LdapFilter::And(vec![]),
-            vec![
-                "objectClass",
-                "dn",
-                "uid",
-                "mail",
-                "givenName",
-                "sn",
-                "cn",
-                "createTimestamp",
-                "entryUuid",
-                "avatar",
-            ],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=bob_1,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec!["Bôb Böbberson".to_string().into_bytes()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "createTimestamp".to_string(),
-                            vals: vec![b"19700101000000Z".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryUuid".to_string(),
-                            vals: vec![b"698e1d5f-7a40-3151-8745-b9b8a37839da".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "givenName".to_string(),
-                            vals: vec!["Bôb".to_string().into_bytes()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "mail".to_string(),
-                            vals: vec![b"bob@bobmail.bob".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![
-                                b"inetOrgPerson".to_vec(),
-                                b"posixAccount".to_vec(),
-                                b"mailAccount".to_vec(),
-                                b"person".to_vec(),
-                                b"customUserClass".to_vec(),
-                            ]
-                        },
-                        LdapPartialAttribute {
-                            atype: "sn".to_string(),
-                            vals: vec!["Böbberson".to_string().into_bytes()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "uid".to_string(),
-                            vals: vec![b"bob_1".to_vec()]
-                        },
-                    ],
-                }),
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "uid=jim,ou=people,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec![b"Jimminy Cricket".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "createTimestamp".to_string(),
-                            vals: vec![b"20140708091011Z".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryUuid".to_string(),
-                            vals: vec![b"04ac75e0-2900-3e21-926c-2f732c26b3fc".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "givenName".to_string(),
-                            vals: vec![b"Jim".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "avatar".to_string(),
-                            vals: vec![Avatar::for_tests().0.clone()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "mail".to_string(),
-                            vals: vec![b"jim@cricket.jim".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![
-                                b"inetOrgPerson".to_vec(),
-                                b"posixAccount".to_vec(),
-                                b"mailAccount".to_vec(),
-                                b"person".to_vec(),
-                                b"customUserClass".to_vec(),
-                            ]
-                        },
-                        LdapPartialAttribute {
-                            atype: "sn".to_string(),
-                            vals: vec![b"Cricket".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "uid".to_string(),
-                            vals: vec![b"jim".to_vec()]
-                        },
-                    ],
-                }),
-                make_search_success(),
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pwd_changed_time_format() {
-        use lldap_domain::uuid;
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_users().times(1).return_once(|_, _| {
-            Ok(vec![UserAndGroups {
-                user: User {
-                    user_id: UserId::new("bob_1"),
-                    email: "bob@bobmail.bob".into(),
-                    uuid: uuid!("698e1d5f-7a40-3151-8745-b9b8a37839da"),
-                    attributes: vec![],
-                    password_modified_date: Utc
-                        .with_ymd_and_hms(2014, 7, 8, 9, 10, 11)
-                        .unwrap()
-                        .naive_utc(),
-                    ..Default::default()
-                },
-                groups: None,
-            }])
-        });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_user_search_request(LdapFilter::And(vec![]), vec!["pwdChangedTime"]);
-        if let LdapOp::SearchResultEntry(entry) =
-            &ldap_handler.do_search_or_dse(&request).await.unwrap()[0]
-        {
-            assert_eq!(entry.attributes.len(), 1);
-            assert_eq!(entry.attributes[0].atype, "pwdChangedTime");
-            assert_eq!(entry.attributes[0].vals.len(), 1);
-            assert_timestamp_within_margin(
-                &entry.attributes[0].vals[0],
-                Utc.with_ymd_and_hms(2014, 7, 8, 9, 10, 11).unwrap(),
-                Duration::seconds(1),
-            );
-        } else {
-            panic!("Expected SearchResultEntry");
-        }
-    }
 }

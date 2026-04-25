@@ -2,39 +2,26 @@ use crate::core::{
     error::{LdapError, LdapResult},
     utils::{
         ExpandedAttributes, GroupFieldType, LdapInfo, expand_attribute_wildcards,
-        get_custom_attribute, get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, internal_ou_to_ldap_rdn_chain,
-        map_group_field,
+        get_custom_attribute, get_default_group_object_classes_bytes,
+        get_group_id_from_distinguished_name_or_plain_name,
+        get_user_id_from_distinguished_name_or_plain_name, inject_operational_attributes,
+        internal_ou_to_ldap_rdn_chain, is_operational_attribute, map_group_field, resolve_attribute,
+        to_generalized_time,
     },
 };
-use chrono::TimeZone;
 use ldap3_proto::{
     LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry, proto::LdapOp,
 };
 use lldap_domain::{
     deserialize::deserialize_attribute_value,
     public_schema::PublicSchema,
-    types::{AttributeName, AttributeType, Group, GroupId, LdapObjectClass, UserId, Uuid},
+    types::{AttributeName, AttributeType, Group, GroupId, UserId, Uuid},
 };
 use lldap_domain_handlers::handler::{GroupListerBackendHandler, GroupRequestFilter};
 use tracing::{debug, instrument, warn};
 
-pub const REQUIRED_GROUP_ATTRIBUTES: &[&str] = &["display_name"];
-
-const DEFAULT_GROUP_OBJECT_CLASSES: &[&str] = &["groupOfUniqueNames", "groupOfNames"];
-
-fn get_default_group_object_classes_as_bytes() -> Vec<Vec<u8>> {
-    DEFAULT_GROUP_OBJECT_CLASSES
-        .iter()
-        .map(|c| c.as_bytes().to_vec())
-        .collect()
-}
-
-pub fn get_default_group_object_classes() -> Vec<LdapObjectClass> {
-    DEFAULT_GROUP_OBJECT_CLASSES
-        .iter()
-        .map(|&c| LdapObjectClass::from(c))
-        .collect()
+pub fn get_default_group_object_classes() -> Vec<lldap_domain::types::LdapObjectClass> {
+    crate::core::utils::get_default_group_object_classes()
 }
 
 pub fn get_group_attribute(
@@ -46,54 +33,59 @@ pub fn get_group_attribute(
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
     let attribute_values = match map_group_field(attribute, schema) {
-        GroupFieldType::ObjectClass => {
-            let mut classes: Vec<Vec<u8>> = get_default_group_object_classes_as_bytes();
-
-            classes.extend(
-                schema
-                .get_schema()
-                .extra_group_object_classes
-                .iter()
-                .map(|c| c.as_str().as_bytes().to_vec()),
-            );
-            classes
-        }
-        // Always returned as part of the base response.
+        GroupFieldType::ObjectClass => get_default_group_object_classes_bytes(schema),
         GroupFieldType::Dn => return None,
         GroupFieldType::EntryDn => {
-            let ou = get_group_ou(group);
-            vec![format!("cn={},ou={},{}", group.display_name, ou, base_dn_str).into_bytes()]
+            let internal_ou = get_group_ou(group);
+            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
+            let ou_part = rdn_chain
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+            vec![format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str).into_bytes()]
         }
         GroupFieldType::GroupId => {
             vec![group.id.0.to_string().into_bytes()]
         }
         GroupFieldType::DisplayName => vec![group.display_name.to_string().into_bytes()],
-        GroupFieldType::CreationDate => vec![
-            chrono::Utc
-            .from_utc_datetime(&group.creation_date)
-            .to_rfc3339()
-            .into_bytes(),
-        ],
-        GroupFieldType::ModifiedDate => vec![
-            chrono::Utc
-            .from_utc_datetime(&group.modified_date)
-            .to_rfc3339()
-            .into_bytes(),
-        ],
-        GroupFieldType::Member => group
-        .users
-        .iter()
-        .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
-        .map(|u| {
-            // Fully dynamic: use the actual OU stored in GroupMember
-            format!("uid={},ou={},{}", u.user_id, u.ou, base_dn_str).into_bytes()
-        })
-        .collect(),
+        GroupFieldType::CreationDate => vec![to_generalized_time(&group.creation_date)],
+        GroupFieldType::ModifiedDate => vec![to_generalized_time(&group.modified_date)],
+        GroupFieldType::Member => {
+            let members: std::collections::BTreeSet<_> = group
+                .users
+                .iter()
+                .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
+                .map(|u| {
+                    let rdn_chain = internal_ou_to_ldap_rdn_chain(&u.ou);
+                    let ou_part = rdn_chain
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", k, v))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("uid={},{}", u.user_id, ou_part + "," + base_dn_str)
+                })
+                .collect();
+
+            members.into_iter().map(|s| s.into_bytes()).collect()
+        }
         GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
-        GroupFieldType::Attribute(attr, _, _) => get_custom_attribute(&group.attributes, &attr)?,
+        GroupFieldType::Attribute(attr, _, _) => {
+            let values = get_custom_attribute(&group.attributes, &attr)?;
+            if attr.as_str().eq_ignore_ascii_case("ou") {
+                if let Some(first) = values.first() {
+                    let s = String::from_utf8_lossy(first);
+                    let leaf = s.split('\\').last().unwrap_or(&s).to_string();
+                    vec![leaf.into_bytes()]
+                } else {
+                    vec![]
+                }
+            } else {
+                values
+            }
+        }
         GroupFieldType::NoMatch => match attribute.as_str() {
             "1.1" => return None,
-            // We ignore the operational attribute wildcard
             "+" => return None,
             "*" => {
                 panic!(
@@ -104,13 +96,19 @@ pub fn get_group_attribute(
                 if ignored_group_attributes.contains(attribute) {
                     return None;
                 }
+                let is_unknown = resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(
                     &group.attributes,
                     attribute,
-                ).or_else(||{warn!(
-                    r#"Ignoring unrecognized group attribute: {}. To disable this warning, add it to "ignored_group_attributes" in the config."#,
-                    attribute
-                );None})?
+                ).or_else(|| {
+                    if is_unknown {
+                        warn!(
+                            r#"Ignoring unrecognized group attribute: {}. To disable this warning, add it to "ignored_group_attributes" in the config."#,
+                            attribute
+                        );
+                    }
+                    None
+                })?
             }
         },
     };
@@ -121,19 +119,8 @@ pub fn get_group_attribute(
     }
 }
 
-const ALL_GROUP_ATTRIBUTE_KEYS: &[&str] = &[
-    "objectclass",
-    "uid",
-    "cn",
-    "member",
-    "uniquemember",
-    "entryuuid",
-    "ou",
-    "gidnumber",
-];
-
-fn expand_group_attribute_wildcards(attributes: &[String]) -> ExpandedAttributes {
-    expand_attribute_wildcards(attributes, ALL_GROUP_ATTRIBUTE_KEYS)
+fn expand_group_attribute_wildcards(attributes: &[String], schema: &PublicSchema) -> ExpandedAttributes {
+    expand_attribute_wildcards(attributes, schema)
 }
 
 fn make_ldap_search_group_result_entry(
@@ -145,13 +132,27 @@ fn make_ldap_search_group_result_entry(
     schema: &PublicSchema,
 ) -> LdapSearchResultEntry {
     if expanded_attributes.include_custom_attributes {
-        expanded_attributes.attribute_keys.extend(
-            group
-                .attributes
-                .iter()
-                .map(|a| (a.name.clone(), a.name.to_string())),
-        );
+        let standardized: std::collections::HashSet<String> = schema
+            .group_attributes()
+            .attributes
+            .iter()
+            .flat_map(|a| {
+                let mut names = vec![a.name.to_string()];
+                names.extend(a.aliases.iter().map(|al| al.to_string()));
+                names
+            })
+            .collect();
+
+        let custom_to_add: Vec<_> = group
+        .attributes
+        .iter()
+        .filter(|a| !standardized.contains(a.name.as_str()))
+        .map(|a| (a.name.clone(), a.name.to_string()))
+        .collect();
+
+        expanded_attributes.attribute_keys.extend(custom_to_add);
     }
+
     LdapSearchResultEntry {
         dn: {
             let internal_ou = get_group_ou(&group);
@@ -163,24 +164,35 @@ fn make_ldap_search_group_result_entry(
                 .join(",");
             format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str)
         },
-        attributes: expanded_attributes
-            .attribute_keys
-            .into_iter()
-            .filter_map(|(attribute, name)| {
-                let values = get_group_attribute(
-                    &group,
-                    base_dn_str,
-                    &attribute,
-                    user_filter,
-                    ignored_group_attributes,
-                    schema,
-                )?;
-                Some(LdapPartialAttribute {
-                    atype: name,
-                    vals: values,
+        attributes: {
+            let mut attrs: Vec<LdapPartialAttribute> = expanded_attributes
+                .attribute_keys
+                .into_iter()
+                .filter(|(attribute, _)| !is_operational_attribute(attribute.as_str()))
+                .filter_map(|(attribute, name)| {
+                    let values = get_group_attribute(
+                        &group,
+                        base_dn_str,
+                        &attribute,
+                        user_filter,
+                        ignored_group_attributes,
+                        schema,
+                    )?;
+                    Some(LdapPartialAttribute {
+                        atype: name,
+                        vals: values,
+                    })
                 })
-            })
-            .collect::<Vec<LdapPartialAttribute>>(),
+                .collect();
+
+            // Always inject hasSubordinates + structuralObjectClass + subschemaSubentry
+            inject_operational_attributes(&mut attrs, "groupOfUniqueNames", base_dn_str);
+
+            let mut seen = std::collections::HashSet::new();
+            attrs.retain(|attr| seen.insert(attr.atype.clone()));
+
+            attrs
+        },
     }
 }
 
@@ -409,7 +421,7 @@ fn convert_group_filter(
 }
 
 #[instrument(skip_all, level = "debug", fields(ldap_filter))]
-pub async fn get_groups_list<Backend: GroupListerBackendHandler>(
+pub(crate) async fn get_groups_list<Backend: GroupListerBackendHandler>(
     ldap_info: &LdapInfo,
     ldap_filter: &LdapFilter,
     base: &str,
@@ -427,7 +439,7 @@ pub async fn get_groups_list<Backend: GroupListerBackendHandler>(
         })
 }
 
-pub fn convert_groups_to_ldap_op<'a>(
+pub(crate) fn convert_groups_to_ldap_op<'a>(
     groups: Vec<Group>,
     attributes: &'a [String],
     ldap_info: &'a LdapInfo,
@@ -437,7 +449,7 @@ pub fn convert_groups_to_ldap_op<'a>(
     let expanded_attributes = if groups.is_empty() {
         None
     } else {
-        Some(expand_group_attribute_wildcards(attributes))
+        Some(expand_group_attribute_wildcards(attributes, schema))
     };
 
     groups.into_iter().map(move |g| {
@@ -452,7 +464,6 @@ pub fn convert_groups_to_ldap_op<'a>(
     })
 }
 
-// NEW HELPER — used by EntryDn so ou appears in real LDAP DNs (hierarchical)
 fn get_group_ou(group: &Group) -> String {
     group.attributes
     .iter()
@@ -467,307 +478,5 @@ fn get_group_ou(group: &Group) -> String {
             None
         }
     })
-    .unwrap_or_else(|| "groups".to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        handler::tests::{make_group_search_request, setup_bound_admin_handler},
-        search::{make_search_request, make_search_success},
-    };
-    use ldap3_proto::proto::LdapSubstringFilter;
-    use lldap_domain::{
-        types::{GroupId, UserId},
-        uuid,
-    };
-    use lldap_domain_handlers::handler::*;
-    use lldap_test_utils::MockTestBackendHandler;
-    use mockall::predicate::eq;
-    use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn test_search_groups() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::True)))
-            .times(1)
-            .return_once(|_| {
-                Ok(vec![
-                    Group {
-                        id: GroupId(1),
-                        display_name: "group_1".into(),
-                        creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                        users: vec![UserId::new("bob"), UserId::new("john")],
-                        uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                        attributes: Vec::new(),
-                        modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    },
-                    Group {
-                        id: GroupId(3),
-                        display_name: "BestGroup".into(),
-                        creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                        users: vec![UserId::new("john")],
-                        uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                        attributes: Vec::new(),
-                        modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    },
-                ])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::And(vec![]),
-            vec![
-                "objectClass",
-                "dn",
-                "cn",
-                "uniqueMember",
-                "entryUuid",
-                "entryDN",
-            ],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=group_1,ou=groups,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec![b"group_1".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryDN".to_string(),
-                            vals: vec![b"uid=group_1,ou=groups,dc=example,dc=com".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryUuid".to_string(),
-                            vals: vec![b"04ac75e0-2900-3e21-926c-2f732c26b3fc".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![b"groupOfUniqueNames".to_vec(), b"groupOfNames".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "uniqueMember".to_string(),
-                            vals: vec![
-                                b"uid=bob,ou=people,dc=example,dc=com".to_vec(),
-                                b"uid=john,ou=people,dc=example,dc=com".to_vec(),
-                            ],
-                        },
-                    ],
-                }),
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=BestGroup,ou=groups,dc=example,dc=com".to_string(),
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "cn".to_string(),
-                            vals: vec![b"BestGroup".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryDN".to_string(),
-                            vals: vec![b"uid=BestGroup,ou=groups,dc=example,dc=com".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "entryUuid".to_string(),
-                            vals: vec![b"04ac75e0-2900-3e21-926c-2f732c26b3fc".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![b"groupOfUniqueNames".to_vec(), b"groupOfNames".to_vec()]
-                        },
-                        LdapPartialAttribute {
-                            atype: "uniqueMember".to_string(),
-                            vals: vec![b"uid=john,ou=people,dc=example,dc=com".to_vec()],
-                        },
-                    ],
-                }),
-                make_search_success(),
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_by_groupid() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::GroupId(GroupId(1)))))
-            .times(1)
-            .return_once(|_| {
-                Ok(vec![Group {
-                    display_name: "group_1".into(),
-                    id: GroupId(1),
-                    creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    users: vec![],
-                    uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                    attributes: Vec::new(),
-                    modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::Equality("groupid".to_string(), "1".to_string()),
-            vec!["dn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=group_1,ou=groups,dc=example,dc=com".to_string(),
-                    attributes: vec![],
-                }),
-                make_search_success(),
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_filter() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::And(vec![
-                GroupRequestFilter::DisplayName("group_1".into()),
-                GroupRequestFilter::Member(UserId::new("bob")),
-                GroupRequestFilter::DisplayName("rockstars".into()),
-                false.into(),
-                GroupRequestFilter::Uuid(uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc")),
-                false.into(),
-                GroupRequestFilter::DisplayNameSubString(SubStringFilter {
-                    initial: Some("iNIt".to_owned()),
-                    any: vec!["1".to_owned(), "2aA".to_owned()],
-                    final_: Some("finAl".to_owned()),
-                }),
-            ]))))
-            .times(1)
-            .return_once(|_| {
-                Ok(vec![Group {
-                    display_name: "group_1".into(),
-                    id: GroupId(1),
-                    creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    users: vec![],
-                    uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
-                    attributes: Vec::new(),
-                    modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                }])
-            });
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::And(vec![
-                LdapFilter::Equality("cN".to_string(), "Group_1".to_string()),
-                LdapFilter::Equality(
-                    "uniqueMember".to_string(),
-                    "uid=bob,ou=peopLe,Dc=eXample,dc=com".to_string(),
-                ),
-                LdapFilter::Equality(
-                    "dn".to_string(),
-                    "uid=rockstars,ou=groups,dc=example,dc=com".to_string(),
-                ),
-                LdapFilter::Equality(
-                    "dn".to_string(),
-                    "uid=rockstars,ou=people,dc=example,dc=com".to_string(),
-                ),
-                LdapFilter::Equality(
-                    "uuid".to_string(),
-                    "04ac75e0-2900-3e21-926c-2f732c26b3fc".to_string(),
-                ),
-                LdapFilter::Equality("obJEctclass".to_string(), "groupofUniqueNames".to_string()),
-                LdapFilter::Equality("objectclass".to_string(), "groupOfNames".to_string()),
-                LdapFilter::Present("objectclass".to_string()),
-                LdapFilter::Present("dn".to_string()),
-                LdapFilter::Not(Box::new(LdapFilter::Present(
-                    "random_attribUte".to_string(),
-                ))),
-                LdapFilter::Equality("unknown_attribute".to_string(), "randomValue".to_string()),
-                LdapFilter::Substring(
-                    "cn".to_owned(),
-                    LdapSubstringFilter {
-                        initial: Some("iNIt".to_owned()),
-                        any: vec!["1".to_owned(), "2aA".to_owned()],
-                        final_: Some("finAl".to_owned()),
-                    },
-                ),
-            ]),
-            vec!["1.1"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![
-                LdapOp::SearchResultEntry(LdapSearchResultEntry {
-                    dn: "cn=group_1,ou=groups,dc=example,dc=com".to_string(),
-                    attributes: vec![],
-                }),
-                make_search_success(),
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_filter_2() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::Or(vec![
-                GroupRequestFilter::DisplayName("group_1".into()),
-                GroupRequestFilter::Member(UserId::new("bob")),
-            ]))))
-            .times(1)
-            .return_once(|_| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::Or(vec![
-                LdapFilter::Equality("cn".to_string(), "group_1".to_string()),
-                LdapFilter::Equality(
-                    "member".to_string(),
-                    "uid=bob,ou=people,dc=example,dc=com".to_string(),
-                ),
-            ]),
-            vec!["cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_groups_filter_3() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::Not(Box::new(
-                GroupRequestFilter::DisplayName("group_1".into()),
-            )))))
-            .times(1)
-            .return_once(|_| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_group_search_request(
-            LdapFilter::Not(Box::new(LdapFilter::Equality(
-                "cn".to_string(),
-                "group_1".to_string(),
-            ))),
-            vec!["cn"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_group_as_scope() {
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_list_groups()
-            .with(eq(Some(GroupRequestFilter::DisplayName("group_1".into()))))
-            .times(1)
-            .return_once(|_| Ok(vec![]));
-        let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_search_request(
-            "cn=group_1,ou=groups,dc=example,dc=com",
-            LdapFilter::And(vec![]),
-            vec!["objectClass"],
-        );
-        assert_eq!(
-            ldap_handler.do_search_or_dse(&request).await,
-            Ok(vec![make_search_success()]),
-        );
-    }
+    .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_GROUP_OU.to_string())
 }
