@@ -1,15 +1,12 @@
-use crate::core::{
-    error::{LdapError, LdapResult},
-    utils::{
-        ExpandedAttributes, LdapInfo, UserFieldType, expand_attribute_wildcards,
-        get_custom_attribute, get_default_user_object_classes_bytes,
-        get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, get_ou_from_attributes,
-        inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute,
-        map_user_field, resolve_attribute, to_generalized_time, DEFAULT_PRIMARY_USER_OU,
+use crate::{
+    attributes::get_default_user_object_classes_bytes,
+    core::{
+        error::{LdapError, LdapResult},
+        utils::{get_custom_attribute, get_ou_from_attributes, inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute, to_generalized_time, DEFAULT_PRIMARY_USER_OU, LdapInfo, UserFieldType, ExpandedAttributes},
     },
+    dn::{get_group_id_from_distinguished_name_or_plain_name, get_user_id_from_distinguished_name_or_plain_name},
+    schema::{get_schema_manager, SchemaManager},
 };
-
 use ldap3_proto::{
     LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry, proto::LdapOp,
 };
@@ -35,14 +32,14 @@ pub fn get_user_attribute(
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
     let attribute = AttributeName::from(attribute.as_str());
-    let attribute_values = match map_user_field(&attribute, schema) {
+    let attribute_values = match SchemaManager::map_user_field(&attribute, schema) {
         UserFieldType::ObjectClass => get_default_user_object_classes_bytes(schema),
         UserFieldType::Dn => return None,
         UserFieldType::EntryDn => {
             let internal_ou = get_user_ou(user);
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain
-                .into_iter()
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
@@ -122,7 +119,7 @@ pub fn get_user_attribute(
                 if ignored_user_attributes.contains(&attribute) {
                     return None;
                 }
-                let is_unknown = resolve_attribute(attribute.as_str()).is_none();
+                let is_unknown = SchemaManager::resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(&user.attributes, &attribute).or_else(|| {
                     if is_unknown {
                         warn!(
@@ -142,7 +139,7 @@ pub fn get_user_attribute(
     }
 }
 
-fn make_ldap_search_user_result_entry(
+pub fn make_ldap_search_user_result_entry(
     user: User,
     base_dn_str: &str,
     mut expanded_attributes: ExpandedAttributes,
@@ -176,7 +173,7 @@ fn make_ldap_search_user_result_entry(
             let internal_ou = get_user_ou(&user);
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain
-                .into_iter()
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
@@ -203,7 +200,6 @@ fn make_ldap_search_user_result_entry(
                 })
                 .collect();
 
-            // Always inject hasSubordinates + structuralObjectClass + subschemaSubentry
             inject_operational_attributes(&mut attrs, "inetOrgPerson", base_dn_str);
 
             let mut seen = std::collections::HashSet::new();
@@ -290,7 +286,7 @@ fn convert_user_filter(
         LdapFilter::Equality(field, value) => {
             let field = AttributeName::from(field.as_str());
             let value_lc = value.to_ascii_lowercase();
-            match map_user_field(&field, schema) {
+            match SchemaManager::map_user_field(&field, schema) {
                 UserFieldType::PrimaryField(UserColumn::UserId) => {
                     Ok(UserRequestFilter::UserId(UserId::new(&value_lc)))
                 }
@@ -341,7 +337,7 @@ fn convert_user_filter(
         }
         LdapFilter::GreaterOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match map_user_field(&field, schema) {
+            match SchemaManager::map_user_field(&field, schema) {
                 UserFieldType::PrimaryField(f)
                     if matches!(f, UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate) =>
                 {
@@ -360,7 +356,7 @@ fn convert_user_filter(
         }
         LdapFilter::LessOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match map_user_field(&field, schema) {
+            match SchemaManager::map_user_field(&field, schema) {
                 UserFieldType::PrimaryField(f)
                     if matches!(f, UserColumn::CreationDate | UserColumn::ModifiedDate | UserColumn::PasswordModifiedDate) =>
                 {
@@ -379,7 +375,7 @@ fn convert_user_filter(
         }
         LdapFilter::Present(field) => {
             let field = AttributeName::from(field.as_str());
-            Ok(match map_user_field(&field, schema) {
+            Ok(match SchemaManager::map_user_field(&field, schema) {
                 UserFieldType::Attribute(name, _, _) => {
                     UserRequestFilter::CustomAttributePresent(name)
                 }
@@ -389,7 +385,7 @@ fn convert_user_filter(
         }
         LdapFilter::Substring(field, substring_filter) => {
             let field = AttributeName::from(field.as_str());
-            match map_user_field(&field, schema) {
+            match SchemaManager::map_user_field(&field, schema) {
                 UserFieldType::PrimaryField(UserColumn::UserId) => Ok(
                     UserRequestFilter::UserIdSubString(substring_filter.clone().into()),
                 ),
@@ -450,7 +446,7 @@ pub(crate) fn convert_users_to_ldap_op<'a>(
     let expanded_attributes = if users.is_empty() {
         None
     } else {
-        Some(expand_attribute_wildcards(attributes, schema))
+        Some(get_schema_manager().expand_attribute_wildcards(attributes, schema))
     };
     users.into_iter().map(move |u| {
         LdapOp::SearchResultEntry(make_ldap_search_user_result_entry(

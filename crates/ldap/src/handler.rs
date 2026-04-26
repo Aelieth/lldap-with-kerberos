@@ -8,7 +8,7 @@ use crate::{
     create, delete, modify,
     password::{self, do_password_modification},
     search::{
-        self, is_root_dse_request, is_subschema_entry_request, make_ldap_subschema_entry,
+        is_root_dse_request, is_subschema_entry_request, make_ldap_subschema_entry,
         make_search_error, make_search_request, make_search_success, root_dse_response,
     },
 };
@@ -134,7 +134,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
             debug!("Schema request");
             // Now generated dynamically from PublicSchema (single source of truth)
             return Ok(vec![
-                make_ldap_subschema_entry(&PublicSchema::get(), &self.ldap_info.base_dn_str),
+                make_ldap_subschema_entry(&crate::schema::get_schema_manager(), &self.ldap_info.base_dn_str),
                       make_search_success(),
             ]);
         }
@@ -159,7 +159,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         .unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]);
 
         debug!(?request.base, ?request.scope, "Handler calling do_search");
-        search::do_search(&backend_handler, self.ldap_info, request, &allowed_ous).await
+        crate::search::do_search(&backend_handler, self.ldap_info, request, &allowed_ous).await
     }
 
     #[instrument(skip_all, level = "debug", fields(dn = %request.dn))]

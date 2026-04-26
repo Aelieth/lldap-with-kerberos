@@ -1,13 +1,11 @@
-use crate::core::{
-    error::{LdapError, LdapResult},
-    utils::{
-        ExpandedAttributes, GroupFieldType, LdapInfo, expand_attribute_wildcards,
-        get_custom_attribute, get_default_group_object_classes_bytes,
-        get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, get_ou_from_attributes,
-        inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute,
-        map_group_field, resolve_attribute, to_generalized_time, DEFAULT_PRIMARY_GROUP_OU,
+use crate::{
+    attributes::get_default_group_object_classes_bytes,
+    core::{
+        error::{LdapError, LdapResult},
+        utils::{get_custom_attribute, get_ou_from_attributes, inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute, to_generalized_time, DEFAULT_PRIMARY_GROUP_OU, LdapInfo, GroupFieldType, ExpandedAttributes},
     },
+    dn::{get_group_id_from_distinguished_name_or_plain_name, get_user_id_from_distinguished_name_or_plain_name},
+    schema::{get_schema_manager, SchemaManager},
 };
 use ldap3_proto::{
     LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry, proto::LdapOp,
@@ -32,14 +30,14 @@ pub fn get_group_attribute(
     ignored_group_attributes: &[AttributeName],
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
-    let attribute_values = match map_group_field(attribute, schema) {
+    let attribute_values = match SchemaManager::map_group_field(attribute, schema) {
         GroupFieldType::ObjectClass => get_default_group_object_classes_bytes(schema),
         GroupFieldType::Dn => return None,
         GroupFieldType::EntryDn => {
             let internal_ou = get_group_ou(group);
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain
-                .into_iter()
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
@@ -96,7 +94,7 @@ pub fn get_group_attribute(
                 if ignored_group_attributes.contains(attribute) {
                     return None;
                 }
-                let is_unknown = resolve_attribute(attribute.as_str()).is_none();
+                let is_unknown = SchemaManager::resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(
                     &group.attributes,
                     attribute,
@@ -119,7 +117,7 @@ pub fn get_group_attribute(
     }
 }
 
-fn make_ldap_search_group_result_entry(
+pub fn make_ldap_search_group_result_entry(
     group: Group,
     base_dn_str: &str,
     mut expanded_attributes: ExpandedAttributes,
@@ -154,7 +152,7 @@ fn make_ldap_search_group_result_entry(
             let internal_ou = get_group_ou(&group);
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain
-                .into_iter()
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
@@ -181,7 +179,6 @@ fn make_ldap_search_group_result_entry(
                 })
                 .collect();
 
-            // Always inject hasSubordinates + structuralObjectClass + subschemaSubentry
             inject_operational_attributes(&mut attrs, "groupOfUniqueNames", base_dn_str);
 
             let mut seen = std::collections::HashSet::new();
@@ -236,7 +233,7 @@ fn convert_group_filter(
         LdapFilter::Equality(field, value) => {
             let field = AttributeName::from(field.as_str());
             let value_lc = value.to_ascii_lowercase();
-            match map_group_field(&field, schema) {
+            match SchemaManager::map_group_field(&field, schema) {
                 GroupFieldType::GroupId => Ok(value_lc
                     .parse::<i32>()
                     .map(|id| GroupRequestFilter::GroupId(GroupId(id)))
@@ -299,7 +296,7 @@ fn convert_group_filter(
         }
         LdapFilter::GreaterOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match map_group_field(&field, schema) {
+            match SchemaManager::map_group_field(&field, schema) {
                 GroupFieldType::CreationDate | GroupFieldType::ModifiedDate => {
                     Ok(GroupRequestFilter::GreaterOrEqual(
                         field.as_str().to_string(),
@@ -322,7 +319,7 @@ fn convert_group_filter(
         }
         LdapFilter::LessOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match map_group_field(&field, schema) {
+            match SchemaManager::map_group_field(&field, schema) {
                 GroupFieldType::CreationDate | GroupFieldType::ModifiedDate => {
                     Ok(GroupRequestFilter::LessOrEqual(
                         field.as_str().to_string(),
@@ -386,7 +383,7 @@ fn convert_group_filter(
         }),
         LdapFilter::Present(field) => {
             let field = AttributeName::from(field.as_str());
-            Ok(match map_group_field(&field, schema) {
+            Ok(match SchemaManager::map_group_field(&field, schema) {
                 GroupFieldType::Attribute(name, _, _) => {
                     GroupRequestFilter::CustomAttributePresent(name)
                 }
@@ -396,7 +393,7 @@ fn convert_group_filter(
         }
         LdapFilter::Substring(field, substring_filter) => {
             let field = AttributeName::from(field.as_str());
-            match map_group_field(&field, schema) {
+            match SchemaManager::map_group_field(&field, schema) {
                 GroupFieldType::DisplayName => Ok(GroupRequestFilter::DisplayNameSubString(
                     substring_filter.clone().into(),
                 )),
@@ -445,7 +442,7 @@ pub(crate) fn convert_groups_to_ldap_op<'a>(
     let expanded_attributes = if groups.is_empty() {
         None
     } else {
-        Some(expand_attribute_wildcards(attributes, schema))
+        Some(get_schema_manager().expand_attribute_wildcards(attributes, schema))
     };
 
     groups.into_iter().map(move |g| {
