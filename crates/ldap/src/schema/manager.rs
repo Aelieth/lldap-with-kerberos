@@ -1,6 +1,6 @@
 //! SchemaManager - Single source of truth for all attribute handling.
 
-use super::definitions::{AttributeDefinition, ExpandedAttributes, LogicalAttr};
+use super::definitions::{ExpandedAttributes, LogicalAttr};
 use crate::core::utils::{GroupFieldType, UserFieldType};
 use lldap_domain::public_schema::PublicSchema;
 use lldap_domain::types::{AttributeName, AttributeType};

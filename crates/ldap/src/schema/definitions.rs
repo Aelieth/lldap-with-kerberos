@@ -15,22 +15,35 @@ pub enum LogicalAttr {
 }
 
 #[derive(Clone, Debug)]
-pub struct AttributeDefinition {
-    pub canonical_name: String,
-    pub aliases: Vec<String>,
-    pub attribute_type: AttributeType,
-    pub is_list: bool,
-    pub is_operational: bool,
-    pub is_readonly: bool,
-    pub oid: Option<String>,
-}
-
-#[derive(Clone, Debug)]
 pub struct ExpandedAttributes {
     pub attribute_keys: BTreeMap<AttributeName, String>,
     pub include_custom_attributes: bool,
 }
 
-pub use crate::core::utils::{UserFieldType, GroupFieldType};
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UserFieldType {
+    NoMatch,
+    ObjectClass,
+    MemberOf,
+    Dn,
+    EntryDn,
+    PrimaryField(lldap_domain_model::model::UserColumn),
+    Attribute(AttributeName, AttributeType, bool),
+}
 
-// LogicalAttr is defined above
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupFieldType {
+    NoMatch,
+    GroupId,
+    DisplayName,
+    CreationDate,
+    ModifiedDate,
+    ObjectClass,
+    Dn,
+    EntryDn,
+    Member,
+    Uuid,
+    Attribute(AttributeName, AttributeType, bool),
+}
+
+// UserFieldType and GroupFieldType are defined above (single source of truth — no Copy because AttributeName is not Copy)

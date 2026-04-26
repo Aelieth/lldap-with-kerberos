@@ -5,10 +5,10 @@ use crate::{
         utils::{get_custom_attribute, get_ou_from_attributes, inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute, to_generalized_time, DEFAULT_PRIMARY_GROUP_OU, LdapInfo, GroupFieldType, ExpandedAttributes},
     },
     dn::{get_group_id_from_distinguished_name_or_plain_name, get_user_id_from_distinguished_name_or_plain_name},
-    schema::{get_schema_manager, SchemaManager},
+    schema::SchemaManager,
 };
 use ldap3_proto::{
-    LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry, proto::LdapOp,
+    LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry,
 };
 use lldap_domain::{
     deserialize::deserialize_attribute_value,
@@ -432,30 +432,7 @@ pub(crate) async fn get_groups_list<Backend: GroupListerBackendHandler>(
         })
 }
 
-pub(crate) fn convert_groups_to_ldap_op<'a>(
-    groups: Vec<Group>,
-    attributes: &'a [String],
-    ldap_info: &'a LdapInfo,
-    user_filter: &'a Option<UserId>,
-    schema: &'a PublicSchema,
-) -> impl Iterator<Item = LdapOp> + 'a {
-    let expanded_attributes = if groups.is_empty() {
-        None
-    } else {
-        Some(get_schema_manager().expand_attribute_wildcards(attributes, schema))
-    };
-
-    groups.into_iter().map(move |g| {
-        LdapOp::SearchResultEntry(make_ldap_search_group_result_entry(
-            g,
-            &ldap_info.base_dn_str,
-            expanded_attributes.clone().unwrap(),
-            user_filter,
-            &ldap_info.ignored_group_attributes,
-            schema,
-        ))
-    })
-}
+// convert_groups_to_ldap_op moved to search/results.rs (single source of truth)
 
 fn get_group_ou(group: &Group) -> String {
     get_ou_from_attributes(&group.attributes, DEFAULT_PRIMARY_GROUP_OU)

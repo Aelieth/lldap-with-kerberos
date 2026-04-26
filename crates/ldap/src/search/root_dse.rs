@@ -1,7 +1,6 @@
 //! Root DSE and subschema request handling.
 
-use ldap3_proto::proto::{LdapDerefAliases, LdapOp, LdapResult as LdapResultOp, LdapSearchRequest, LdapSearchScope, OID_PASSWORD_MODIFY, OID_WHOAMI};
-use ldap3_proto::LdapResultCode;
+use ldap3_proto::proto::{LdapOp, LdapSearchRequest, LdapSearchScope, OID_PASSWORD_MODIFY, OID_WHOAMI};
 
 pub fn root_dse_response(base_dn: &str) -> LdapOp {
     let realm = {

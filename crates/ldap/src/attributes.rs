@@ -4,15 +4,14 @@
 //! paths. It acts as a bridge between the core logic and SchemaManager.
 
 use crate::core::utils::{
-    get_custom_attribute, get_ou_from_attributes, inject_operational_attributes,
-    internal_ou_to_ldap_rdn_chain, is_operational_attribute, to_generalized_time,
+    get_ou_from_attributes,
     DEFAULT_PRIMARY_GROUP_OU, DEFAULT_PRIMARY_USER_OU,
 };
 use lldap_domain::{
     public_schema::PublicSchema,
-        types::{AttributeName, Group, GroupDetails, User, UserAndGroups},
+    types::{AttributeName, Group, GroupDetails, User},
 };
-use ldap3_proto::{LdapPartialAttribute, LdapSearchResultEntry};
+use ldap3_proto::LdapSearchResultEntry;
 
 pub use crate::core::utils::{
     get_default_group_object_classes_bytes, get_default_user_object_classes_bytes,

@@ -5,10 +5,10 @@ use crate::{
         utils::{get_custom_attribute, get_ou_from_attributes, inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute, to_generalized_time, DEFAULT_PRIMARY_USER_OU, LdapInfo, UserFieldType, ExpandedAttributes},
     },
     dn::{get_group_id_from_distinguished_name_or_plain_name, get_user_id_from_distinguished_name_or_plain_name},
-    schema::{get_schema_manager, SchemaManager},
+    schema::SchemaManager,
 };
 use ldap3_proto::{
-    LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry, proto::LdapOp,
+    LdapFilter, LdapPartialAttribute, LdapResultCode, LdapSearchResultEntry,
 };
 use lldap_domain::{
     deserialize::deserialize_attribute_value,
@@ -437,28 +437,7 @@ pub(crate) async fn get_user_list<Backend: UserListerBackendHandler>(
         })
 }
 
-pub(crate) fn convert_users_to_ldap_op<'a>(
-    users: Vec<UserAndGroups>,
-    attributes: &'a [String],
-    ldap_info: &'a LdapInfo,
-    schema: &'a PublicSchema,
-) -> impl Iterator<Item = LdapOp> + 'a {
-    let expanded_attributes = if users.is_empty() {
-        None
-    } else {
-        Some(get_schema_manager().expand_attribute_wildcards(attributes, schema))
-    };
-    users.into_iter().map(move |u| {
-        LdapOp::SearchResultEntry(make_ldap_search_user_result_entry(
-            u.user,
-            &ldap_info.base_dn_str,
-            expanded_attributes.clone().unwrap(),
-            u.groups.as_deref(),
-            &ldap_info.ignored_user_attributes,
-            schema,
-        ))
-    })
-}
+// convert_users_to_ldap_op moved to search/results.rs (single source of truth)
 
 pub(crate) fn get_user_ou(user: &User) -> String {
     get_ou_from_attributes(&user.attributes, DEFAULT_PRIMARY_USER_OU)

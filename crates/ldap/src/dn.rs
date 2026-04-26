@@ -7,7 +7,6 @@
 use crate::core::error::{LdapError, LdapResult};
 use ldap3_proto::LdapResultCode;
 use lldap_domain::types::{GroupName, UserId};
-use std::collections::HashSet;
 use tracing::{debug, warn};
 
 // ============================================================================

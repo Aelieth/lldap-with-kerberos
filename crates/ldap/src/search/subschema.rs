@@ -3,7 +3,6 @@ use chrono::Utc;
 use ldap3_proto::{
     LdapPartialAttribute, LdapSearchResultEntry, proto::LdapOp,
 };
-use lldap_domain::public_schema::PublicSchema;
 use std::collections::HashSet;
 
 pub fn make_ldap_subschema_entry(

@@ -9,7 +9,7 @@ pub mod subschema;
 pub use handler::do_search;
 pub use root_dse::{is_root_dse_request, is_subschema_entry_request, root_dse_response};
 pub use results::{convert_groups_to_ldap_op, convert_users_to_ldap_op};
-pub use scope::{get_search_scope, make_ou_entry, build_ou_entries, SearchScope};
+pub use scope::{get_search_scope, make_ou_entry, build_ou_entries};
 pub use subschema::make_ldap_subschema_entry;
 
 pub fn make_search_request<S: Into<String>>(

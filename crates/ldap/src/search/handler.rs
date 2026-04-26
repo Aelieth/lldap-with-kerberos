@@ -6,8 +6,7 @@ use crate::core::{
 };
 use ldap3_proto::LdapResultCode;
 use crate::dn::parse_distinguished_name;
-use crate::schema::get_schema_manager;
-use crate::search::{get_search_scope, build_ou_entries, make_ou_entry, convert_users_to_ldap_op, convert_groups_to_ldap_op, make_search_success, make_search_error};
+use crate::search::{get_search_scope, build_ou_entries, make_ou_entry, convert_users_to_ldap_op, convert_groups_to_ldap_op, make_search_success};
 use ldap3_proto::proto::{LdapOp, LdapSearchRequest, LdapSearchScope};
 use lldap_access_control::UserAndGroupListerBackendHandler;
 use lldap_domain::public_schema::PublicSchema;

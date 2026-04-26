@@ -5,67 +5,32 @@
 //! - `crate::schema`      → SchemaManager (resolve_attribute, expand, map_*_field)
 //! - `crate::attributes`  → Bridge layer for user/group attribute access
 
-use crate::core::error::{LdapError, LdapResult};
+use crate::core::error::LdapResult;
 use chrono::{NaiveDateTime, TimeZone};
 use itertools::join;
-use ldap3_proto::{LdapPartialAttribute, LdapResultCode};
+use ldap3_proto::LdapPartialAttribute;
 use lldap_domain::{
     public_schema::PublicSchema,
     types::{Attribute, AttributeName, AttributeValue, Cardinality},
 };
-use std::collections::HashSet;
 
 // Re-export the constants that are still widely used
 pub use crate::dn::{
     DEFAULT_PRIMARY_GROUP_OU,
     DEFAULT_PRIMARY_USER_OU,
     internal_ou_to_ldap_rdn_chain,
-    // Re-export DN types for backward compatibility with create.rs, delete.rs, modify.rs, password.rs
+    // Re-export DN types for backward compatibility
     UserOrGroupName,
     get_user_or_group_id_from_distinguished_name,
     get_user_id_from_distinguished_name,
-    get_group_id_from_distinguished_name,
 };
 
-// Re-export FieldType enums from schema (used by user.rs, group.rs, schema/manager.rs)
-// Define the enums here to avoid circular dependency with schema
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UserFieldType {
-    NoMatch,
-    ObjectClass,
-    MemberOf,
-    Dn,
-    EntryDn,
-    PrimaryField(lldap_domain_model::model::UserColumn),
-    Attribute(AttributeName, AttributeType, bool),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GroupFieldType {
-    NoMatch,
-    GroupId,
-    DisplayName,
-    CreationDate,
-    ModifiedDate,
-    ObjectClass,
-    Dn,
-    EntryDn,
-    Member,
-    Uuid,
-    Attribute(AttributeName, AttributeType, bool),
-}
+// Re-export FieldType enums from schema (single source of truth)
+pub use crate::schema::definitions::{UserFieldType, GroupFieldType};
 
 // get_default_*_object_classes_bytes are defined in this file (see below)
 
-// Re-export the bridge functions so existing code doesn't break
-pub use crate::attributes::{
-    get_group_attribute,
-    get_group_ou,
-    get_user_attribute,
-    get_user_ou,
-    make_ldap_search_group_result_entry,
-    make_ldap_search_user_result_entry,
-};
+// Bridge functions are now in attributes.rs (re-exported from lib.rs)
 
 /// Convert a NaiveDateTime to LDAP GeneralizedTime format (e.g. 20260101120000.000000Z)
 pub fn to_generalized_time(dt: &NaiveDateTime) -> Vec<u8> {
@@ -201,13 +166,6 @@ pub fn is_operational_attribute(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Preferred canonical LDAP name for any input (alias or canonical).
-pub fn get_canonical_name(name: &str) -> String {
-    crate::schema::SchemaManager::resolve_attribute(name)
-        .map(|(_, canon)| canon.to_string())
-        .unwrap_or_else(|| name.to_string())
-}
-
 /// Returns the preferred LDAP attribute name for a schema attribute.
 pub fn get_preferred_ldap_name(attr: &lldap_schema::AttributeSchema) -> String {
     const STANDARD_LDAP_NAMES: &[&str] = &[
@@ -234,7 +192,6 @@ pub fn get_preferred_ldap_name(attr: &lldap_schema::AttributeSchema) -> String {
 
 // Temporary type aliases so user.rs and group.rs continue to compile during transition
 pub use crate::schema::ExpandedAttributes;
-pub use crate::schema::LogicalAttr;
 
 pub struct LdapInfo {
     pub base_dn: Vec<(String, String)>,
