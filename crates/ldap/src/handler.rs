@@ -2,7 +2,6 @@ use crate::{
     compare,
     core::{
         error::{LdapError, LdapResult},
-        user::get_user_ou,
         utils::{internal_ou_to_ldap_rdn_chain, LdapInfo},
     },
     create, delete, modify,
@@ -30,8 +29,8 @@ pub(crate) fn make_add_response(code: LdapResultCode, message: String) -> LdapOp
     LdapOp::AddResponse(LdapResultOp {
         code,
         matcheddn: "".to_string(),
-                        message,
-                        referral: vec![],
+        message,
+        referral: vec![],
     })
 }
 
@@ -40,8 +39,8 @@ pub(crate) fn make_extended_response(code: LdapResultCode, message: String) -> L
         res: LdapResultOp {
             code,
             matcheddn: "".to_string(),
-                             message,
-                             referral: vec![],
+            message,
+            referral: vec![],
         },
         name: None,
         value: None,
@@ -52,8 +51,8 @@ pub(crate) fn make_modify_response(code: LdapResultCode, message: String) -> Lda
     LdapOp::ModifyResponse(LdapResultOp {
         code,
         matcheddn: "".to_string(),
-                           message,
-                           referral: vec![],
+        message,
+        referral: vec![],
     })
 }
 
@@ -105,10 +104,10 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
     pub fn new_for_tests(backend_handler: Backend, ldap_base_dn: &str) -> Self {
         Self::new(
             AccessControlledBackendHandler::new(backend_handler),
-                  Box::leak(Box::new(
-                      LdapInfo::new(ldap_base_dn, Vec::new(), Vec::new()).unwrap(),
-                  )),
-                  uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            Box::leak(Box::new(
+                LdapInfo::new(ldap_base_dn, Vec::new(), Vec::new()).unwrap(),
+            )),
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
         )
     }
 
@@ -127,15 +126,13 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
             debug!("rootDSE request");
             return Ok(vec![
                 root_dse_response(&self.ldap_info.base_dn_str),
-                      make_search_success(),
+                make_search_success(),
             ]);
         } else if is_subschema_entry_request(request) {
-            // See RFC4512 section 4.4 "Subschema discovery"
             debug!("Schema request");
-            // Now generated dynamically from PublicSchema (single source of truth)
             return Ok(vec![
                 make_ldap_subschema_entry(&crate::schema::get_schema_manager(), &self.ldap_info.base_dn_str),
-                      make_search_success(),
+                make_search_success(),
             ]);
         }
         self.do_search(request).await
@@ -148,15 +145,15 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
             message: "No user currently bound".to_string(),
         })?;
         let backend_handler = self
-        .backend_handler
-        .get_user_restricted_lister_handler(user_info);
+            .backend_handler
+            .get_user_restricted_lister_handler(user_info);
 
         let allowed_ous = self
-        .backend_handler
-        .unsafe_get_handler()
-        .get_allowed_ous()
-        .await
-        .unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]);
+            .backend_handler
+            .unsafe_get_handler()
+            .get_allowed_ous()
+            .await
+            .unwrap_or_else(|_| vec!["people".to_string(), "groups".to_string()]);
 
         debug!(?request.base, ?request.scope, "Handler calling do_search");
         crate::search::do_search(&backend_handler, self.ldap_info, request, &allowed_ous).await
@@ -165,24 +162,24 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
     #[instrument(skip_all, level = "debug", fields(dn = %request.dn))]
     pub async fn do_bind(&mut self, request: &LdapBindRequest) -> Vec<LdapOp> {
         let (code, message) =
-        match password::do_bind(self.ldap_info, request, self.get_login_handler()).await {
-            Ok(user_id) => {
-                self.user_info = self
-                .backend_handler
-                .get_permissions_for_user(user_id)
-                .await
-                .ok();
-                debug!("Success!");
-                (LdapResultCode::Success, "".to_string())
-            }
-            Err(err) => (err.code, err.message),
-        };
+            match password::do_bind(self.ldap_info, request, self.get_login_handler()).await {
+                Ok(user_id) => {
+                    self.user_info = self
+                        .backend_handler
+                        .get_permissions_for_user(user_id)
+                        .await
+                        .ok();
+                    debug!("Success!");
+                    (LdapResultCode::Success, "".to_string())
+                }
+                Err(err) => (err.code, err.message),
+            };
         vec![LdapOp::BindResponse(LdapBindResponse {
             res: LdapResultOp {
                 code,
                 matcheddn: "".to_string(),
-                                  message,
-                                  referral: vec![],
+                message,
+                referral: vec![],
             },
             saslcreds: None,
         })]
@@ -202,7 +199,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                         self.ldap_info,
                         &self.backend_handler,
                         self.get_opaque_handler(),
-                                             &password_request,
+                        &password_request,
                     )
                     .await
                     .unwrap_or_else(|e: LdapError| vec![make_extended_response(e.code, e.message)])
@@ -213,10 +210,6 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                 )],
             },
             OID_WHOAMI => {
-                // Dynamically determine the bound user's OU from their "ou" attribute (single source of truth).
-                // Falls back to DEFAULT_PRIMARY_USER_OU ("people") if user not found or has no OU attr.
-                // This fixes the hard-coded primary_ou bug (was incorrectly showing ou=groups for users in people).
-                // No static assignment; leverages per-user OU stored in attributes for correct DN in whoami response.
                 let credentials = match self.get_credentials() {
                     Credentials::Bound(cred) => cred,
                     Credentials::Unbound(err) => return err,
@@ -225,7 +218,6 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
 
                 let backend = self.backend_handler.unsafe_get_handler();
 
-                // Query the specific user's attributes to get their real OU (supports nested OUs like "people\home")
                 let user_filter = LdapFilter::Equality("uid".to_string(), user_id.to_string());
                 let users = crate::core::user::get_user_list(
                     self.ldap_info,
@@ -239,7 +231,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                 .unwrap_or_default();
 
                 let user_ou = if let Some(uag) = users.first() {
-                    get_user_ou(&uag.user)
+                    crate::attributes::get_user_ou(&uag.user)
                 } else {
                     crate::core::utils::DEFAULT_PRIMARY_USER_OU.to_string()
                 };
@@ -274,14 +266,13 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         };
         modify::handle_modify_request(
             self.get_opaque_handler(),
-                                      |credentials, user_id| {
-                                          // user_id is owned here — pass directly (no &)
-                                          self.backend_handler
-                                          .get_readable_handler(credentials, user_id)
-                                      },
-                                      self.ldap_info,
-                                      credentials,
-                                      request,
+            |credentials, user_id| {
+                self.backend_handler
+                    .get_readable_handler(credentials, user_id)
+            },
+            self.ldap_info,
+            credentials,
+            request,
         )
         .await
         .unwrap_or_else(|e: LdapError| vec![make_modify_response(e.code, e.message)])
@@ -290,26 +281,26 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
     #[instrument(skip_all, level = "debug")]
     pub async fn create_user_or_group(&self, request: LdapAddRequest) -> LdapResult<Vec<LdapOp>> {
         let backend_handler = self
-        .user_info
-        .as_ref()
-        .and_then(|u| self.backend_handler.get_admin_handler(u))  // ← no turbofish, matches new signature
-        .ok_or_else(|| LdapError {
-            code: LdapResultCode::InsufficentAccessRights,
-            message: "Unauthorized write".to_string(),
-        })?;
+            .user_info
+            .as_ref()
+            .and_then(|u| self.backend_handler.get_admin_handler(u))
+            .ok_or_else(|| LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: "Unauthorized write".to_string(),
+            })?;
         create::create_user_or_group(backend_handler, self.ldap_info, request).await
     }
 
     #[instrument(skip_all, level = "debug")]
     pub async fn delete_user_or_group(&self, request: String) -> LdapResult<Vec<LdapOp>> {
         let backend_handler = self
-        .user_info
-        .as_ref()
-        .and_then(|u| self.backend_handler.get_admin_handler(u))  // ← no turbofish, matches new signature
-        .ok_or_else(|| LdapError {
-            code: LdapResultCode::InsufficentAccessRights,
-            message: "Unauthorized write".to_string(),
-        })?;
+            .user_info
+            .as_ref()
+            .and_then(|u| self.backend_handler.get_admin_handler(u))
+            .ok_or_else(|| LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: "Unauthorized write".to_string(),
+            })?;
         delete::delete_user_or_group(backend_handler, self.ldap_info, request).await
     }
 
@@ -318,51 +309,51 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         let req = make_search_request::<String>(
             &self.ldap_info.base_dn_str,
             LdapFilter::Equality("dn".to_string(), request.dn.to_string()),
-                                                vec![request.atype.clone()],
+            vec![request.atype.clone()],
         );
         compare::compare(
             request,
             self.do_search(&req).await?,
-                         &self.ldap_info.base_dn_str,
+            &self.ldap_info.base_dn_str,
         )
     }
 
     pub async fn handle_ldap_message(&mut self, ldap_op: LdapOp) -> Option<Vec<LdapOp>> {
         Some(match ldap_op {
             LdapOp::BindRequest(request) => self.do_bind(&request).await,
-             LdapOp::SearchRequest(request) => self
-             .do_search_or_dse(&request)
-             .await
-             .unwrap_or_else(|e: LdapError| vec![make_search_error(e.code, e.message)]),
-             LdapOp::UnbindRequest => {
-                 debug!(
-                     "Unbind request for {}",
-                     self.user_info
-                     .as_ref()
-                     .map(|u| u.user.as_str())
-                     .unwrap_or("<not bound>"),
-                 );
-                 self.user_info = None;
-                 return None;
-             }
-             LdapOp::ModifyRequest(request) => self.do_modify_request(&request).await,
-             LdapOp::ExtendedRequest(request) => self.do_extended_request(&request).await,
-             LdapOp::AddRequest(request) => self
-             .create_user_or_group(request)
-             .await
-             .unwrap_or_else(|e: LdapError| vec![make_add_response(e.code, e.message)]),
-             LdapOp::DelRequest(request) => self
-             .delete_user_or_group(request)
-             .await
-             .unwrap_or_else(|e: LdapError| vec![make_del_response(e.code, e.message)]),
-             LdapOp::CompareRequest(request) => self
-             .do_compare(request)
-             .await
-             .unwrap_or_else(|e: LdapError| vec![make_search_error(e.code, e.message)]),
-             op => vec![make_extended_response(
-                 LdapResultCode::UnwillingToPerform,
-                 format!("Unsupported operation: {op:#?}"),
-             )],
+            LdapOp::SearchRequest(request) => self
+                .do_search_or_dse(&request)
+                .await
+                .unwrap_or_else(|e: LdapError| vec![make_search_error(e.code, e.message)]),
+            LdapOp::UnbindRequest => {
+                debug!(
+                    "Unbind request for {}",
+                    self.user_info
+                        .as_ref()
+                        .map(|u| u.user.as_str())
+                        .unwrap_or("<not bound>"),
+                );
+                self.user_info = None;
+                return None;
+            }
+            LdapOp::ModifyRequest(request) => self.do_modify_request(&request).await,
+            LdapOp::ExtendedRequest(request) => self.do_extended_request(&request).await,
+            LdapOp::AddRequest(request) => self
+                .create_user_or_group(request)
+                .await
+                .unwrap_or_else(|e: LdapError| vec![make_add_response(e.code, e.message)]),
+            LdapOp::DelRequest(request) => self
+                .delete_user_or_group(request)
+                .await
+                .unwrap_or_else(|e: LdapError| vec![make_del_response(e.code, e.message)]),
+            LdapOp::CompareRequest(request) => self
+                .do_compare(request)
+                .await
+                .unwrap_or_else(|e: LdapError| vec![make_search_error(e.code, e.message)]),
+            op => vec![make_extended_response(
+                LdapResultCode::UnwillingToPerform,
+                format!("Unsupported operation: {op:#?}"),
+            )],
         })
     }
 }

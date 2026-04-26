@@ -5,6 +5,7 @@ pub mod root_dse;
 pub mod results;
 pub mod scope;
 pub mod subschema;
+pub mod filters;   // NEW: filter conversion logic (moved from core/ for slimming)
 
 pub use handler::do_search;
 pub use root_dse::{is_root_dse_request, is_subschema_entry_request, root_dse_response};
@@ -29,7 +30,6 @@ pub fn make_search_request<S: Into<String>>(
     }
 }
 
-// Temporary compatibility helpers (defined here to avoid duplicate definition)
 pub fn make_search_success() -> ldap3_proto::proto::LdapOp {
     make_search_error(ldap3_proto::LdapResultCode::Success, "".to_string())
 }

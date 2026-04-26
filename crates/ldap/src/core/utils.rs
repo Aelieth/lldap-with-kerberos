@@ -19,7 +19,7 @@ pub use crate::dn::{
     DEFAULT_PRIMARY_GROUP_OU,
     DEFAULT_PRIMARY_USER_OU,
     internal_ou_to_ldap_rdn_chain,
-    // Re-export DN types for backward compatibility
+    // Re-export DN types for backward compatibility during final transition
     UserOrGroupName,
     get_user_or_group_id_from_distinguished_name,
     get_user_id_from_distinguished_name,
@@ -93,7 +93,7 @@ pub fn get_ou_from_attributes(attributes: &[Attribute], default: &str) -> String
 }
 
 /// Injects the standard operational attributes we always add to every LDAP search result.
-pub fn inject_operational_attributes(attrs: &mut Vec<LdapPartialAttribute>, structural_class: &str, base_dn_str: &str) {
+pub(crate) fn inject_operational_attributes(attrs: &mut Vec<LdapPartialAttribute>, structural_class: &str, base_dn_str: &str) {
     attrs.push(LdapPartialAttribute {
         atype: "hasSubordinates".to_string(),
         vals: vec![b"FALSE".to_vec()],
@@ -158,14 +158,6 @@ pub fn get_default_group_object_classes_bytes(schema: &PublicSchema) -> Vec<Vec<
     classes
 }
 
-/// Returns true for attributes we inject manually as operational attributes.
-/// These should never be looked up from the database or trigger "unrecognized attribute" warnings.
-pub fn is_operational_attribute(name: &str) -> bool {
-    crate::schema::SchemaManager::resolve_attribute(name)
-        .map(|(logical, _)| matches!(logical, crate::schema::LogicalAttr::Operational))
-        .unwrap_or(false)
-}
-
 /// Returns the preferred LDAP attribute name for a schema attribute.
 pub fn get_preferred_ldap_name(attr: &lldap_schema::AttributeSchema) -> String {
     const STANDARD_LDAP_NAMES: &[&str] = &[
@@ -191,7 +183,7 @@ pub fn get_preferred_ldap_name(attr: &lldap_schema::AttributeSchema) -> String {
 // ============================================================================
 
 // Temporary type aliases so user.rs and group.rs continue to compile during transition
-pub use crate::schema::ExpandedAttributes;
+pub use crate::schema::definitions::ExpandedAttributes;
 
 pub struct LdapInfo {
     pub base_dn: Vec<(String, String)>,
