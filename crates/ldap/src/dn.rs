@@ -1,8 +1,7 @@
 //! DN and Organizational Unit (OU) utilities.
 //!
 //! This module centralizes all Distinguished Name parsing, OU hierarchy handling,
-//! and user/group ID extraction from DNs. It was extracted from core/utils.rs
-//! to improve modularity and maintainability.
+//! and user/group ID extraction from DNs.
 
 use crate::core::error::{LdapError, LdapResult};
 use ldap3_proto::LdapResultCode;

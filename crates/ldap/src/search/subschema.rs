@@ -131,23 +131,47 @@ pub fn make_ldap_subschema_entry(
         }
     }
 
-    let mut inet_may: Vec<String> = vec![
-        "givenName".into(), "mail".into(), "uid".into(), "displayName".into(),
-        "employeeNumber".into(), "employeeType".into(), "jpegPhoto".into(), "labeledURI".into(),
-        "manager".into(), "mobile".into(), "pager".into(), "photo".into(), "roomNumber".into(),
-        "secretary".into(), "uidNumber".into(), "gidNumber".into(), "homeDirectory".into(),
-        "loginShell".into(), "sshPublicKey".into(), "krbPrincipalName".into(), "ou".into(),
-        "avatar".into(), "description".into(), "kerberosSync".into(),
-    ];
-    let mut seen: HashSet<String> = inet_may.iter().map(|s| s.to_ascii_lowercase()).collect();
+    // Build inetOrgPerson MAY list with logical grouping
+    // 1. Core identity → 2. Other schema attrs (excluding operational) → 3. All operational at the very end
+    let mut inet_may: Vec<String> = vec![];
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // 1. Core identity attributes (most important first)
+    for name in ["cn", "sn", "givenName", "displayName", "uid", "mail"] {
+        let lower = name.to_ascii_lowercase();
+        if seen.insert(lower) {
+            inet_may.push(name.to_string());
+        }
+    }
+
+    // 2. Add all non-operational user attributes from PublicSchema
+    let operational_names: HashSet<&str> = [
+        "createtimestamp", "creationdate", "creation_date",
+        "modifytimestamp", "modifieddate", "modified_date",
+        "pwdchangedtime", "passwordmodifieddate", "password_modified_date",
+        "entryuuid", "uuid",
+        "memberof", "hassubordinates", "structuralobjectclass", "subschemasubentry",
+    ].iter().cloned().collect();
+
     for attr in schema_manager.get_all_user_attributes() {
         let pref = crate::core::utils::get_preferred_ldap_name(&attr);
         let lower = pref.to_ascii_lowercase();
-        if !seen.contains(&lower) {
-            seen.insert(lower);
+        if !operational_names.contains(lower.as_str()) && seen.insert(lower) {
             inet_may.push(pref);
         }
     }
+
+    // 3. All operational attributes at the very end (clean grouping)
+    for extra in [
+        "createTimestamp", "modifyTimestamp", "pwdChangedTime", "entryuuid",
+        "memberOf", "hasSubordinates", "structuralObjectClass", "subschemaSubentry",
+    ] {
+        let lower = extra.to_ascii_lowercase();
+        if seen.insert(lower) {
+            inet_may.push(extra.to_string());
+        }
+    }
+
     let inet_may_str = inet_may.join(" $ ");
 
     let posix_user_may = "userPassword $ loginShell $ gecos $ description $ sshPublicKey $ avatar $ kerberosSync".to_string();
