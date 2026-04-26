@@ -4,9 +4,9 @@ use crate::core::{
         ExpandedAttributes, GroupFieldType, LdapInfo, expand_attribute_wildcards,
         get_custom_attribute, get_default_group_object_classes_bytes,
         get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, inject_operational_attributes,
-        internal_ou_to_ldap_rdn_chain, is_operational_attribute, map_group_field, resolve_attribute,
-        to_generalized_time,
+        get_user_id_from_distinguished_name_or_plain_name, get_ou_from_attributes,
+        inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute,
+        map_group_field, resolve_attribute, to_generalized_time, DEFAULT_PRIMARY_GROUP_OU,
     },
 };
 use ldap3_proto::{
@@ -117,10 +117,6 @@ pub fn get_group_attribute(
     } else {
         Some(attribute_values)
     }
-}
-
-fn expand_group_attribute_wildcards(attributes: &[String], schema: &PublicSchema) -> ExpandedAttributes {
-    expand_attribute_wildcards(attributes, schema)
 }
 
 fn make_ldap_search_group_result_entry(
@@ -449,7 +445,7 @@ pub(crate) fn convert_groups_to_ldap_op<'a>(
     let expanded_attributes = if groups.is_empty() {
         None
     } else {
-        Some(expand_group_attribute_wildcards(attributes, schema))
+        Some(expand_attribute_wildcards(attributes, schema))
     };
 
     groups.into_iter().map(move |g| {
@@ -465,18 +461,5 @@ pub(crate) fn convert_groups_to_ldap_op<'a>(
 }
 
 fn get_group_ou(group: &Group) -> String {
-    group.attributes
-    .iter()
-    .find(|a| a.name.as_str() == "ou")
-    .and_then(|a| {
-        if let lldap_domain::types::AttributeValue::String(
-            lldap_domain::types::Cardinality::Singleton(s),
-        ) = &a.value
-        {
-            Some(s.clone())
-        } else {
-            None
-        }
-    })
-    .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_GROUP_OU.to_string())
+    get_ou_from_attributes(&group.attributes, DEFAULT_PRIMARY_GROUP_OU)
 }

@@ -4,8 +4,9 @@ use crate::core::{
         ExpandedAttributes, LdapInfo, UserFieldType, expand_attribute_wildcards,
         get_custom_attribute, get_default_user_object_classes_bytes,
         get_group_id_from_distinguished_name_or_plain_name,
-        get_user_id_from_distinguished_name_or_plain_name, inject_operational_attributes,
-        internal_ou_to_ldap_rdn_chain, is_operational_attribute, map_user_field, resolve_attribute, to_generalized_time,
+        get_user_id_from_distinguished_name_or_plain_name, get_ou_from_attributes,
+        inject_operational_attributes, internal_ou_to_ldap_rdn_chain, is_operational_attribute,
+        map_user_field, resolve_attribute, to_generalized_time, DEFAULT_PRIMARY_USER_OU,
     },
 };
 
@@ -420,10 +421,6 @@ fn convert_user_filter(
     }
 }
 
-fn expand_user_attribute_wildcards(attributes: &[String], schema: &PublicSchema) -> ExpandedAttributes {
-    expand_attribute_wildcards(attributes, schema)
-}
-
 #[instrument(skip_all, level = "debug", fields(ldap_filter, request_groups))]
 pub(crate) async fn get_user_list<Backend: UserListerBackendHandler>(
     ldap_info: &LdapInfo,
@@ -453,7 +450,7 @@ pub(crate) fn convert_users_to_ldap_op<'a>(
     let expanded_attributes = if users.is_empty() {
         None
     } else {
-        Some(expand_user_attribute_wildcards(attributes, schema))
+        Some(expand_attribute_wildcards(attributes, schema))
     };
     users.into_iter().map(move |u| {
         LdapOp::SearchResultEntry(make_ldap_search_user_result_entry(
@@ -468,20 +465,5 @@ pub(crate) fn convert_users_to_ldap_op<'a>(
 }
 
 pub(crate) fn get_user_ou(user: &User) -> String {
-    // Robust lookup: case-insensitive attribute name match + handle both Singleton and Unbounded
-    user.attributes
-        .iter()
-        .find(|a| a.name.as_str().eq_ignore_ascii_case("ou"))
-        .and_then(|a| {
-            match &a.value {
-                lldap_domain::types::AttributeValue::String(
-                    lldap_domain::types::Cardinality::Singleton(s),
-                ) => Some(s.clone()),
-                lldap_domain::types::AttributeValue::String(
-                    lldap_domain::types::Cardinality::Unbounded(list),
-                ) if !list.is_empty() => Some(list[0].clone()),
-                _ => None,
-            }
-        })
-        .unwrap_or_else(|| "people".to_string())
+    get_ou_from_attributes(&user.attributes, DEFAULT_PRIMARY_USER_OU)
 }

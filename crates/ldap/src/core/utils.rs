@@ -29,9 +29,7 @@ use lldap_schema::AttributeSchema;
 use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, instrument, warn};
 
-// ============================================================================
-// OU & DN UTILITIES
-// ============================================================================
+// OU & DN utilities
 
 /// Centralized OU defaults and helpers (architectural constants for the OU framework)
 pub const DEFAULT_PRIMARY_USER_OU: &str = "people";
@@ -801,4 +799,16 @@ pub fn get_custom_attribute(
         })
 }
 
-// (OU constants and helpers moved to top of file)
+/// Common OU extractor from entity attributes (used by users and groups).
+/// Falls back to provided default (e.g. "people" or "groups").
+pub fn get_ou_from_attributes(attributes: &[Attribute], default: &str) -> String {
+    attributes
+        .iter()
+        .find(|a| a.name.as_str().eq_ignore_ascii_case("ou"))
+        .and_then(|a| match &a.value {
+            AttributeValue::String(Cardinality::Singleton(s)) => Some(s.clone()),
+            AttributeValue::String(Cardinality::Unbounded(list)) if !list.is_empty() => Some(list[0].clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| default.to_string())
+}

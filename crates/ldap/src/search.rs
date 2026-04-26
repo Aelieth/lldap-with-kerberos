@@ -30,53 +30,56 @@ enum SearchScope {
     Unknown,
 }
 
-fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
-    let mut entries = vec![];
-    for ou_str in allowed_ous {
-        let rdn_chain = internal_ou_to_ldap_rdn_chain(ou_str);
-        let ou_part: String = rdn_chain
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join(",");
-        let dn = if ou_part.is_empty() {
-            base_dn_str.to_string()
-        } else {
-            format!("{},{}", ou_part, base_dn_str)
-        };
+fn make_ou_entry(ou_str: &str, base_dn_str: &str) -> LdapSearchResultEntry {
+    let rdn_chain = internal_ou_to_ldap_rdn_chain(ou_str);
+    let ou_part: String = rdn_chain
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join(",");
+    let dn = if ou_part.is_empty() {
+        base_dn_str.to_string()
+    } else {
+        format!("{},{}", ou_part, base_dn_str)
+    };
 
-        let leaf_ou_val = rdn_chain
-            .first()
-            .map(|(_, v)| v.as_bytes().to_vec())
-            .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
+    let leaf_ou_val = rdn_chain
+        .first()
+        .map(|(_, v)| v.as_bytes().to_vec())
+        .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
 
-        entries.push(LdapOp::SearchResultEntry(LdapSearchResultEntry {
-            dn,
-            attributes: vec![
-                LdapPartialAttribute {
-                    atype: "objectClass".to_string(),
-                    vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
-                },
-                LdapPartialAttribute {
-                    atype: "ou".to_string(),
-                    vals: vec![leaf_ou_val],
-                },
-                LdapPartialAttribute {
-                    atype: "hasSubordinates".to_string(),
-                    vals: vec![b"TRUE".to_vec()],  // Always TRUE for organizationalUnit containers — required for ADS tree expansion. True dynamic (with member count) can be added later without breaking anything.
-                },
-                LdapPartialAttribute {
-                    atype: "structuralObjectClass".to_string(),
-                    vals: vec![b"organizationalUnit".to_vec()],
-                },
-                LdapPartialAttribute {
-                    atype: "subschemaSubentry".to_string(),
-                    vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
-                },
-            ],
-        }));
+    LdapSearchResultEntry {
+        dn,
+        attributes: vec![
+            LdapPartialAttribute {
+                atype: "objectClass".to_string(),
+                vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "ou".to_string(),
+                vals: vec![leaf_ou_val],
+            },
+            LdapPartialAttribute {
+                atype: "hasSubordinates".to_string(),
+                vals: vec![b"TRUE".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "structuralObjectClass".to_string(),
+                vals: vec![b"organizationalUnit".to_vec()],
+            },
+            LdapPartialAttribute {
+                atype: "subschemaSubentry".to_string(),
+                vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
+            },
+        ],
     }
-    entries
+}
+
+fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
+    allowed_ous
+        .iter()
+        .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str)))
+        .collect()
 }
 
 fn get_search_scope(
@@ -572,8 +575,6 @@ where
     match scope {
         SearchScope::Root => {
             if request.scope == LdapSearchScope::Base {
-                // Return the root naming context entry for base searches
-                // Derive dc and o dynamically from the live base_dn (no deployment hardcodes)
                 let dc_val = base_dn.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("dc"))
                     .map(|(_, v)| v.as_bytes().to_vec())
@@ -613,14 +614,10 @@ where
                 };
                 return Ok(vec![LdapOp::SearchResultEntry(root_entry), make_search_success()]);
             }
-            // At the root level:
-            // - OneLevel: only top-level OUs (standard "containers first" view)
-            // - Subtree: top-level OUs + all users + all groups (so broad searches/filters work)
             let top_level_ous = get_direct_child_ous("", allowed_ous);
             let mut results = build_ou_entries(&top_level_ous, &ldap_info.base_dn_str);
 
             if request.scope == LdapSearchScope::Subtree {
-                // Include matching users + groups under the entire tree
                 let user_results = get_user_list(
                     ldap_info,
                     &request.filter,
@@ -662,59 +659,13 @@ where
             let internal_ou = get_internal_ou_from_dn_parts(&dn_parts);
 
             if request.scope == LdapSearchScope::Base {
-                // Base search on a container OU: return ONLY the OU entry itself.
-                // (Prevents "ou=people under ou=people" nesting loop when client does OneLevel/Subtree.)
-                let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
-                let ou_part: String = rdn_chain
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let dn = if ou_part.is_empty() {
-                    ldap_info.base_dn_str.clone()
-                } else {
-                    format!("{},{}", ou_part, ldap_info.base_dn_str)
-                };
-                let leaf_ou_val = rdn_chain
-                    .first()
-                    .map(|(_, v)| v.as_bytes().to_vec())
-                    .unwrap_or_else(|| crate::core::utils::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
-                let ou_entry = LdapSearchResultEntry {
-                    dn,
-                    attributes: vec![
-                        LdapPartialAttribute {
-                            atype: "objectClass".to_string(),
-                            vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "ou".to_string(),
-                            vals: vec![leaf_ou_val],
-                        },
-                        LdapPartialAttribute {
-                            atype: "hasSubordinates".to_string(),
-                            vals: vec![b"TRUE".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "structuralObjectClass".to_string(),
-                            vals: vec![b"organizationalUnit".to_vec()],
-                        },
-                        LdapPartialAttribute {
-                            atype: "subschemaSubentry".to_string(),
-                            vals: vec![format!("cn=Subschema,{}", ldap_info.base_dn_str).into_bytes()],
-                        },
-                    ],
-                };
+                // Base search on container OU: return only the OU entry (prevents nesting loops).
+                let ou_entry = make_ou_entry(&internal_ou, &ldap_info.base_dn_str);
                 results.push(LdapOp::SearchResultEntry(ou_entry));
             } else {
-                // OneLevel or Subtree on container:
-                // - Always include direct (OneLevel) or all descendant (Subtree) OU *containers* first.
-                //   This makes the hierarchy visible in ADS tree view / schema browser.
-                // - Then include matching users/groups (trusting the per-entry "ou" attribute + backend).
-                // Child OUs
                 let child_ous: Vec<String> = if request.scope == LdapSearchScope::OneLevel {
                     get_direct_child_ous(&internal_ou, allowed_ous)
                 } else {
-                    // Subtree: all OUs under this container (deep nesting supported)
                     let curr_l = internal_ou.to_ascii_lowercase();
                     allowed_ous
                         .iter()
@@ -729,11 +680,6 @@ where
                     results.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str));
                 }
 
-                // Users + Groups — trust the backend + the per-entry "ou" attribute.
-                // The conversion layer already builds correct DNs using get_user_ou() / get_group_ou().
-                // (Removed overzealous "uid"/"cn" presence guard — it dropped valid entries when
-                // client (e.g. ADS tree expansion) did not request the naming attribute in attrs list.
-                // User/group results are already type-safe; no OU containers can leak here.)
                 let user_results = get_user_list(
                     ldap_info,
                     &request.filter,
@@ -766,12 +712,7 @@ where
                 )
                 .collect();
 
-                // Unified correct filtering for ADS compatibility (OneLevel + Subtree on containers).
-                // - Always: only entries whose DN is under this subtree (ends_with base).
-                // - OneLevel: additionally only direct children (RDN count == parent + 1).
-                // - Subtree: includes descendants (nested OUs + their users/groups).
-                // This fixes "primary OUs flat / nothing under them" when uid/cn not requested,
-                // and prevents returning users/groups from sibling OUs on Subtree searches.
+                // ADS-compatible filtering for OneLevel/Subtree on containers (DN under base, RDN count for OneLevel).
                 {
                     let base_lower = request.base.to_ascii_lowercase();
                     let expected_rdn_count = dn_parts.len() + 1;
