@@ -1,4 +1,4 @@
-//! Attribute handling — Single canonical source of truth (ApacheDS style).
+//! Attribute handling — Single canonical source of truth
 //!
 //! All user/group attribute resolution, EntryDn construction, memberOf,
 //! operational attributes, and search result entry building lives here.
@@ -78,19 +78,30 @@ pub fn get_ou_from_attributes(attributes: &[Attribute], default: &str) -> String
 }
 
 /// Injects the standard operational attributes we always add to every LDAP search result.
+/// Only adds if not already present (prevents leaking operational attrs into "*").
 pub(crate) fn inject_operational_attributes(attrs: &mut Vec<LdapPartialAttribute>, structural_class: &str, base_dn_str: &str) {
-    attrs.push(LdapPartialAttribute {
-        atype: "hasSubordinates".to_string(),
-        vals: vec![b"FALSE".to_vec()],
-    });
-    attrs.push(LdapPartialAttribute {
-        atype: "structuralObjectClass".to_string(),
-        vals: vec![structural_class.as_bytes().to_vec()],
-    });
-    attrs.push(LdapPartialAttribute {
-        atype: "subschemaSubentry".to_string(),
-        vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
-    });
+    let existing: std::collections::HashSet<String> = attrs.iter()
+        .map(|a| a.atype.to_ascii_lowercase())
+        .collect();
+
+    if !existing.contains("hassubordinates") {
+        attrs.push(LdapPartialAttribute {
+            atype: "hasSubordinates".to_string(),
+            vals: vec![b"FALSE".to_vec()],
+        });
+    }
+    if !existing.contains("structuralobjectclass") {
+        attrs.push(LdapPartialAttribute {
+            atype: "structuralObjectClass".to_string(),
+            vals: vec![structural_class.as_bytes().to_vec()],
+        });
+    }
+    if !existing.contains("subschemasubentry") {
+        attrs.push(LdapPartialAttribute {
+            atype: "subschemaSubentry".to_string(),
+            vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
+        });
+    }
 }
 
 /// Returns the default object classes for a user as raw bytes (for LDAP internal use).
@@ -184,7 +195,7 @@ pub fn get_user_attribute(
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
     let attribute = AttributeName::from(attribute.as_str());
-    let attribute_values = match crate::schema::SchemaManager::map_user_field(&attribute, schema) {
+    let attribute_values = match crate::schema::get_schema_manager().map_user_field(&attribute, schema) {
         crate::core::utils::UserFieldType::ObjectClass => get_default_user_object_classes_bytes(schema),
         crate::core::utils::UserFieldType::Dn => return None,
         crate::core::utils::UserFieldType::EntryDn => {
@@ -254,7 +265,7 @@ pub fn get_user_attribute(
             "*" => panic!("Matched {attribute}, * should have been expanded"),
             _ => {
                 if ignored_user_attributes.contains(&attribute) { return None; }
-                let is_unknown = crate::schema::SchemaManager::resolve_attribute(attribute.as_str()).is_none();
+                let is_unknown = crate::schema::get_schema_manager().resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(&user.attributes, &attribute).or_else(|| {
                     if is_unknown {
                         tracing::warn!(r#"Ignoring unrecognized user attribute: {}. Add to "ignored_user_attributes"."#, attribute);
@@ -279,7 +290,7 @@ pub fn get_group_attribute(
     ignored_group_attributes: &[AttributeName],
     schema: &PublicSchema,
 ) -> Option<Vec<Vec<u8>>> {
-    let attribute_values = match crate::schema::SchemaManager::map_group_field(attribute, schema) {
+    let attribute_values = match crate::schema::get_schema_manager().map_group_field(attribute, schema) {
         crate::core::utils::GroupFieldType::ObjectClass => get_default_group_object_classes_bytes(schema),
         crate::core::utils::GroupFieldType::Dn => return None,
         crate::core::utils::GroupFieldType::EntryDn => {
@@ -320,7 +331,7 @@ pub fn get_group_attribute(
             "*" => panic!("Matched {attribute}, * should have been expanded"),
             _ => {
                 if ignored_group_attributes.contains(attribute) { return None; }
-                let is_unknown = crate::schema::SchemaManager::resolve_attribute(attribute.as_str()).is_none();
+                let is_unknown = crate::schema::get_schema_manager().resolve_attribute(attribute.as_str()).is_none();
                 get_custom_attribute(&group.attributes, attribute).or_else(|| {
                     if is_unknown {
                         tracing::warn!(r#"Ignoring unrecognized group attribute: {}. Add to "ignored_group_attributes"."#, attribute);
@@ -365,13 +376,18 @@ pub fn make_ldap_search_user_result_entry(
         },
         attributes: {
             let mut attrs: Vec<ldap3_proto::LdapPartialAttribute> = expanded_attributes.attribute_keys.into_iter()
-                .filter(|(attribute, _)| !crate::schema::get_schema_manager().is_operational(attribute.as_str()))
+                .filter(|(attribute, _)| {
+                    let is_op = crate::schema::get_schema_manager().is_operational(attribute.as_str());
+                    !is_op || expanded_attributes.include_operational_attributes
+                })
                 .filter_map(|(attribute, name)| {
                     let values = get_user_attribute(&user, &attribute, base_dn_str, groups, ignored_user_attributes, schema)?;
                     Some(ldap3_proto::LdapPartialAttribute { atype: name, vals: values })
                 })
                 .collect();
-            inject_operational_attributes(&mut attrs, "inetOrgPerson", base_dn_str);
+            if expanded_attributes.include_operational_attributes {
+                inject_operational_attributes(&mut attrs, "inetOrgPerson", base_dn_str);
+            }
             let mut seen = std::collections::HashSet::new();
             attrs.retain(|attr| seen.insert(attr.atype.clone()));
             attrs
@@ -407,13 +423,18 @@ pub fn make_ldap_search_group_result_entry(
         },
         attributes: {
             let mut attrs: Vec<ldap3_proto::LdapPartialAttribute> = expanded_attributes.attribute_keys.into_iter()
-                .filter(|(attribute, _)| !crate::schema::get_schema_manager().is_operational(attribute.as_str()))
+                .filter(|(attribute, _)| {
+                    let is_op = crate::schema::get_schema_manager().is_operational(attribute.as_str());
+                    !is_op || expanded_attributes.include_operational_attributes
+                })
                 .filter_map(|(attribute, name)| {
                     let values = get_group_attribute(&group, base_dn_str, &attribute, user_filter, ignored_group_attributes, schema)?;
                     Some(ldap3_proto::LdapPartialAttribute { atype: name, vals: values })
                 })
                 .collect();
-            inject_operational_attributes(&mut attrs, "groupOfUniqueNames", base_dn_str);
+            if expanded_attributes.include_operational_attributes {
+                inject_operational_attributes(&mut attrs, "groupOfUniqueNames", base_dn_str);
+            }
             let mut seen = std::collections::HashSet::new();
             attrs.retain(|attr| seen.insert(attr.atype.clone()));
             attrs

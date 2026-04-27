@@ -4,8 +4,7 @@ pub mod manager;
 pub use definitions::{ExpandedAttributes, LogicalAttr, UserFieldType, GroupFieldType};
 pub use manager::SchemaManager;
 
-/// Returns a default SchemaManager instance.
-/// In the future this can be made more sophisticated (e.g. cached singleton).
+/// Returns a default SchemaManager instance built from PublicSchema.
 pub fn get_schema_manager() -> SchemaManager {
-    SchemaManager::new()
+    SchemaManager::new(&lldap_domain::public_schema::PublicSchema::get())
 }

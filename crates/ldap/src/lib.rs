@@ -20,11 +20,11 @@ pub use schema::{ExpandedAttributes, LogicalAttr, SchemaManager, get_schema_mana
 
 // Thin shims for graphql-server compatibility (will be removed once graphql-server is updated)
 pub fn map_user_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> UserFieldType {
-    SchemaManager::map_user_field(field, schema)
+    get_schema_manager().map_user_field(field, schema)
 }
 
 pub fn map_group_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> GroupFieldType {
-    SchemaManager::map_group_field(field, schema)
+    get_schema_manager().map_group_field(field, schema)
 }
 
 pub use attributes::{

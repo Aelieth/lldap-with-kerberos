@@ -1,4 +1,4 @@
-//! Filter conversion logic (moved from core/user.rs and core/group.rs for ApacheDS-style separation).
+//! Filter conversion logic
 //!
 //! This module handles conversion of LDAP filters to domain-specific request filters.
 //! Kept here so search/handler.rs can orchestrate cleanly while core/ stays slim.
@@ -14,9 +14,7 @@ use tracing::warn;
 
 use crate::core::utils::LdapInfo;
 
-// ============================================================================
-// USER FILTER CONVERSION (extracted from core/user.rs)
-// ============================================================================
+// USER FILTER CONVERSION
 
 fn get_user_attribute_equality_filter(
     field: &AttributeName,
@@ -94,7 +92,7 @@ pub fn convert_user_filter(
         LdapFilter::Equality(field, value) => {
             let field = AttributeName::from(field.as_str());
             let value_lc = value.to_ascii_lowercase();
-            match crate::schema::SchemaManager::map_user_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_user_field(&field, schema) {
                 crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => {
                     Ok(UserRequestFilter::UserId(UserId::new(&value_lc)))
                 }
@@ -145,7 +143,7 @@ pub fn convert_user_filter(
         }
         LdapFilter::GreaterOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_user_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_user_field(&field, schema) {
                 crate::core::utils::UserFieldType::PrimaryField(f)
                     if matches!(f, lldap_domain_model::model::UserColumn::CreationDate | lldap_domain_model::model::UserColumn::ModifiedDate | lldap_domain_model::model::UserColumn::PasswordModifiedDate) =>
                 {
@@ -164,7 +162,7 @@ pub fn convert_user_filter(
         }
         LdapFilter::LessOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_user_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_user_field(&field, schema) {
                 crate::core::utils::UserFieldType::PrimaryField(f)
                     if matches!(f, lldap_domain_model::model::UserColumn::CreationDate | lldap_domain_model::model::UserColumn::ModifiedDate | lldap_domain_model::model::UserColumn::PasswordModifiedDate) =>
                 {
@@ -183,7 +181,7 @@ pub fn convert_user_filter(
         }
         LdapFilter::Present(field) => {
             let field = AttributeName::from(field.as_str());
-            Ok(match crate::schema::SchemaManager::map_user_field(&field, schema) {
+            Ok(match crate::schema::get_schema_manager().map_user_field(&field, schema) {
                 crate::core::utils::UserFieldType::Attribute(name, _, _) => {
                     UserRequestFilter::CustomAttributePresent(name)
                 }
@@ -193,7 +191,7 @@ pub fn convert_user_filter(
         }
         LdapFilter::Substring(field, substring_filter) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_user_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_user_field(&field, schema) {
                 crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => Ok(
                     UserRequestFilter::UserIdSubString(substring_filter.clone().into()),
                 ),
@@ -225,9 +223,7 @@ pub fn convert_user_filter(
     }
 }
 
-// ============================================================================
-// GROUP FILTER CONVERSION (extracted from core/group.rs)
-// ============================================================================
+// GROUP FILTER CONVERSION
 
 fn get_group_attribute_equality_filter(
     field: &AttributeName,
@@ -273,7 +269,7 @@ pub fn convert_group_filter(
         LdapFilter::Equality(field, value) => {
             let field = AttributeName::from(field.as_str());
             let value_lc = value.to_ascii_lowercase();
-            match crate::schema::SchemaManager::map_group_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_group_field(&field, schema) {
                 crate::core::utils::GroupFieldType::GroupId => Ok(value_lc
                     .parse::<i32>()
                     .map(|id| GroupRequestFilter::GroupId(lldap_domain::types::GroupId(id)))
@@ -336,7 +332,7 @@ pub fn convert_group_filter(
         }
         LdapFilter::GreaterOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_group_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_group_field(&field, schema) {
                 crate::core::utils::GroupFieldType::CreationDate | crate::core::utils::GroupFieldType::ModifiedDate => {
                     Ok(GroupRequestFilter::GreaterOrEqual(
                         field.as_str().to_string(),
@@ -359,7 +355,7 @@ pub fn convert_group_filter(
         }
         LdapFilter::LessOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_group_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_group_field(&field, schema) {
                 crate::core::utils::GroupFieldType::CreationDate | crate::core::utils::GroupFieldType::ModifiedDate => {
                     Ok(GroupRequestFilter::LessOrEqual(
                         field.as_str().to_string(),
@@ -423,7 +419,7 @@ pub fn convert_group_filter(
         }),
         LdapFilter::Present(field) => {
             let field = AttributeName::from(field.as_str());
-            Ok(match crate::schema::SchemaManager::map_group_field(&field, schema) {
+            Ok(match crate::schema::get_schema_manager().map_group_field(&field, schema) {
                 crate::core::utils::GroupFieldType::Attribute(name, _, _) => {
                     GroupRequestFilter::CustomAttributePresent(name)
                 }
@@ -433,7 +429,7 @@ pub fn convert_group_filter(
         }
         LdapFilter::Substring(field, substring_filter) => {
             let field = AttributeName::from(field.as_str());
-            match crate::schema::SchemaManager::map_group_field(&field, schema) {
+            match crate::schema::get_schema_manager().map_group_field(&field, schema) {
                 crate::core::utils::GroupFieldType::DisplayName => Ok(GroupRequestFilter::DisplayNameSubString(
                     substring_filter.clone().into(),
                 )),

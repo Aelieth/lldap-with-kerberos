@@ -18,6 +18,7 @@ pub enum LogicalAttr {
 pub struct ExpandedAttributes {
     pub attribute_keys: BTreeMap<AttributeName, String>,
     pub include_custom_attributes: bool,
+    pub include_operational_attributes: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

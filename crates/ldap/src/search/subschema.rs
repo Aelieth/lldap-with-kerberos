@@ -133,7 +133,6 @@ pub fn make_ldap_subschema_entry(
     }
 
     // Build inetOrgPerson MAY list with logical grouping
-    // 1. Core identity → 2. Other schema attrs (excluding operational) → 3. All operational at the very end
     let mut inet_may: Vec<String> = vec![];
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -235,7 +234,14 @@ pub fn make_ldap_subschema_entry(
             },
             LdapPartialAttribute {
                 atype: "attributeTypes".to_string(),
-                vals: dynamic_attr_types,
+                vals: {
+                    let mut all_attr_types = dynamic_attr_types;
+                    // Add core operational attributes that Studio requires to be declared
+                    all_attr_types.push(b"( 2.5.18.3 NAME 'hasSubordinates' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.7 SINGLE-VALUE USAGE directoryOperation )".to_vec());
+                    all_attr_types.push(b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE USAGE directoryOperation )".to_vec());
+                    all_attr_types.push(b"( 2.5.18.10 NAME 'subschemaSubentry' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE USAGE directoryOperation )".to_vec());
+                    all_attr_types
+                },
             },
             LdapPartialAttribute {
                 atype: "objectClasses".to_string(),

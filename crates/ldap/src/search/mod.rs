@@ -1,11 +1,11 @@
-//! Search module - ApacheDS style split
+//! Search module
 
 pub mod handler;
 pub mod root_dse;
 pub mod results;
 pub mod scope;
 pub mod subschema;
-pub mod filters;   // NEW: filter conversion logic (moved from core/ for slimming)
+pub mod filters;
 
 pub use handler::do_search;
 pub use root_dse::{is_root_dse_request, is_subschema_entry_request, root_dse_response};

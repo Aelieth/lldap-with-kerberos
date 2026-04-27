@@ -28,6 +28,17 @@ where
 
     let scope = get_search_scope(base_dn, &dn_parts, &request.scope, allowed_ous);
     let schema = PublicSchema::get();
+    let include_op = request.attrs.iter().any(|a| {
+        a == "+" || 
+        a.eq_ignore_ascii_case("hassubordinates") ||
+        a.eq_ignore_ascii_case("structuralobjectclass") ||
+        a.eq_ignore_ascii_case("subschemasubentry") ||
+        a.eq_ignore_ascii_case("createtimestamp") ||
+        a.eq_ignore_ascii_case("modifytimestamp") ||
+        a.eq_ignore_ascii_case("pwdchangedtime") ||
+        a.eq_ignore_ascii_case("entryuuid") ||
+        a.eq_ignore_ascii_case("memberof")
+    });
 
     match scope {
         crate::search::scope::SearchScope::Root => {
@@ -72,7 +83,7 @@ where
                 return Ok(vec![LdapOp::SearchResultEntry(root_entry), make_search_success()]);
             }
             let top_level_ous = crate::dn::get_direct_child_ous("", allowed_ous);
-            let mut results = build_ou_entries(&top_level_ous, &ldap_info.base_dn_str);
+            let mut results = build_ou_entries(&top_level_ous, &ldap_info.base_dn_str, include_op);
 
             if request.scope == LdapSearchScope::Subtree {
                 let user_results = crate::core::user::get_user_list(
@@ -114,7 +125,7 @@ where
             let internal_ou = crate::dn::get_internal_ou_from_dn_parts(&dn_parts);
 
             if request.scope == LdapSearchScope::Base {
-                let ou_entry = make_ou_entry(&internal_ou, &ldap_info.base_dn_str);
+                let ou_entry = make_ou_entry(&internal_ou, &ldap_info.base_dn_str, include_op);
                 results.push(LdapOp::SearchResultEntry(ou_entry));
             } else {
                 let child_ous: Vec<String> = if request.scope == LdapSearchScope::OneLevel {
@@ -131,7 +142,7 @@ where
                         .collect()
                 };
                 if !child_ous.is_empty() {
-                    results.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str));
+                    results.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str, include_op));
                 }
 
                 let user_results = crate::core::user::get_user_list(

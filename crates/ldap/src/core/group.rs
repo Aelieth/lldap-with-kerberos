@@ -1,5 +1,3 @@
-//! All attribute logic moved to attributes.rs
-
 use crate::core::{error::{LdapError, LdapResult}, utils::LdapInfo};
 use lldap_domain::public_schema::PublicSchema;
 use lldap_domain::types::Group;

@@ -52,7 +52,7 @@ pub fn get_search_scope(
     SearchScope::Unknown
 }
 
-pub fn make_ou_entry(ou_str: &str, base_dn_str: &str) -> LdapSearchResultEntry {
+pub fn make_ou_entry(ou_str: &str, base_dn_str: &str, include_operational_attributes: bool) -> LdapSearchResultEntry {
     let rdn_chain = crate::dn::internal_ou_to_ldap_rdn_chain(ou_str);
     let ou_part: String = rdn_chain
         .iter()
@@ -70,37 +70,42 @@ pub fn make_ou_entry(ou_str: &str, base_dn_str: &str) -> LdapSearchResultEntry {
         .map(|(_, v)| v.as_bytes().to_vec())
         .unwrap_or_else(|| crate::dn::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
 
+    let mut attributes = vec![
+        LdapPartialAttribute {
+            atype: "objectClass".to_string(),
+            vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
+        },
+        LdapPartialAttribute {
+            atype: "ou".to_string(),
+            vals: vec![leaf_ou_val],
+        },
+    ];
+
+    if include_operational_attributes {
+        attributes.push(LdapPartialAttribute {
+            atype: "hasSubordinates".to_string(),
+            vals: vec![b"TRUE".to_vec()],
+        });
+        attributes.push(LdapPartialAttribute {
+            atype: "structuralObjectClass".to_string(),
+            vals: vec![b"organizationalUnit".to_vec()],
+        });
+        attributes.push(LdapPartialAttribute {
+            atype: "subschemaSubentry".to_string(),
+            vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
+        });
+    }
+
     LdapSearchResultEntry {
         dn,
-        attributes: vec![
-            LdapPartialAttribute {
-                atype: "objectClass".to_string(),
-                vals: vec![b"top".to_vec(), b"organizationalUnit".to_vec()],
-            },
-            LdapPartialAttribute {
-                atype: "ou".to_string(),
-                vals: vec![leaf_ou_val],
-            },
-            LdapPartialAttribute {
-                atype: "hasSubordinates".to_string(),
-                vals: vec![b"TRUE".to_vec()],
-            },
-            LdapPartialAttribute {
-                atype: "structuralObjectClass".to_string(),
-                vals: vec![b"organizationalUnit".to_vec()],
-            },
-            LdapPartialAttribute {
-                atype: "subschemaSubentry".to_string(),
-                vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
-            },
-        ],
+        attributes,
     }
 }
 
-pub fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp> {
+pub fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str, include_operational_attributes: bool) -> Vec<LdapOp> {
     allowed_ous
         .iter()
-        .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str)))
+        .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str, include_operational_attributes)))
         .collect()
 }
 
