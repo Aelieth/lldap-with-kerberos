@@ -1,5 +1,4 @@
-//! Slimmed user module — only list operations remain.
-//! All attribute logic moved to attributes.rs (single source of truth).
+//! All attribute logic moved to attributes.rs
 
 use crate::core::{error::{LdapError, LdapResult}, utils::LdapInfo};
 use lldap_domain::public_schema::PublicSchema;
@@ -9,7 +8,7 @@ use tracing::{debug, instrument};
 
 /// Returns the default object classes for users.
 pub fn get_default_user_object_classes() -> Vec<lldap_domain::types::LdapObjectClass> {
-    crate::core::utils::get_default_user_object_classes()
+    crate::attributes::get_default_user_object_classes()
 }
 
 /// List users (thin entry point).

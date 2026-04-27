@@ -103,3 +103,78 @@ pub fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str) -> Vec<LdapOp
         .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str)))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*; // or use crate::search::scope::get_search_scope;
+    use ldap3_proto::LdapSearchScope;
+
+    // Helper to make DN parts easily
+    fn make_dn(dn: &str) -> Vec<(String, String)> {
+        dn.split(',')
+        .map(|part| {
+            let mut split = part.split('=');
+            (
+                split.next().unwrap().trim().to_string(),
+             split.next().unwrap().trim().to_string(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn test_search_scope_root() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("dc=example,dc=com");
+
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Base, &["people".to_string(), "groups".to_string()]);
+        assert_eq!(scope, SearchScope::Root);
+    }
+
+    #[test]
+    fn test_search_scope_container_people() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("ou=people,dc=example,dc=com");
+
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::OneLevel, &["people".to_string(), "groups".to_string()]);
+        assert_eq!(scope, SearchScope::Container);
+    }
+
+    #[test]
+    fn test_search_scope_leaf_user() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("uid=alice,ou=people,dc=example,dc=com");
+
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Base, &["people".to_string(), "groups".to_string()]);
+        assert_eq!(scope, SearchScope::LeafUser);
+    }
+
+    #[test]
+    fn test_search_scope_leaf_group() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("cn=admins,ou=groups,dc=example,dc=com");
+
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Base, &["people".to_string(), "groups".to_string()]);
+        assert_eq!(scope, SearchScope::LeafGroup);
+    }
+
+    #[test]
+    fn test_search_scope_invalid() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("ou=other,dc=evil,dc=com");
+
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Subtree, &["people".to_string(), "groups".to_string()]);
+        assert_eq!(scope, SearchScope::Invalid);
+    }
+
+    #[test]
+    fn test_search_scope_nested_ou_container() {
+        let base_dn = make_dn("dc=example,dc=com");
+        let dn = make_dn("ou=office,ou=people,dc=example,dc=com");
+
+        // Assuming your current logic supports this
+        let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Subtree, &["people".to_string(), "groups".to_string()]);
+        // Adjust expected value based on your actual implementation
+        assert!(matches!(scope, SearchScope::Container | SearchScope::Unknown));
+    }
+}

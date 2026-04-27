@@ -1,10 +1,14 @@
+// crates/ldap/src/modify.rs
+// LDAP Modify — currently only supports password changes (userPassword Replace)
+// All other attribute modifications go through the GraphQL layer (protected by schema read-only flags)
+
 use crate::{
     core::{
         error::{LdapError, LdapResult},
         utils::{LdapInfo, get_user_id_from_distinguished_name},
     },
     handler::make_modify_response,
-    password::{self},
+    password,
 };
 use ldap3_proto::proto::{LdapModify, LdapModifyRequest, LdapModifyType, LdapOp, LdapResultCode};
 use lldap_access_control::UserReadableBackendHandler;

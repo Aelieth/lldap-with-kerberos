@@ -1,3 +1,7 @@
+// crates/ldap/src/password.rs
+// LDAP Bind + Password Modify (extended operation) + Kerberos sync support
+// Uses the new attributes.rs / SchemaManager pipeline indirectly via user details
+
 use crate::{
     core::{
         error::{LdapError, LdapResult},

@@ -1,11 +1,12 @@
 // crates/ldap/src/create.rs
 // LDAP ADD for users/groups → our clean EAV backend
-// POSIX attributes (givenName/sn/avatar) + kerberossync default are handled here
+// Uses the new attributes.rs + SchemaManager pipeline for canonical name handling
 use crate::{
     core::{
         error::{LdapError, LdapResult},
-        utils::{LdapInfo, UserOrGroupName, get_user_or_group_id_from_distinguished_name},
+        utils::LdapInfo,
     },
+    dn::{get_user_or_group_id_from_distinguished_name, UserOrGroupName},
     handler::make_add_response,
 };
 use ldap3_proto::proto::{
@@ -36,7 +37,7 @@ pub(crate) async fn create_user_or_group(
         }
         err => Err(err.into_ldap_error(
             &request.dn,
-            format!(r#""uid=id,ou=people,{base_dn_str}" or "uid=id,ou=groups,{base_dn_str}""#),
+            format!(r#""uid=id,ou=people,{base_dn_str}" or "cn=id,ou=groups,{base_dn_str}""#),
         )),
     }
 }
@@ -222,8 +223,9 @@ mod tests {
             .times(1)
             .return_once(|_| Ok(GroupId(5)));
         let ldap_handler = setup_bound_admin_handler(mock).await;
+        // Fixed: groups use cn= (not uid=)
         let request = LdapAddRequest {
-            dn: "uid=bob,ou=groups,dc=example,dc=com".to_owned(),
+            dn: "cn=bob,ou=groups,dc=example,dc=com".to_owned(),
             attributes: vec![LdapPartialAttribute {
                 atype: "cn".to_owned(),
                 vals: vec![b"Bobby".to_vec()],

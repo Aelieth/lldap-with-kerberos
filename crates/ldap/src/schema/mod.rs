@@ -1,7 +1,7 @@
 pub mod definitions;
 pub mod manager;
 
-pub use definitions::{ExpandedAttributes, LogicalAttr};
+pub use definitions::{ExpandedAttributes, LogicalAttr, UserFieldType, GroupFieldType};
 pub use manager::SchemaManager;
 
 /// Returns a default SchemaManager instance.

@@ -90,6 +90,7 @@ mod tests {
         });
         mock.expect_list_groups().returning(|_| Ok(vec![]));
         let ldap_handler = setup_bound_admin_handler(mock).await;
+
         let dn = "uid=bob,ou=people,dc=example,dc=com";
         let request = LdapCompareRequest {
             dn: dn.to_string(),
@@ -105,7 +106,8 @@ mod tests {
                 referral: vec![],
             })])
         );
-        // Non-canonical attribute.
+
+        // Non-canonical attribute (alias resolution via new SchemaManager)
         let request = LdapCompareRequest {
             dn: dn.to_string(),
             atype: "eMail".to_owned(),
@@ -139,10 +141,12 @@ mod tests {
             }])
         });
         let ldap_handler = setup_bound_admin_handler(mock).await;
-        let dn = "uid=group,ou=groups,dc=example,dc=com";
+
+        // Fixed: groups use cn= (not uid=)
+        let dn = "cn=group,ou=groups,dc=example,dc=com";
         let request = LdapCompareRequest {
             dn: dn.to_string(),
-            atype: "uid".to_owned(),
+            atype: "cn".to_owned(), // groups use cn / displayName
             val: b"group".to_vec(),
         };
         assert_eq!(
@@ -166,6 +170,7 @@ mod tests {
         });
         mock.expect_list_groups().returning(|_| Ok(vec![]));
         let ldap_handler = setup_bound_admin_handler(mock).await;
+
         let dn = "uid=bob,ou=people,dc=example,dc=com";
         let request = LdapCompareRequest {
             dn: dn.to_string(),
@@ -200,6 +205,7 @@ mod tests {
         });
         mock.expect_list_groups().returning(|_| Ok(vec![]));
         let ldap_handler = setup_bound_admin_handler(mock).await;
+
         let dn = "uid=bob,ou=people,dc=example,dc=com";
         let request = LdapCompareRequest {
             dn: dn.to_string(),
@@ -234,7 +240,9 @@ mod tests {
             }])
         });
         let ldap_handler = setup_bound_admin_handler(mock).await;
-        let dn = "uid=group,ou=groups,dc=example,dc=com";
+
+        // Fixed: correct group DN + uniqueMember with full user DN (matches new attributes.rs output)
+        let dn = "cn=group,ou=groups,dc=example,dc=com";
         let request = LdapCompareRequest {
             dn: dn.to_string(),
             atype: "uniqueMember".to_owned(),

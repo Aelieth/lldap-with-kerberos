@@ -10,20 +10,20 @@ pub(crate) mod password;
 pub(crate) mod schema;
 pub(crate) mod search;
 
-pub use core::utils::{LdapInfo, UserFieldType, GroupFieldType};
+pub use core::utils::LdapInfo;
 pub use handler::LdapHandler;
 
 pub use core::group::get_default_group_object_classes;
 pub use core::user::get_default_user_object_classes;
 
-pub use schema::{ExpandedAttributes, LogicalAttr, SchemaManager, get_schema_manager};
+pub use schema::{ExpandedAttributes, LogicalAttr, SchemaManager, get_schema_manager, UserFieldType, GroupFieldType};
 
 // Thin shims for graphql-server compatibility (will be removed once graphql-server is updated)
-pub fn map_user_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> crate::core::utils::UserFieldType {
+pub fn map_user_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> UserFieldType {
     SchemaManager::map_user_field(field, schema)
 }
 
-pub fn map_group_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> crate::core::utils::GroupFieldType {
+pub fn map_group_field(field: &lldap_domain::types::AttributeName, schema: &lldap_domain::public_schema::PublicSchema) -> GroupFieldType {
     SchemaManager::map_group_field(field, schema)
 }
 

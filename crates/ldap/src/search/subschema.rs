@@ -1,3 +1,4 @@
+use crate::attributes::get_preferred_ldap_name;
 use crate::schema::SchemaManager;
 use chrono::Utc;
 use ldap3_proto::{
@@ -70,7 +71,7 @@ pub fn make_ldap_subschema_entry(
     ].iter().cloned().collect();
 
     for attr in schema_manager.get_all_user_attributes().iter().chain(schema_manager.get_all_group_attributes().iter()) {
-        let preferred = crate::core::utils::get_preferred_ldap_name(attr);
+        let preferred = get_preferred_ldap_name(attr);
         if already_covered.contains(preferred.to_ascii_lowercase().as_str()) {
             continue;
         }
@@ -154,7 +155,7 @@ pub fn make_ldap_subschema_entry(
     ].iter().cloned().collect();
 
     for attr in schema_manager.get_all_user_attributes() {
-        let pref = crate::core::utils::get_preferred_ldap_name(&attr);
+        let pref = get_preferred_ldap_name(&attr);
         let lower = pref.to_ascii_lowercase();
         if !operational_names.contains(lower.as_str()) && seen.insert(lower) {
             inet_may.push(pref);

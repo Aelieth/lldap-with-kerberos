@@ -1,7 +1,8 @@
 use crate::core::{
     error::{LdapError, LdapResult},
-    utils::{LdapInfo, UserOrGroupName, get_user_or_group_id_from_distinguished_name},
+    utils::LdapInfo,
 };
+use crate::dn::{get_user_or_group_id_from_distinguished_name, UserOrGroupName};
 use ldap3_proto::proto::{LdapOp, LdapResult as LdapResultOp, LdapResultCode};
 use lldap_access_control::AdminBackendHandler;
 use lldap_domain::types::{GroupName, UserId};
@@ -31,7 +32,7 @@ pub(crate) async fn delete_user_or_group(
         UserOrGroupName::Group(group_name) => delete_group(backend_handler, group_name).await,
         err => Err(err.into_ldap_error(
             &request,
-            format!(r#""uid=id,ou=people,{base_dn_str}" or "uid=id,ou=groups,{base_dn_str}""#),
+            format!(r#""uid=id,ou=people,{base_dn_str}" or "cn=id,ou=groups,{base_dn_str}""#),
         )),
     }
 }
@@ -168,7 +169,7 @@ mod tests {
             .times(1)
             .return_once(|_| Ok(()));
         let mut ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapOp::DelRequest("uid=bob,ou=groups,dc=example,dc=com".to_owned());
+        let request = LdapOp::DelRequest("cn=bob,ou=groups,dc=example,dc=com".to_owned());
         assert_eq!(
             ldap_handler.handle_ldap_message(request).await,
             Some(vec![make_del_response(
@@ -247,7 +248,7 @@ mod tests {
             )))))
             .return_once(|_| Ok(vec![]));
         let mut ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapOp::DelRequest("uid=bob,ou=groups,dc=example,dc=com".to_owned());
+        let request = LdapOp::DelRequest("cn=bob,ou=groups,dc=example,dc=com".to_owned());
         assert_eq!(
             ldap_handler.handle_ldap_message(request).await,
             Some(vec![make_del_response(
@@ -266,7 +267,7 @@ mod tests {
             )))))
             .return_once(|_| Err(DomainError::InternalError("WTF?".to_string())));
         let mut ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapOp::DelRequest("uid=bob,ou=groups,dc=example,dc=com".to_owned());
+        let request = LdapOp::DelRequest("cn=bob,ou=groups,dc=example,dc=com".to_owned());
         assert_eq!(
             ldap_handler.handle_ldap_message(request).await,
             Some(vec![make_del_response(
@@ -299,7 +300,7 @@ mod tests {
             .times(1)
             .return_once(|_| Err(DomainError::InternalError("WTF?".to_string())));
         let mut ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = LdapOp::DelRequest("uid=bob,ou=groups,dc=example,dc=com".to_owned());
+        let request = LdapOp::DelRequest("cn=bob,ou=groups,dc=example,dc=com".to_owned());
         assert_eq!(
             ldap_handler.handle_ldap_message(request).await,
             Some(vec![make_del_response(

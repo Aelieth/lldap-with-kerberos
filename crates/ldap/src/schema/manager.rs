@@ -1,6 +1,7 @@
 //! SchemaManager - Single source of truth for all attribute handling.
 
 use super::definitions::{ExpandedAttributes, LogicalAttr};
+use crate::attributes::get_preferred_ldap_name;
 use crate::core::utils::{GroupFieldType, UserFieldType};
 use lldap_domain::public_schema::PublicSchema;
 use lldap_domain::types::{AttributeName, AttributeType};
@@ -187,7 +188,7 @@ impl SchemaManager {
         for attr in schema.user_attributes().attributes.iter()
             .chain(schema.group_attributes().attributes.iter())
         {
-            let preferred_name = crate::core::utils::get_preferred_ldap_name(attr);
+            let preferred_name = get_preferred_ldap_name(attr);
 
             if let Some((logical, _)) = Self::resolve_attribute(&preferred_name) {
                 let is_always_op = always_operational.contains(preferred_name.as_str());
