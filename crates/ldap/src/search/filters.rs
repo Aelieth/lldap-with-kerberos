@@ -139,6 +139,7 @@ pub fn convert_user_filter(
                         UserRequestFilter::False
                     }))
                 }
+                crate::core::utils::UserFieldType::EntryUuid => Ok(UserRequestFilter::False),
             }
         }
         LdapFilter::GreaterOrEqual(field, value) => {
@@ -200,6 +201,7 @@ pub fn convert_user_filter(
                 | crate::core::utils::UserFieldType::MemberOf
                 | crate::core::utils::UserFieldType::Dn
                 | crate::core::utils::UserFieldType::EntryDn
+                | crate::core::utils::UserFieldType::EntryUuid
                 | crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::CreationDate)
                 | crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::Uuid) => Err(LdapError {
                     code: ldap3_proto::LdapResultCode::UnwillingToPerform,
@@ -307,6 +309,7 @@ pub fn convert_group_filter(
                         GroupRequestFilter::False
                     }))
                 }
+                crate::core::utils::GroupFieldType::EntryUuid => Ok(GroupRequestFilter::False),
                 crate::core::utils::GroupFieldType::NoMatch => {
                     if !ldap_info.ignored_group_attributes.contains(&field) {
                         warn!(

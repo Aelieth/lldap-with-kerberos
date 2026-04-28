@@ -28,6 +28,7 @@ pub enum UserFieldType {
     MemberOf,
     Dn,
     EntryDn,
+    EntryUuid,
     PrimaryField(lldap_domain_model::model::UserColumn),
     Attribute(AttributeName, AttributeType, bool),
 }
@@ -42,6 +43,7 @@ pub enum GroupFieldType {
     ObjectClass,
     Dn,
     EntryDn,
+    EntryUuid,
     Member,
     Uuid,
     Attribute(AttributeName, AttributeType, bool),

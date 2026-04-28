@@ -102,6 +102,20 @@ pub(crate) fn inject_operational_attributes(attrs: &mut Vec<LdapPartialAttribute
             vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
         });
     }
+    // RFC 4512 creatorsName and modifiersName — injected with default admin DN
+    // (lldap doesn't track per-entry creators/modifiers, so we use a sensible default)
+    if !existing.contains("creatorsname") {
+        attrs.push(LdapPartialAttribute {
+            atype: "creatorsName".to_string(),
+            vals: vec![format!("cn=admin,ou=people,{}", base_dn_str).into_bytes()],
+        });
+    }
+    if !existing.contains("modifiersname") {
+        attrs.push(LdapPartialAttribute {
+            atype: "modifiersName".to_string(),
+            vals: vec![format!("cn=admin,ou=people,{}", base_dn_str).into_bytes()],
+        });
+    }
 }
 
 /// Returns the default object classes for a user as raw bytes (for LDAP internal use).
@@ -204,6 +218,9 @@ pub fn get_user_attribute(
             let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
             vec![format!("uid={},{}", &user.user_id, ou_part + "," + base_dn_str).into_bytes()]
         }
+        crate::core::utils::UserFieldType::EntryUuid => {
+            vec![user.uuid.to_string().into_bytes()]
+        }
         crate::core::utils::UserFieldType::MemberOf => groups
             .into_iter()
             .flatten()
@@ -298,6 +315,9 @@ pub fn get_group_attribute(
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
             vec![format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str).into_bytes()]
+        }
+        crate::core::utils::GroupFieldType::EntryUuid => {
+            vec![group.uuid.to_string().into_bytes()]
         }
         crate::core::utils::GroupFieldType::GroupId => vec![group.id.0.to_string().into_bytes()],
         crate::core::utils::GroupFieldType::DisplayName => vec![group.display_name.to_string().into_bytes()],

@@ -120,6 +120,8 @@ pub fn make_ldap_subschema_entry(
         ("1.3.6.1.1.16.4", b"( 1.3.6.1.1.16.4 NAME ( 'entryUUID' 'uuid' ) DESC 'UUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX 1.3.6.1.1.16.1 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
         ("2.5.18.1", b"( 2.5.18.1 NAME ( 'createTimestamp' 'creationdate' 'creation_date' 'creationTimestamp' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
         ("2.5.18.2", b"( 2.5.18.2 NAME ( 'modifyTimestamp' 'modifieddate' 'modified_date' 'modifydate' 'modifyTimestamp' ) DESC 'RFC4512' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.18.3", b"( 2.5.18.3 NAME 'creatorsName' DESC 'RFC4512' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("2.5.18.4", b"( 2.5.18.4 NAME 'modifiersName' DESC 'RFC4512' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
         ("1.2.840.113556.1.2.102", b"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group membership' EQUALITY distinguishedNameMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 NO-USER-MODIFICATION USAGE dSAOperation )".to_vec()),
         ("1.3.6.1.4.1.1466.101.120.6", b"( 1.3.6.1.4.1.1466.101.120.6 NAME 'hasSubordinates' DESC 'X.500 Has Subordinates' EQUALITY booleanMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.7 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
         ("2.5.21.1", b"( 2.5.21.1 NAME 'structuralObjectClass' DESC 'X.500 Structural Object Class' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
@@ -162,9 +164,13 @@ pub fn make_ldap_subschema_entry(
     }
 
     // 3. All operational attributes at the very end (clean grouping)
+    // Note: hasSubordinates, structuralObjectClass, and subschemaSubentry are X.500 operational
+    // attributes (RFC 3674, RFC 4512) that are automatically available on ALL entries.
+    // They are declared in attributeTypes with USAGE directoryOperation and should NEVER
+    // appear in any objectClass MAY list — strict schema clients (ApacheDS Studio) will
+    // suppress them if listed here, and they would incorrectly appear as "standard attributes".
     for extra in [
-        "createTimestamp", "modifyTimestamp", "pwdChangedTime", "entryuuid",
-        "memberOf", "hasSubordinates", "structuralObjectClass", "subschemaSubentry",
+        "createTimestamp", "modifyTimestamp", "pwdChangedTime", "memberOf",
     ] {
         let lower = extra.to_ascii_lowercase();
         if seen.insert(lower) {
@@ -234,14 +240,7 @@ pub fn make_ldap_subschema_entry(
             },
             LdapPartialAttribute {
                 atype: "attributeTypes".to_string(),
-                vals: {
-                    let mut all_attr_types = dynamic_attr_types;
-                    // Add core operational attributes that Studio requires to be declared
-                    all_attr_types.push(b"( 2.5.18.3 NAME 'hasSubordinates' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.7 SINGLE-VALUE USAGE directoryOperation )".to_vec());
-                    all_attr_types.push(b"( 2.5.21.9 NAME 'structuralObjectClass' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE USAGE directoryOperation )".to_vec());
-                    all_attr_types.push(b"( 2.5.18.10 NAME 'subschemaSubentry' DESC 'RFC4512' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE USAGE directoryOperation )".to_vec());
-                    all_attr_types
-                },
+                vals: dynamic_attr_types,
             },
             LdapPartialAttribute {
                 atype: "objectClasses".to_string(),

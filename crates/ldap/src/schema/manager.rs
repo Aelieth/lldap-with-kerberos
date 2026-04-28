@@ -44,6 +44,9 @@ impl SchemaManager {
             ("createtimestamp", LogicalAttr::Operational, "createTimestamp", vec!["creationdate".into(), "creation_date".into(), "creationtimestamp".into()]),
             ("modifytimestamp", LogicalAttr::Operational, "modifyTimestamp", vec!["modifieddate".into(), "modified_date".into(), "modifydate".into()]),
             ("pwdchangedtime", LogicalAttr::Operational, "pwdChangedTime", vec!["passwordmodifieddate".into(), "password_modified_date".into()]),
+            ("creatorsname", LogicalAttr::Operational, "creatorsName", vec![]),
+            ("modifiersname", LogicalAttr::Operational, "modifiersName", vec![]),
+            ("entryuuid", LogicalAttr::Operational, "entryUUID", vec!["uuid".into()]),
         ];
 
         for (name, logical, canonical, aliases) in core_attrs {
@@ -159,6 +162,9 @@ impl SchemaManager {
                 LogicalAttr::MemberOf => UserFieldType::MemberOf,
                 LogicalAttr::Dn => UserFieldType::Dn,
                 LogicalAttr::EntryDn => UserFieldType::EntryDn,
+                LogicalAttr::Operational if field.as_str().eq_ignore_ascii_case("entryuuid") || field.as_str().eq_ignore_ascii_case("uuid") => {
+                    UserFieldType::EntryUuid
+                }
                 LogicalAttr::Primary(col) => UserFieldType::PrimaryField(col),
                 LogicalAttr::Custom(internal, t, is_list) => {
                     UserFieldType::Attribute(AttributeName::from(internal), t, is_list)
@@ -181,6 +187,9 @@ impl SchemaManager {
                 LogicalAttr::ObjectClass => GroupFieldType::ObjectClass,
                 LogicalAttr::Dn => GroupFieldType::Dn,
                 LogicalAttr::EntryDn => GroupFieldType::EntryDn,
+                LogicalAttr::Operational if field.as_str().eq_ignore_ascii_case("entryuuid") || field.as_str().eq_ignore_ascii_case("uuid") => {
+                    GroupFieldType::EntryUuid
+                }
                 LogicalAttr::Primary(col) => match col {
                     lldap_domain_model::model::UserColumn::CreationDate => GroupFieldType::CreationDate,
                     lldap_domain_model::model::UserColumn::ModifiedDate => GroupFieldType::ModifiedDate,
@@ -219,9 +228,9 @@ impl SchemaManager {
         let mut operational_keys: Vec<String> = Vec::new();
 
         let always_operational: HashSet<&str> = [
-            "hasSubordinates", "structuralObjectClass", "subschemaSubentry",
-            "createTimestamp", "modifyTimestamp", "pwdChangedTime",
-            "entryUUID", "memberOf",
+            "hassubordinates", "structuralobjectclass", "subschemasubentry",
+            "createtimestamp", "modifytimestamp", "pwdchangedtime",
+            "entryuuid", "entrydn", "memberof", "creatorsname", "modifiersname",
         ].iter().cloned().collect();
 
         let _ignore_on_plus: HashSet<&str> = [
@@ -238,7 +247,7 @@ impl SchemaManager {
             let preferred_name = get_preferred_ldap_name(attr);
 
             if let Some((logical, _)) = self.resolve_attribute(&preferred_name) {
-                let is_always_op = always_operational.contains(preferred_name.as_str());
+                let is_always_op = always_operational.contains(preferred_name.to_ascii_lowercase().as_str());
                 let target = if matches!(logical, LogicalAttr::Operational) || is_always_op {
                     &mut operational_keys
                 } else {
@@ -261,7 +270,7 @@ impl SchemaManager {
         }
 
         let always_operational_set: HashSet<&str> = always_operational.iter().cloned().collect();
-        standard_keys.retain(|k| !always_operational_set.contains(k.as_str()));
+        standard_keys.retain(|k| !always_operational_set.contains(k.to_ascii_lowercase().as_str()));
 
         // objectClass is always included for standard searches
         if !standard_keys.iter().any(|k| k.eq_ignore_ascii_case("objectClass")) {
@@ -307,10 +316,16 @@ impl SchemaManager {
             }
         }
 
+        // If any explicitly requested attribute is operational, include operational attrs
+        // (per LDAP spec: explicitly requested operational attrs must be returned)
+        let has_explicit_operational = attributes_out.keys().any(|k| {
+            self.is_operational(k.as_str()) || always_operational.contains(k.as_str().to_ascii_lowercase().as_str())
+        });
+
         ExpandedAttributes {
             attribute_keys: attributes_out,
             include_custom_attributes,
-            include_operational_attributes: has_plus,
+            include_operational_attributes: has_plus || has_explicit_operational,
         }
     }
 
