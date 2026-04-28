@@ -10,7 +10,7 @@ Built with aid of Grok / xAI. Thanks Grok and all of my agents - Tasker, Curiell
 
 Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
 
-~14,000 new lines added, ~5,000 lines removed. Designed for reliable home or lab use.
+~16,000 new lines added, ~8,000 lines removed. Designed for reliable home or lab use.
 
 ## Schema System – Single Source of Truth
 - All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`
@@ -24,19 +24,21 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - Runtime code always pulls from the database but stays 100% consistent with the PublicSchema definition
 
 ## Kerberos Integration – MIT KDC
+- Hands off integration: Bootstrap handled by custom startup binary `crates/kerberos/src/bin/kerberos_manager.rs` on first container start
+- Password-less operation after bootstrap: uses kadm5.keytab for all admin actions
+- Realm and domain are automatically derived from LLDAP_LDAP_BASE_DN — zero manual configuration needed
 - Full MIT Kerberos Key Distribution Center (krb5kdc + kadmind) runs inside the Docker container via FFI bindings to libkadm5 and krb5
 - Automatic principal management: on every user create / password change / delete, principals are created / updated / deleted in the KDC
 - Secure password handling: RSA 2048 OAEP+SHA-256 encryption between frontend and backend kerberos
-- Password-less operation after bootstrap: uses kadm5.keytab for all admin actions
-- Realm and domain are automatically derived from LLDAP_LDAP_BASE_DN — zero manual configuration needed
-- Bootstrap handled by `crates/kerberos/src/bin/kerberos_manager.rs` on first container start (creates DB, configs, keytab, starts daemons)
 
-## Federation – Keycloak and POSIX
+## Federation – Keycloak
 - Dedicated “Federation” tab in the web UI (`app/src/components/federation.rs`) for Keycloak + Kerberos integration
 - Loads and saves `keycloak_config.toml` via GraphQL
 - One-click “Test Settings” button validates admin credentials
 - “Push To Keycloak” button (enabled after successful test + sync password) auto-creates realm, LDAP+Kerberos provider, and lldap-web client
 - “Export keytab” button generates ready-to-use keytab for Keycloak HTTP principal
+
+## Federation - POSIX
 - Dedicated POSIX section - autofill and assignment of POSIX attributes across users or groups
 - POSIX automatic incremented attributes on user / group creation 
 - Prevents POSIX duplicate uid or gid numbers for sanity
@@ -47,17 +49,22 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - User table features real-time OU filtering, multi-field search, bulk selection with intelligent Select All, bulk Change OU, and bulk delete
 - Fully modular design — same OuSelector and OuTable will be reused for the Group table
 
+## Standardized LDAP support following RFC guidelines
+- LDAP can now be read and connected to via Directory Studios, even as strict as Apache
+- Full standards compliant with RFC guidelines, utilizing dynamic public_schema information
+- Modularized and memory efficient for lookups with POSIX and SSSD
+
 ## Other improvements / Bugfixes
-- #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB  size
+- #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB size
 - #401 [FEATURE REQUEST] Avatar supports JPG, JPEG, BMP, and PNG formats now with 1024x1024 resolution and <2MB
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
 - #739 [FEATURE REQUEST] SSSD integration support → POSIX groups added. Extra user and group classes inetOrgPerson, posixAccount, and posixGroup mappings.
+- #1165 [BUG] Users and groups objects are seen as containers, instead of leafs
 
 ## Reccently implemented - needs testing
 - #712 [FEATURE REQUEST] SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure. → ssHPublicKey added to public_schema with ldapsearch functionality. Admins may enter keys for users or users may modify their own keys.
 - #1308 [FEATURE REQUEST] Implement GreaterOrEqual filter for builtin timestamps → extended ldap user.rs and group.rs with handler.rs extensions with appropriate GreaterOrEqual / LessOrEqual for timestamps
 - #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings → simple intercept fix inside of the convert_group_filter
-- #1165 [BUG] Users and groups objects are seen as containers, instead of leafs
 - #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator."
 
 ## TODOs before release

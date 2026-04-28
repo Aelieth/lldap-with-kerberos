@@ -122,8 +122,9 @@ pub(crate) fn inject_operational_attributes(attrs: &mut Vec<LdapPartialAttribute
 pub fn get_default_user_object_classes_bytes(schema: &PublicSchema) -> Vec<Vec<u8>> {
     let mut classes: Vec<Vec<u8>> = vec![
         b"top".to_vec(),
-        b"mailAccount".to_vec(),
         b"person".to_vec(),
+        // mailAccount removed - non-standard lldap-specific objectClass
+        // Use extra_user_object_classes in schema config if legacy compatibility needed
     ];
     classes.extend(
         schema
