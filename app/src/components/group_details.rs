@@ -47,6 +47,7 @@ pub struct GroupDetails {
     /// The group info. If none, the error is in `error`. If `error` is None, then we haven't
     /// received the server response yet.
     group_and_schema: Option<(Group, Vec<AttributeSchema>)>,
+    success_message: Option<String>,
 }
 
 /// State machine describing the possible transitions of the component state.
@@ -191,17 +192,35 @@ impl CommonComponent<GroupDetails> for GroupDetails {
                 }
                 Err(e) => {
                     self.group_and_schema = None;
-                    bail!("Error getting user details: {}", e);
+                    bail!("Error getting group details: {}", e);
                 }
             },
             Msg::OnError(e) => return Err(e),
             Msg::OnUserAddedToGroup(user) => {
+                let group_name = self
+                    .group_and_schema
+                    .as_ref()
+                    .map(|(g, _)| g.display_name.clone())
+                    .unwrap_or_default();
+                self.success_message = Some(format!(
+                    "{} has been added to {}.",
+                    user.id, group_name
+                ));
                 self.group_and_schema.as_mut().unwrap().0.users.push(User {
                     id: user.id,
                     display_name: user.display_name,
                 });
             }
             Msg::OnUserRemovedFromGroup((user_id, _)) => {
+                let group_name = self
+                    .group_and_schema
+                    .as_ref()
+                    .map(|(g, _)| g.display_name.clone())
+                    .unwrap_or_default();
+                self.success_message = Some(format!(
+                    "{} has been removed from {}.",
+                    user_id, group_name
+                ));
                 self.group_and_schema
                     .as_mut()
                     .unwrap()
@@ -227,12 +246,14 @@ impl Component for GroupDetails {
         let mut table = Self {
             common: CommonComponentParts::<Self>::create(),
             group_and_schema: None,
+            success_message: None,
         };
         table.get_group_details(ctx);
         table
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+        self.success_message = None;
         CommonComponentParts::<Self>::update(self, ctx, msg)
     }
 
@@ -247,6 +268,15 @@ impl Component for GroupDetails {
                       {self.view_user_list(ctx, group)}
                       {self.view_add_user_button(ctx, group)}
                       {self.view_messages(error)}
+                      {
+                          if let Some(msg) = &self.success_message {
+                              html! {
+                                  <div class="alert alert-success mt-4">{msg}</div>
+                              }
+                          } else {
+                              html! {}
+                          }
+                      }
                     </div>
                 }
             }

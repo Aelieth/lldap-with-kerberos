@@ -221,7 +221,7 @@ impl GroupDetailsForm {
                 .map(|v| v.value != a.values)
                 .unwrap_or(!a.values.is_empty())
         });
-        if all_values.iter().any(|a| a.name == "display_name") {
+        if all_values.iter().any(|a| a.name == "displayname") {
             self.updated_group_name = true;
         }
         let remove_attributes: Option<Vec<String>> = if all_values.is_empty() {
