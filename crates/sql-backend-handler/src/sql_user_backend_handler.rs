@@ -18,6 +18,7 @@ use lldap_domain_model::{
     error::{DomainError, Result},
     model::{self, GroupColumn, UserColumn, deserialize, system_config},
 };
+use lldap_kerberos::delete_kerberos_principal;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, ModelTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
@@ -271,6 +272,15 @@ impl SqlBackendHandler {
 
             if attribute.name.as_str() == "kerberossync" {
                 kerb_sync_enabled = match &attribute.value {
+                    // Frontend (user_details_form + kerberos_switch) sends String "0"/"1"
+                    AttributeValue::String(Cardinality::Singleton(s)) => {
+                        match s.trim() {
+                            "1" | "true" | "TRUE" => Some(true),
+                            "0" | "false" | "FALSE" => Some(false),
+                            _ => Some(false),
+                        }
+                    }
+                    // Support the old Integer style too (for safety)
                     AttributeValue::Integer(Cardinality::Singleton(1)) => Some(true),
                     AttributeValue::Integer(Cardinality::Singleton(0)) => Some(false),
                     _ => Some(false),
@@ -394,6 +404,7 @@ impl SqlBackendHandler {
 
         match kerb_sync_enabled {
             Some(false) => {
+                // Clear the field in our DB
                 let update = model::users::ActiveModel {
                     user_id: ActiveValue::Set(request.user_id.clone()),
                     krb_principal_name: ActiveValue::Set(None),
@@ -401,6 +412,11 @@ impl SqlBackendHandler {
                     ..Default::default()
                 };
                 update.update(transaction).await?;
+
+                // === Actually delete the principal from the Kerberos KDC ===
+                if let Err(e) = delete_kerberos_principal(request.user_id.as_str()) {
+                    tracing::warn!("Failed to delete Kerberos principal for user {} when disabling sync: {}", request.user_id, e);
+                }
             }
             Some(true) => {}
             None => {}

@@ -21,7 +21,6 @@ use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 use yew::virtual_dom::AttrValue;
 use yew::Callback;
-use gloo_console::log;
 
 #[derive(GraphQLQuery)]
 #[graphql(
