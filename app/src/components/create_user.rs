@@ -7,6 +7,7 @@ use crate::{
         },
         router::AppRoute,
         ou_selector::OuSelector,
+        kerberos_switch::KerberosSwitch,
     },
     infra::{
         api::HostService,
@@ -426,24 +427,11 @@ impl Component for CreateUserForm {
                     .map(|&a| get_custom_attribute_input(a))
                     .collect::<Vec<Html>>() }
 
-                <div class="mb-3 row">
-                <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
-                {"Kerberos Sync :"}
-                <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
-                <i aria-label="Info" class="bi bi-info-circle"></i>
-                </button>
-                </label>
-                <div class="col-8 d-flex align-items-center">
-                <div class="btn-group" role="group" style="width: 120px;">
-                <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
-                {"On"}
-                </button>
-                <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
-                {"Off"}
-                </button>
-                </div>
-                </div>
-                </div>
+                <KerberosSwitch
+                    enabled={self.kerberossync_enabled}
+                    on_toggle={link.callback(Msg::ToggleKerberosSync)}
+                    show_banner={false}
+                />
 
                 <div class="mb-3 row">
                 <label class="form-label col-4 col-form-label">{"Organizational Unit :"}

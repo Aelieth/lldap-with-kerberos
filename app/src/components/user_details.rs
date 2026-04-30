@@ -57,6 +57,7 @@ pub enum Msg {
   OnError(Error),
   OnUserAddedToGroup(Group),
   OnUserRemovedFromGroup((String, i64)),
+  Refresh,
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Eq)]
@@ -66,44 +67,42 @@ pub struct Props {
 }
 
 impl CommonComponent<UserDetails> for UserDetails {
-  fn handle_msg(&mut self, _: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
-    match msg {
-      Msg::UserDetailsResponse(response) => match response {
-        Ok(data) => {
-          self.user_and_schema = Some((data.user, data.schema.user_schema.attributes));
+    fn handle_msg(&mut self, ctx: &Context<Self>, msg: <Self as Component>::Message) -> Result<bool> {
+        match msg {
+            Msg::UserDetailsResponse(response) => match response {
+                Ok(data) => {
+                    self.user_and_schema = Some((data.user, data.schema.user_schema.attributes));
+                }
+                Err(e) => {
+                    self.user_and_schema = None;
+                    bail!("Error getting user details: {}", e);
+                }
+            },
+            Msg::OnError(e) => return Err(e),
+            Msg::OnUserAddedToGroup(group) => {
+                self.mut_groups().push(group);
+            }
+            Msg::OnUserRemovedFromGroup((_, group_id)) => {
+                self.mut_groups().retain(|g| g.id != group_id);
+            }
+            Msg::Refresh => {
+                // Inline call (avoids any method-resolution ordering issues)
+                self.common.call_graphql::<GetUserDetails, _>(
+                    ctx,
+                    get_user_details::Variables {
+                        id: ctx.props().username.clone(),
+                    },
+                    Msg::UserDetailsResponse,
+                    "Error trying to fetch user details",
+                );
+            }
         }
-        Err(e) => {
-          self.user_and_schema = None;
-          bail!("Error getting user details: {}", e);
-        }
-      },
-      Msg::OnError(e) => return Err(e),
-      Msg::OnUserAddedToGroup(group) => {
-        self.mut_groups().push(group);
-      }
-      Msg::OnUserRemovedFromGroup((_, group_id)) => {
-        self.mut_groups().retain(|g| g.id != group_id);
-      }
+        Ok(true)
     }
-    Ok(true)
-  }
 
-  fn mut_common(&mut self) -> &mut CommonComponentParts<Self> {
-    &mut self.common
-  }
-}
-
-impl UserDetails {
-  fn get_user_details(&mut self, ctx: &Context<Self>) {
-    self.common.call_graphql::<GetUserDetails, _>(
-      ctx,
-      get_user_details::Variables {
-        id: ctx.props().username.clone(),
-      },
-      Msg::UserDetailsResponse,
-      "Error trying to fetch user details",
-    );
-  }
+    fn mut_common(&mut self) -> &mut CommonComponentParts<Self> {
+        &mut self.common
+    }
 }
 
 impl Component for UserDetails {
@@ -128,6 +127,8 @@ impl Component for UserDetails {
       (Some((u, schema)), error) => {
         let can_change_password = ctx.props().is_admin || ctx.props().username == u.id;
 
+        let link = ctx.link();  // ← REQUIRED for on_updated callback
+
         html! {
           <>
           <h3>{u.id.to_string()}</h3>
@@ -150,9 +151,10 @@ impl Component for UserDetails {
 
           <UserDetailsForm
           user={u.clone()}
-          user_attributes_schema={schema.clone()}  // FULL schema — form handles sorting + readonly
+          user_attributes_schema={schema.clone()}
           is_admin={ctx.props().is_admin}
           is_edited_user_admin={u.groups.iter().any(|g| g.display_name == "lldap_admin")}
+          on_updated={link.callback(|_| Msg::Refresh)}
           />
 
           {self.view_group_memberships(ctx, u)}
@@ -168,83 +170,94 @@ impl Component for UserDetails {
 }
 
 impl UserDetails {
-  fn view_messages(&self, error: &Option<Error>) -> Html {
-    if let Some(e) = error {
-      html! { <div class="alert alert-danger"><span>{"Error: "}{e.to_string()}</span></div> }
-    } else {
-      html! {}
+    fn get_user_details(&mut self, ctx: &Context<Self>) {
+        self.common.call_graphql::<GetUserDetails, _>(
+            ctx,
+            get_user_details::Variables {
+                id: ctx.props().username.clone(),
+            },
+            Msg::UserDetailsResponse,
+            "Error trying to fetch user details",
+        );
     }
-  }
 
-  fn view_group_memberships(&self, ctx: &Context<Self>, u: &User) -> Html {
-    let link = ctx.link();
-    let make_group_row = |group: &Group| {
-      let display_name = group.display_name.clone();
-      html! {
-        <tr key={format!("groupRow_{}", display_name)}>
-        {if ctx.props().is_admin {
-          html! {
-            <>
-            <td>
-            <Link to={AppRoute::GroupDetails{group_id: group.id}}>
-            {&group.display_name}
-            </Link>
-            </td>
-            <td>
-            <RemoveUserFromGroupComponent
-            username={u.id.clone()}
-            group_id={group.id}
-            on_user_removed_from_group={link.callback(Msg::OnUserRemovedFromGroup)}
-            on_error={link.callback(Msg::OnError)}/>
-            </td>
-            </>
-          }
+    fn view_messages(&self, error: &Option<Error>) -> Html {
+        if let Some(e) = error {
+            html! { <div class="alert alert-danger"><span>{"Error: "}{e.to_string()}</span></div> }
         } else {
-          html! { <td>{&group.display_name}</td> }
-        }}
-        </tr>
-      }
-    };
-    html! {
-      <>
-      <h5 class="row m-3 fw-bold">{"Group memberships"}</h5>
-      <div class="table-responsive">
-      <table class="table table-hover">
-      <thead>
-      <tr key="headerRow">
-      <th>{"Group"}</th>
-      { if ctx.props().is_admin { html!{ <th></th> }} else { html!{} }}
-      </tr>
-      </thead>
-      <tbody>
-      {if u.groups.is_empty() {
-        html! {
-          <tr key="EmptyRow">
-          <td>{"This user is not a member of any groups."}</td>
-          </tr>
+            html! {}
         }
-      } else {
-        html! {<>{u.groups.iter().map(make_group_row).collect::<Vec<_>>()}</>}
-      }}
-      </tbody>
-      </table>
-      </div>
-      </>
     }
-  }
 
-  fn view_add_group_button(&self, ctx: &Context<Self>, u: &User) -> Html {
-    let link = ctx.link();
-    if ctx.props().is_admin {
-      html! {
-        <AddUserToGroupComponent
-        username={u.id.clone()}
-        groups={u.groups.clone()}
-        on_error={link.callback(Msg::OnError)}
-        on_user_added_to_group={link.callback(Msg::OnUserAddedToGroup)}/>
-      }
-    } else {
-      html! {}
+    fn view_group_memberships(&self, ctx: &Context<Self>, u: &User) -> Html {
+        let link = ctx.link();
+        let make_group_row = |group: &Group| {
+            let display_name = group.display_name.clone();
+            html! {
+                <tr key={format!("groupRow_{}", display_name)}>
+                {if ctx.props().is_admin {
+                    html! {
+                        <>
+                        <td>
+                        <Link to={AppRoute::GroupDetails{group_id: group.id}}>
+                        {&group.display_name}
+                        </Link>
+                        </td>
+                        <td>
+                        <RemoveUserFromGroupComponent
+                        username={u.id.clone()}
+                        group_id={group.id}
+                        on_user_removed_from_group={link.callback(Msg::OnUserRemovedFromGroup)}
+                        on_error={link.callback(Msg::OnError)}/>
+                        </td>
+                        </>
+                    }
+                } else {
+                    html! { <td>{&group.display_name}</td> }
+                }}
+                </tr>
+            }
+        };
+        html! {
+            <>
+            <h5 class="row m-3 fw-bold">{"Group memberships"}</h5>
+            <div class="table-responsive">
+            <table class="table table-hover">
+            <thead>
+            <tr key="headerRow">
+            <th>{"Group"}</th>
+            { if ctx.props().is_admin { html!{ <th></th> }} else { html!{} }}
+            </tr>
+            </thead>
+            <tbody>
+            {if u.groups.is_empty() {
+                html! {
+                    <tr key="EmptyRow">
+                    <td>{"This user is not a member of any groups."}</td>
+                    </tr>
+                }
+            } else {
+                html! {<>{u.groups.iter().map(make_group_row).collect::<Vec<_>>()}</>}
+            }}
+            </tbody>
+            </table>
+            </div>
+            </>
+        }
     }
-  }
+
+    fn view_add_group_button(&self, ctx: &Context<Self>, u: &User) -> Html {
+        let link = ctx.link();
+        if ctx.props().is_admin {
+            html! {
+                <AddUserToGroupComponent
+                username={u.id.clone()}
+                groups={u.groups.clone()}
+                on_error={link.callback(Msg::OnError)}
+                on_user_added_to_group={link.callback(Msg::OnUserAddedToGroup)}/>
+            }
+        } else {
+            html! {}
+        }
+    }
 }

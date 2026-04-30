@@ -41,3 +41,4 @@ pub mod keycloak_settings;
 pub mod posix_options;
 pub mod table_action_bar;
 pub mod table_bulk_selection;
+pub mod kerberos_switch;

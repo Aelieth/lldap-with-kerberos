@@ -93,7 +93,11 @@ fn user_menu(props: &UserMenuProps) -> Html {
               id="dropdownUser"
               data-bs-toggle="dropdown"
               aria-expanded="false">
-              <Avatar user={username.clone()} />
+              <Avatar
+                user={username.clone()}
+                width={32}
+                height={32}
+              />
               <span class="ms-2">
                 {username}
               </span>

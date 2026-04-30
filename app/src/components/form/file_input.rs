@@ -135,16 +135,23 @@ impl Component for AvatarFileInput {
             self.cleared = false;
             return true;
         }
-        if self.avatar.as_ref().and_then(|a| a.base64.as_ref()).is_none() {
+
+        let props_value = ctx.props().value.clone();
+        let current_base64 = self.avatar.as_ref().and_then(|a| a.base64.clone());
+
+        if current_base64 != props_value {
+            // Critical fix: sync to new base64 from backend after "Save changes"
             self.avatar = Some(JsFile {
                 file: None,
-                contents: ctx.props().value.as_ref().and_then(|x| general_purpose::STANDARD.decode(x).ok()),
-                               base64: ctx.props().value.clone(),
+                contents: props_value.as_ref().and_then(|x| general_purpose::STANDARD.decode(x).ok()),
+                base64: props_value.clone(),
             });
+            self.error = None;
+            self.reader = None;
+            true
+        } else {
+            false
         }
-        self.reader = None;
-        self.error = None;
-        true
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {

@@ -6,6 +6,8 @@ use crate::{
             submit::Submit,
         },
         user_details::{Attribute, AttributeSchema, User},
+        avatar::Avatar,
+        kerberos_switch::{KerberosSwitch, prepare_kerberos_update},
     },
     infra::{
         common_component::{CommonComponent, CommonComponentParts},
@@ -17,6 +19,9 @@ use anyhow::Result;
 use chrono::NaiveDateTime;
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
+use yew::virtual_dom::AttrValue;
+use yew::Callback;
+use gloo_console::log;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -54,12 +59,14 @@ pub enum Msg {
     ToggleKerberosSync(bool),
 }
 
-#[derive(yew::Properties, Clone, PartialEq, Eq)]
+#[derive(yew::Properties, Clone, PartialEq)]  // Eq removed – Callback<()> does not implement Eq
 pub struct Props {
     pub user: User,
     pub user_attributes_schema: Vec<AttributeSchema>,
     pub is_admin: bool,
     pub is_edited_user_admin: bool,
+    #[prop_or_default]
+    pub on_updated: Option<Callback<()>>,
 }
 
 impl CommonComponent<UserDetailsForm> for UserDetailsForm {
@@ -120,6 +127,9 @@ impl Component for UserDetailsForm {
                         self.just_updated = true;
                         self.show_kerberos_banner = false;
                         self.original_kerberossync_enabled = self.kerberossync_enabled;
+                        if let Some(cb) = &ctx.props().on_updated {
+                            cb.emit(());
+                        }
                     }
                     Err(e) => {
                         self.common.error = Some(e.into());
@@ -166,35 +176,12 @@ impl Component for UserDetailsForm {
 
             { if is_admin {
                 html! {
-                    <div class="mb-3 row">
-                    <label class="form-label col-4 col-form-label" for="kerberossync_toggle">
-                    {"Kerberos Sync"}
-                    <button data-bs-placement="right" title="Sync Kerberos principal and password for SSO with KDE/GNOME." type="button" class="btn btn-sm btn-link" aria-label="Kerberos Sync Info">
-                    <i aria-label="Info" class="bi bi-info-circle"></i>
-                    </button>
-                    </label>
-                    <div class="col-8 d-flex align-items-center">
-                    <div class="btn-group" role="group" style="width: 120px;">
-                    <button type="button" class={classes!("btn", "btn-outline-primary", if self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(true))}>
-                    {"On"}
-                    </button>
-                    <button type="button" class={classes!("btn", "btn-outline-secondary", if !self.kerberossync_enabled { "active" } else { "" })} onclick={link.callback(|_| Msg::ToggleKerberosSync(false))}>
-                    {"Off"}
-                    </button>
-                    </div>
-                    <div class="form-text text-muted ms-3">
-                    {"ON = sync principal on next password change. OFF = delete principal immediately."}
-                    </div>
-                    </div>
-
-                    { if self.show_kerberos_banner {
-                        html! {
-                            <div class="alert alert-info mt-2">
-                            {"After Save Changes "}{&self.user.id}{" password must be changed by admin or self to finish the sync."}
-                            </div>
-                        }
-                    } else { html! {} }}
-                    </div>
+                    <KerberosSwitch
+                    enabled={self.kerberossync_enabled}
+                    on_toggle={link.callback(Msg::ToggleKerberosSync)}
+                    show_banner={self.show_kerberos_banner}
+                    username={Some(self.user.id.clone())}
+                    />
                 }
             } else { html! {} }}
 
@@ -233,6 +220,12 @@ impl UserDetailsForm {
 
         for attr in form_values {
             let name_lower = attr.name.to_lowercase();
+
+            // === SKIP kerberossync — we handle it specially below ===
+            if name_lower == "kerberossync" {
+                continue;
+            }
+
             let old_val = base_attributes.iter().find(|b| b.name.to_lowercase() == name_lower);
             let old_values = old_val.map_or(&empty, |v| &v.value);
 
@@ -249,22 +242,20 @@ impl UserDetailsForm {
                 }
             }
 
-            if name_lower == "kerberossync" {
-                if self.kerberossync_enabled != self.original_kerberossync_enabled {
-                    to_insert.push(AttributeValue {
-                        name: "kerberossync".to_string(),
-                        values: vec![if self.kerberossync_enabled { "1" } else { "0" }.to_string()],
-                    });
-                }
-                continue;
-            }
-
             if attr.values.is_empty() {
                 to_remove.push(attr.name.clone());
             } else {
                 to_insert.push(attr);
             }
         }
+
+        // === KERBEROS LOGIC (centralized in kerberos_switch.rs) ===
+        let (kerberos_insert, kerberos_remove) = prepare_kerberos_update(
+            self.kerberossync_enabled,
+            self.original_kerberossync_enabled,
+        );
+        to_insert.extend(kerberos_insert);
+        to_remove.extend(kerberos_remove);
 
         let remove_attributes = if to_remove.is_empty() { None } else { Some(to_remove) };
 
@@ -351,6 +342,19 @@ fn get_custom_attribute_static(
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
 
+    if attribute_schema.attribute_type == AttributeType::Avatar {
+        let avatar_b64 = values.first().cloned().unwrap_or_default();
+        return html! {
+            <StaticValue label={attribute_schema.name.clone()} id={attribute_schema.name.clone()}>
+                <Avatar
+                    avatar_base64={if avatar_b64.is_empty() { None } else { Some(AttrValue::from(avatar_b64)) }}
+                    width={128}
+                    height={128}
+                />
+            </StaticValue>
+        };
+    }
+
     let value_to_str = match attribute_schema.attribute_type {
         AttributeType::String | AttributeType::Integer => |v: String| v,
         AttributeType::DateTime => |v: String| {
@@ -362,7 +366,7 @@ fn get_custom_attribute_static(
                 v
             }
         },
-        AttributeType::Avatar => |_: String| "Avatar image (JPEG, PNG, or BMP)".to_string(),
+        AttributeType::Avatar => unreachable!("Avatar handled above"),
     };
 
     html! {
