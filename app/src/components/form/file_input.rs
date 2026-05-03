@@ -8,9 +8,8 @@ use gloo_file::{
 use web_sys::{FileList, HtmlInputElement, InputEvent};
 use yew::Properties;
 use yew::{prelude::*, virtual_dom::AttrValue};
+use crate::components::avatar::{Avatar, validate_avatar_input};
 use base64::{engine::general_purpose, Engine as _};
-use image::ImageFormat;
-use std::io::Cursor;
 
 #[derive(Default)]
 struct JsFile {
@@ -42,37 +41,8 @@ impl FromStr for JsFile {
 }
 
 fn validate_avatar(bytes: &[u8]) -> Result<()> {
-    if bytes.len() > 2 * 1024 * 1024 {
-        bail!("Image must be smaller than 2MB");
-    }
-    let reader = image::io::Reader::new(Cursor::new(bytes))
-    .with_guessed_format()
-    .map_err(|e| anyhow::anyhow!("Invalid image data: {}", e))?;
-
-    let format_str = match reader.format() {
-        Some(f) => format!("{:?}", f),
-        None => "None".to_string(),
-    };
-
-    match reader.format() {
-        Some(ImageFormat::Jpeg) | Some(ImageFormat::Png) | Some(ImageFormat::Bmp) => Ok(()),
-        _ => bail!("Only JPEG, PNG, and BMP images are allowed (detected: {})", format_str),
-    }
-}
-
-fn get_data_url(bytes: &[u8]) -> Result<String> {
-    validate_avatar(bytes)?;
-    let b64 = general_purpose::STANDARD.encode(bytes);
-    let mime = if bytes.starts_with(&[0xFF, 0xD8]) {
-        "image/jpeg"
-    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        "image/png"
-    } else if bytes.starts_with(b"BM") {
-        "image/bmp"
-    } else {
-        "image/jpeg"
-    };
-    Ok(format!("data:{};base64,{}", mime, b64))
+    // Delegate to the canonical validation in avatar.rs (matches backend rules in images.rs)
+    validate_avatar_input(bytes).map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn to_base64(file: &JsFile) -> Result<String> {
@@ -161,7 +131,7 @@ impl Component for AvatarFileInput {
                 self.error = None;
                 self.cleared = false;
                 if new_avatar.size() > 2 * 1024 * 1024 {
-                    self.error = Some("Image must be smaller than 2MB".to_string());
+                    self.error = Some("Image must be 2 MB or smaller".to_string());
                     self.avatar = Some(JsFile::default());
                     return true;
                 }
@@ -188,14 +158,17 @@ impl Component for AvatarFileInput {
                     && file.name() == file_name
                     && let Result::Ok(data) = data
                     {
-                        if validate_avatar(&data).is_err() {
-                            self.error = Some("Only JPEG, PNG, or BMP <2MB allowed".to_string());
-                            self.avatar = Some(JsFile::default());
-                        } else {
-                            let b64 = general_purpose::STANDARD.encode(&data);
-                            avatar.contents = Some(data);
-                            avatar.base64 = Some(b64.clone());
-                            self.error = None;
+                        match validate_avatar(&data) {
+                            Ok(()) => {
+                                let b64 = general_purpose::STANDARD.encode(&data);
+                                avatar.contents = Some(data);
+                                avatar.base64 = Some(b64.clone());
+                                self.error = None;
+                            }
+                            Err(e) => {
+                                self.error = Some(e.to_string());
+                                self.avatar = Some(JsFile::default());
+                            }
                         }
                     }
                     self.reader = None;
@@ -211,27 +184,23 @@ impl Component for AvatarFileInput {
             Some(avatar) => to_base64(avatar).as_deref().unwrap_or("").to_owned(),
             None => String::new(),
         };
-        let avatar_src = match &self.avatar {
-            Some(avatar) if avatar.contents.is_some() => get_data_url(avatar.contents.as_ref().unwrap()).unwrap_or_default(),
-            _ => String::new(),
-        };
 
         html! {
             <div class="row align-items-center">
             <div class="col-5">
             <input type="hidden" ref={self.hidden_ref.clone()} name={ctx.props().name.clone()} value={avatar_string.clone()} />
-            <input class="form-control" id="avatarInput" type="file" accept="image/jpeg,image/png,image/bmp" oninput={link.callback(|e: InputEvent| { let input: HtmlInputElement = e.target_unchecked_into(); Self::upload_files(input.files()) })} />
+            <input class="form-control" id="avatarInput" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" oninput={link.callback(|e: InputEvent| { let input: HtmlInputElement = e.target_unchecked_into(); Self::upload_files(input.files()) })} />
             </div>
             <div class="col-3">
             <button type="button" class="btn btn-secondary col-auto" onclick={link.callback(|_| Msg::ClearClicked)}>{"Clear"}</button>
             { if let Some(err) = &self.error { html! { <div class="text-danger small mt-1">{err}</div> } } else { html! {} }}
             </div>
             <div class="col-4" style="background:transparent !important;background-color:transparent !important;">
-            { if !avatar_src.is_empty() {
-                html! {
-                    <div style={format!("width:128px;height:128px;background-image:url({});background-size:contain;background-repeat:no-repeat;background-position:center;background-color:transparent !important;border-radius:4px;", avatar_src)} />
-                }
-            } else { html! {} }}
+            <Avatar
+                avatar_base64={if avatar_string.is_empty() { None } else { Some(AttrValue::from(avatar_string.clone())) }}
+                width={128}
+                height={128}
+            />
             </div>
             </div>
         }

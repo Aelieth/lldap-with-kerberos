@@ -56,8 +56,9 @@ pub fn get_custom_attribute(
             AttributeValue::Integer(Cardinality::Unbounded(l)) => {
                 l.iter().map(|i| i.to_string().into_bytes()).collect()
             }
-            AttributeValue::Avatar(Cardinality::Singleton(p)) => vec![p.0.clone()],
-            AttributeValue::Avatar(Cardinality::Unbounded(l)) => l.iter().map(|p| p.0.clone()).collect(),
+            AttributeValue::Avatar(Cardinality::Singleton(p)) => vec![p.as_bytes().to_vec()],
+            AttributeValue::Avatar(Cardinality::Unbounded(l)) => l.iter().map(|p| p.as_bytes().to_vec()).collect(),
+
             AttributeValue::DateTime(Cardinality::Singleton(dt)) => vec![to_generalized_time(dt)],
             AttributeValue::DateTime(Cardinality::Unbounded(l)) => l.iter().map(to_generalized_time).collect(),
         })

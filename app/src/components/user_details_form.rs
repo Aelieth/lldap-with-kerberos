@@ -21,6 +21,7 @@ use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 use yew::virtual_dom::AttrValue;
 use yew::Callback;
+use gloo_console::log;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -74,6 +75,8 @@ impl CommonComponent<UserDetailsForm> for UserDetailsForm {
         ctx: &Context<Self>,
         msg: <Self as Component>::Message,
     ) -> Result<bool> {
+        // All real logic is in the Component impl below.
+        // This just satisfies the trait bounds.
         match msg {
             Msg::Update => Ok(true),
             Msg::SubmitClicked => Ok(self.submit_user_update_form(ctx)),
@@ -126,6 +129,11 @@ impl Component for UserDetailsForm {
                         self.just_updated = true;
                         self.show_kerberos_banner = false;
                         self.original_kerberossync_enabled = self.kerberossync_enabled;
+
+                        // OPTIMIZED AVATAR REFRESH:
+                        // Immediately notify parent to re-fetch fresh data
+                        // This guarantees the new avatar base64 is loaded
+                        // and displayed without stale data
                         if let Some(cb) = &ctx.props().on_updated {
                             cb.emit(());
                         }
@@ -154,7 +162,7 @@ impl Component for UserDetailsForm {
             if can_edit(a) {
                 get_custom_attribute_input(a, &self.user.attributes)
             } else {
-                get_custom_attribute_static(a, &self.user.attributes)
+                get_custom_attribute_static(a, &self.user.attributes, &self.user.id)
             }
         };
 
@@ -280,13 +288,23 @@ impl UserDetailsForm {
             display_name = dn_attr.value.first().cloned();
         }
 
+        // === Extract avatar to top-level (special field, like displayName) so backend persists it ===
+        // This ensures GetUserDetails returns it in response.user.avatar (for banner) and attributes (for form)
+        let mut avatar = None;
+        if let Some(av_attr) = insert_attributes.as_ref().and_then(|attrs| {
+            attrs.iter().find(|a| a.name.to_lowercase() == "avatar" || a.name.to_lowercase() == "jpegphoto")
+        }) {
+            avatar = av_attr.value.first().cloned();
+        }
+        // If removing avatar, avatar stays None (clears it); removeAttributes also sent for cleanup
+
         let user_input = update_user::UpdateUserInput {
             id: self.user.id.clone(),
             email: None,
             displayName: display_name,
             firstName: None,
             lastName: None,
-            avatar: None,
+            avatar,
             removeAttributes: remove_attributes,
             insertAttributes: insert_attributes,
         };
@@ -334,6 +352,7 @@ fn get_custom_attribute_input(
 fn get_custom_attribute_static(
     attribute_schema: &AttributeSchema,
     user_attributes: &[Attribute],
+    user_id: &str,
 ) -> Html {
     let values = user_attributes
         .iter()
@@ -343,10 +362,19 @@ fn get_custom_attribute_static(
 
     if attribute_schema.attribute_type == AttributeType::Avatar {
         let avatar_b64 = values.first().cloned().unwrap_or_default();
+        let preview = avatar_b64.chars().take(30).collect::<String>();
+        log!(format!(
+            "[FORM DEBUG] STATIC Avatar | b64_len={} | preview='{}...' | using GraphQL user={} path",
+            avatar_b64.len(),
+            preview,
+            user_id
+        ));
+
+        // Use GraphQL path (same as banner) — reliable
         return html! {
             <StaticValue label={attribute_schema.name.clone()} id={attribute_schema.name.clone()}>
                 <Avatar
-                    avatar_base64={if avatar_b64.is_empty() { None } else { Some(AttrValue::from(avatar_b64)) }}
+                    user={Some(AttrValue::from(user_id.to_string()))}
                     width={128}
                     height={128}
                 />

@@ -85,11 +85,13 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
     }
 
     fn avatar(&self) -> Option<String> {
-        self.attributes
-        .iter()
-        .find(|a| a.name() == "avatar")
-        .and_then(|a| a.attribute.value.as_avatar())
-        .map(String::from)
+        // Use the same serialization as the attributes list (proper base64 via avatar_to_graphql_base64)
+        // This ensures the top-level avatar field returns clean JPEG base64, matching what the attributes[] list produces.
+        let result = self.attributes
+            .iter()
+            .find(|a| a.name() == "avatar")
+            .and_then(|a| super::serialize_attribute_to_graphql(&a.attribute.value).into_iter().next());
+        result
     }
 
     /// Single-layer OU (defaults to "people" — editable by admin only)

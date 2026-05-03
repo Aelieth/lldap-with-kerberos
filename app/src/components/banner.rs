@@ -5,6 +5,7 @@ use crate::components::{
 };
 use wasm_bindgen::prelude::wasm_bindgen;
 use yew::{Callback, Properties, function_component, html};
+use yew::virtual_dom::AttrValue;
 
 #[derive(Properties, PartialEq)]
 pub struct Props {
@@ -94,7 +95,7 @@ fn user_menu(props: &UserMenuProps) -> Html {
               data-bs-toggle="dropdown"
               aria-expanded="false">
               <Avatar
-                user={username.clone()}
+                user={Some(AttrValue::from(username.clone()))}
                 width={32}
                 height={32}
               />

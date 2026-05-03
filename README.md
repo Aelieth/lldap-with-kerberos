@@ -56,7 +56,7 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 
 ## Other improvements / Bugfixes
 - #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB size
-- #401 [FEATURE REQUEST] Avatar supports JPG, JPEG, BMP, and PNG formats now with 1024x1024 resolution and <2MB
+- #401 [FEATURE REQUEST] Avatar supports upload of JPG, JPEG, BMP, and PNG formats converting to JPG now with 512x512 resolution and <512KB size support
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
 - #739 [FEATURE REQUEST] SSSD integration support → POSIX groups added. Extra user and group classes inetOrgPerson, posixAccount, and posixGroup mappings.
 - #1165 [BUG] Users and groups objects are seen as containers, instead of leafs

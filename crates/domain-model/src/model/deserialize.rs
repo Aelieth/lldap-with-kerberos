@@ -1,4 +1,3 @@
-// crates/domain-model/src/model/deserialize.rs — FULL FUNCTION (with missing import + explicit Avatar construction)
 use crate::error::DomainError;
 use lldap_domain::{
     schema::AttributeList,
@@ -43,10 +42,10 @@ pub fn deserialize_attribute_value(
             AttributeValue::DateTime(Cardinality::Unbounded(value.unwrap()))
         }
         (AttributeType::Avatar, false) => {
-            AttributeValue::Avatar(Cardinality::Singleton(Avatar(value.0.clone())))
+            AttributeValue::Avatar(Cardinality::Singleton(Avatar::new(value.0.clone())))
         }
         (AttributeType::Avatar, true) => {
-            AttributeValue::Avatar(Cardinality::Unbounded(vec![Avatar(value.0.clone())]))
+            AttributeValue::Avatar(Cardinality::Unbounded(vec![Avatar::new(value.0.clone())]))
         }
     }
 }

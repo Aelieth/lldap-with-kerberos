@@ -1,4 +1,5 @@
 use crate::types::{AttributeType, AttributeValue, Avatar};
+use crate::images;
 use anyhow::{Context as AnyhowContext, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose;
@@ -30,7 +31,9 @@ pub fn deserialize_attribute_value(
         .decode(value)
         .context("Invalid base64 data for avatar")?;
 
-        Ok(Avatar(raw_bytes))
+        let jpeg_bytes = images::process_avatar_input(&raw_bytes)
+        .context("Failed to process avatar")?;
+        Ok(Avatar::new(jpeg_bytes))
     };
     Ok(match (typ, is_list) {
         (AttributeType::String, false) => value[0].clone().into(),

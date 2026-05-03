@@ -11,7 +11,8 @@ pub struct AttributeValue {
     /// If the attribute is not a list, the vector must contain exactly one element.
     /// Integers (signed 64 bits) are represented as strings.
     /// Dates are represented as strings in RFC3339 format, e.g. "2019-10-12T07:20:50.52Z".
-    /// JpegPhotos are represented as base64 encoded strings. They must be valid JPEGs.
+    /// Avatars are represented as base64 encoded strings. Maximum size 512x512
+    /// (PNG, BMP, or JPEG — automatically converted to optimized JPEG on storage).
     pub value: Vec<String>,
 }
 
@@ -28,7 +29,7 @@ pub struct CreateUserInput {
     /// Last name of user. Deprecated: use attribute instead.
     /// If both field and corresponding attribute is supplied, the attribute will take precedence.
     pub last_name: Option<String>,
-    /// Base64 encoded JpegPhoto. Deprecated: use attribute instead.
+    /// Base64 encoded avatar (512x512 recommended). Deprecated: use attribute instead.
     /// If both field and corresponding attribute is supplied, the attribute will take precedence.
     pub avatar: Option<String>,
     /// Attributes.
@@ -55,7 +56,7 @@ pub struct UpdateUserInput {
     /// Last name of user. Deprecated: use attribute instead.
     /// If both field and corresponding attribute is supplied, the attribute will take precedence.
     pub last_name: Option<String>,
-    /// Base64 encoded JpegPhoto. Deprecated: use attribute instead.
+    /// Base64 encoded avatar (512x512 recommended). Deprecated: use attribute instead.
     /// If both field and corresponding attribute is supplied, the attribute will take precedence.
     pub avatar: Option<String>,
     /// Attribute names to remove.

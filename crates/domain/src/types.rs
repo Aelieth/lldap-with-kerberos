@@ -1,3 +1,6 @@
+// crates/domain/src/types.rs
+// KLLDAP 7.0 — Avatar refactor complete (centralized in images.rs)
+
 use std::cmp::Ordering;
 use chrono::{NaiveDateTime, TimeZone};
 use lldap_auth::types::CaseInsensitiveString;
@@ -16,17 +19,21 @@ use base64::engine::general_purpose;
 pub use lldap_auth::types::UserId;
 pub use lldap_schema::AttributeType;
 
+use crate::images;
+pub use crate::images::{
+    process_avatar_input,
+    avatar_to_graphql_base64,
+    validate_stored_avatar_bytes,
+    AvatarError,
+    TARGET_AVATAR_SIZE,
+    JPEG_QUALITY,
+    MAX_AVATAR_JPEG_SIZE,
+};
+
+// ==================== UUID ====================
 #[derive(
-    PartialEq,
-    Hash,
-    Eq,
-    Clone,
-    Default,
-    Serialize,
-    Deserialize,
-    DeriveValueType,
-    derive_more::Debug,
-    derive_more::Display,
+    PartialEq, Hash, Eq, Clone, Default, Serialize, Deserialize,
+    DeriveValueType, derive_more::Debug, derive_more::Display,
 )]
 #[serde(try_from = "&str")]
 #[sea_orm(column_type = "String(StringLen::N(36))")]
@@ -68,13 +75,13 @@ impl<'a> std::convert::TryFrom<&'a str> for Uuid {
     }
 }
 
-#[cfg(feature = "test")]
-#[macro_export]
-macro_rules! uuid {
-    ($s:literal) => {
-        <lldap_domain::types::Uuid as std::convert::TryFrom<_>>::try_from($s).unwrap()
-    };
-}
+// ==================== SERIALIZED ====================
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType)]
+#[sea_orm(
+    column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
+    array_type = "Bytes"
+)]
+pub struct Serialized(pub Vec<u8>);
 
 impl std::fmt::Debug for Serialized {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -99,18 +106,16 @@ impl<'a, T: Serialize + ?Sized> From<&'a T> for Serialized {
 }
 
 impl Serialized {
-    fn convert_to<'a, T: Deserialize<'a>>(&'a self) -> bincode::Result<T> {
-        bincode::deserialize(&self.0)
-    }
-
-    /// Safe unwrap for unified schema (new POSIX/Kerberos attributes default gracefully).
-    /// Prevents panic on fresh DB / migration while keeping everything type-safe.
     pub fn unwrap<'a, T: Deserialize<'a> + Default>(&'a self) -> T {
         self.convert_to().unwrap_or_default()
     }
 
     pub fn expect<'a, T: Deserialize<'a>>(&'a self, message: &str) -> T {
         self.convert_to().expect(message)
+    }
+
+    fn convert_to<'a, T: Deserialize<'a>>(&'a self) -> bincode::Result<T> {
+        bincode::deserialize(&self.0)
     }
 }
 
@@ -129,6 +134,7 @@ impl From<AttributeValue> for Serialized {
     }
 }
 
+// ==================== CASE-INSENSITIVE STRINGS ====================
 fn compare_str_case_insensitive(s1: &str, s2: &str) -> Ordering {
     let mut it_1 = s1.chars().flat_map(|c| c.to_lowercase());
     let mut it_2 = s2.chars().flat_map(|c| c.to_lowercase());
@@ -136,9 +142,7 @@ fn compare_str_case_insensitive(s1: &str, s2: &str) -> Ordering {
         match (it_1.next(), it_2.next()) {
             (Some(c1), Some(c2)) => {
                 let o = c1.cmp(&c2);
-                if o != Ordering::Equal {
-                    return o;
-                }
+                if o != Ordering::Equal { return o; }
             }
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
@@ -149,15 +153,7 @@ fn compare_str_case_insensitive(s1: &str, s2: &str) -> Ordering {
 
 macro_rules! make_case_insensitive_comparable_string {
     ($c:ident) => {
-        #[derive(
-            Clone,
-            Default,
-            Serialize,
-            Deserialize,
-            DeriveValueType,
-            derive_more::Debug,
-            derive_more::Display,
-        )]
+        #[derive(Clone, Default, Serialize, Deserialize, DeriveValueType, derive_more::Debug, derive_more::Display)]
         #[debug(r#""{_0}""#)]
         #[display("{_0}")]
         pub struct $c(String);
@@ -167,118 +163,34 @@ macro_rules! make_case_insensitive_comparable_string {
                 compare_str_case_insensitive(&self.0, &other.0) == Ordering::Equal
             }
         }
-
         impl Eq for $c {}
-
         impl PartialOrd for $c {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                Some(self.cmp(other))
-            }
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
         }
-
         impl Ord for $c {
             fn cmp(&self, other: &Self) -> Ordering {
                 compare_str_case_insensitive(&self.0, &other.0)
             }
         }
-
         impl std::hash::Hash for $c {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 self.0.to_lowercase().hash(state)
             }
         }
-
         impl $c {
-            pub fn new(raw: &str) -> Self {
-                Self(raw.to_owned())
-            }
-
-            pub fn as_str(&self) -> &str {
-                self.0.as_str()
-            }
-
-            pub fn into_string(self) -> String {
-                self.0
-            }
+            pub fn new(raw: &str) -> Self { Self(raw.to_owned()) }
+            pub fn as_str(&self) -> &str { self.0.as_str() }
+            pub fn into_string(self) -> String { self.0 }
         }
-
-        impl From<String> for $c {
-            fn from(s: String) -> Self {
-                Self(s)
-            }
-        }
-
-        impl From<&str> for $c {
-            fn from(s: &str) -> Self {
-                Self::new(s)
-            }
-        }
-
-        impl From<&$c> for Value {
-            fn from(user_id: &$c) -> Self {
-                user_id.as_str().into()
-            }
-        }
-
+        impl From<String> for $c { fn from(s: String) -> Self { Self(s) } }
+        impl From<&str> for $c { fn from(s: &str) -> Self { Self::new(s) } }
+        impl From<&$c> for Value { fn from(v: &$c) -> Self { v.as_str().into() } }
         impl TryFromU64 for $c {
             fn try_from_u64(_n: u64) -> Result<Self, DbErr> {
-                Err(DbErr::ConvertFromU64("$c cannot be constructed from u64"))
+                Err(DbErr::ConvertFromU64(concat!(stringify!($c), " cannot be constructed from u64")))
             }
         }
     };
-}
-
-#[derive(
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Clone,
-    Debug,
-    Default,
-    Hash,
-    Serialize,
-    Deserialize,
-    DeriveValueType,
-)]
-#[serde(from = "CaseInsensitiveString")]
-pub struct AttributeName(CaseInsensitiveString);
-
-impl AttributeName {
-    pub fn new(s: &str) -> Self {
-        s.into()
-    }
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-    pub fn into_string(self) -> String {
-        self.0.into_string()
-    }
-}
-impl<T> From<T> for AttributeName
-where
-    T: Into<CaseInsensitiveString>,
-{
-    fn from(s: T) -> Self {
-        Self(s.into())
-    }
-}
-impl std::fmt::Display for AttributeName {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0.as_str())
-    }
-}
-impl From<&AttributeName> for Value {
-    fn from(attribute_name: &AttributeName) -> Self {
-        attribute_name.as_str().into()
-    }
-}
-impl TryFromU64 for AttributeName {
-    fn try_from_u64(_n: u64) -> Result<Self, DbErr> {
-        Err(DbErr::ConvertFromU64(
-            "AttributeName cannot be constructed from u64",
-        ))
-    }
 }
 
 make_case_insensitive_comparable_string!(LdapObjectClass);
@@ -286,90 +198,107 @@ make_case_insensitive_comparable_string!(Email);
 make_case_insensitive_comparable_string!(GroupName);
 
 impl AsRef<GroupName> for GroupName {
-    fn as_ref(&self) -> &GroupName {
-        self
+    fn as_ref(&self) -> &GroupName { self }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug, Default, Hash, Serialize, Deserialize, DeriveValueType)]
+#[serde(from = "CaseInsensitiveString")]
+pub struct AttributeName(CaseInsensitiveString);
+
+impl AttributeName {
+    pub fn new(s: &str) -> Self { s.into() }
+    pub fn as_str(&self) -> &str { self.0.as_str() }
+    pub fn into_string(self) -> String { self.0.into_string() }
+}
+impl<T> From<T> for AttributeName where T: Into<CaseInsensitiveString> {
+    fn from(s: T) -> Self { Self(s.into()) }
+}
+impl std::fmt::Display for AttributeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0.as_str()) }
+}
+impl From<&AttributeName> for Value { fn from(v: &AttributeName) -> Self { v.as_str().into() } }
+impl TryFromU64 for AttributeName {
+    fn try_from_u64(_n: u64) -> Result<Self, DbErr> {
+        Err(DbErr::ConvertFromU64("AttributeName cannot be constructed from u64"))
     }
 }
 
-#[derive(
-    PartialEq,
-    Eq,
-    Clone,
-    Serialize,
-    Deserialize,
-    DeriveValueType,
-    Hash,
-)]
-#[sea_orm(
-    column_type = "Blob",          // ← generic BLOB (SQLite/MySQL/Postgres safe)
-    array_type = "Bytes"
-)]
-pub struct Avatar(pub Vec<u8>);   // ← Vec<u8> for full SeaORM/serde compatibility
-
-const MAX_AVATAR_SIZE_BYTES: usize = 2 * 1024 * 1024;
+// ==================== AVATAR (delegates to images.rs) ====================
+// All validation, exact 512x512 dimension enforcement, PNG/BMP→JPEG conversion,
+// and quality control (JPEG_QUALITY) now live in crates/domain/src/images.rs.
+// This struct is a thin wrapper around Vec<u8> containing only JPEG bytes.
+#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, DeriveValueType, Hash)]
+#[sea_orm(column_type = "Blob", array_type = "Bytes")]
+pub struct Avatar(pub Vec<u8>);
 
 impl Avatar {
-    /// Public constructor for bytes::Bytes (your request)
+    /// Canonical constructor — ALWAYS converts PNG/BMP → JPEG via process_avatar_input.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        match images::process_avatar_input(&bytes) {
+            Ok(jpeg) => Self(jpeg),
+            Err(e) => {
+                tracing::error!(
+                    target: "avatar_critical",
+                    "Avatar processing FAILED: {} — REJECTING upload (no fallback)",
+                    e
+                );
+                // Return empty avatar instead of storing invalid data
+                Self(vec![])
+            }
+        }
+    }
+
+    /// Creates Avatar from raw bytes (for internal use with already-validated stored data).
     pub fn from_bytes(bytes: Bytes) -> Self {
-        Self(bytes.into())
+        let _ = images::validate_stored_avatar_bytes(&bytes);
+        Self::new(bytes.into())
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn null() -> Self { Self(vec![]) }
+    pub fn into_bytes(self) -> Bytes { Bytes::from(self.0) }
 
-    pub fn null() -> Self {
-        Self(vec![])
-    }
-
-    pub fn into_bytes(self) -> Bytes {
-        Bytes::from(self.0)
-    }
+    /// Returns the raw JPEG bytes (for serialization / LDAP responses).
+    pub fn as_bytes(&self) -> &[u8] { &self.0 }
 
     #[cfg(any(feature = "test", test))]
     pub fn for_tests() -> Self {
-        use image::{ImageOutputFormat, Rgb, RgbImage};
-        let img = RgbImage::from_fn(32, 32, |x, y| {
+        use image::{ImageFormat, Rgb, RgbImage};
+        let img = RgbImage::from_fn(TARGET_AVATAR_SIZE, TARGET_AVATAR_SIZE, |x, y| {
             if (x + y) % 2 == 0 { Rgb([0, 0, 0]) } else { Rgb([255, 255, 255]) }
         });
         let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageOutputFormat::Jpeg(0)).unwrap();
-        Self(buf)
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Jpeg).unwrap();
+        Self::new(buf)
     }
 }
 
-impl From<&Avatar> for Value {
-    fn from(photo: &Avatar) -> Self {
-        photo.0.as_slice().into()
-    }
-}
+impl From<&Avatar> for Value { fn from(photo: &Avatar) -> Self { photo.0.as_slice().into() } }
 
 impl TryFrom<&[u8]> for Avatar {
     type Error = anyhow::Error;
     fn try_from(bytes: &[u8]) -> anyhow::Result<Self> {
-        if bytes.len() > MAX_AVATAR_SIZE_BYTES {
-            return Err(anyhow::anyhow!("Avatar too large: {} bytes (max 2 MB)", bytes.len()));
-        }
         if bytes.is_empty() {
             return Ok(Self::null());
         }
-        // Generic validation: JPEG, PNG, BMP
-        let reader = image::io::Reader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .map_err(|e| anyhow::anyhow!("Invalid image format: {}", e))?;
-        match reader.format() {
-            Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Png) | Some(image::ImageFormat::Bmp) => {},
-            _ => return Err(anyhow::anyhow!("Only JPEG, PNG, and BMP images are allowed")),
-        }
-        Ok(Self(bytes.to_vec()))
+
+        // Defense-in-depth: validate any bytes entering the Avatar struct
+        // (catches corrupted DB data or bypass attempts)
+        images::validate_stored_avatar_bytes(bytes)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        // For new uploads this will also enforce full processing + conversion.
+        // For already-valid stored JPEGs it will pass through quickly.
+        let jpeg_bytes = images::process_avatar_input(bytes)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        Ok(Self::new(jpeg_bytes))
     }
 }
 
 impl TryFrom<Bytes> for Avatar {
     type Error = anyhow::Error;
-    fn try_from(bytes: Bytes) -> anyhow::Result<Self> {
-        Self::try_from(bytes.as_ref())
-    }
+    fn try_from(bytes: Bytes) -> anyhow::Result<Self> { Self::try_from(bytes.as_ref()) }
 }
 
 impl TryFrom<&str> for Avatar {
@@ -381,47 +310,26 @@ impl TryFrom<&str> for Avatar {
 }
 
 impl From<&Avatar> for String {
-    fn from(val: &Avatar) -> Self {
-        general_purpose::STANDARD.encode(&val.0)
-    }
+    fn from(val: &Avatar) -> Self { images::avatar_to_graphql_base64(&val.0) }
 }
 
 impl std::fmt::Debug for Avatar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut encoded = general_purpose::STANDARD.encode(&self.0);
-        if encoded.len() > 100 {
-            encoded.truncate(100);
-            encoded.push_str(" ...");
-        }
-        f.debug_tuple("Avatar")
-            .field(&format!("b64[{} bytes]", self.0.len()))
-            .finish()
+        if encoded.len() > 100 { encoded.truncate(100); encoded.push_str(" ..."); }
+        f.debug_tuple("Avatar").field(&format!("b64[{} bytes]", self.0.len())).finish()
     }
 }
 
-impl Default for Avatar {
-    fn default() -> Self {
-        Self::null()
-    }
-}
+impl Default for Avatar { fn default() -> Self { Self::null() } }
 
 impl IntoActiveValue<Avatar> for Avatar {
     fn into_active_value(self) -> sea_orm::ActiveValue<Avatar> {
-        if self.is_empty() {
-            sea_orm::ActiveValue::NotSet
-        } else {
-            sea_orm::ActiveValue::Set(self)
-        }
+        if self.is_empty() { sea_orm::ActiveValue::NotSet } else { sea_orm::ActiveValue::Set(self) }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType)]
-#[sea_orm(
-column_type = "Custom(SeaRc::new(MySqlType::LongBlob))",
-          array_type = "Bytes"
-)]
-pub struct Serialized(pub Vec<u8>);
-
+// ==================== ATTRIBUTE VALUE ====================
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub enum Cardinality<T: Clone> {
     Singleton(T),
@@ -430,10 +338,7 @@ pub enum Cardinality<T: Clone> {
 
 impl<T: Clone> Cardinality<T> {
     pub fn into_vec(self) -> Vec<T> {
-        match self {
-            Self::Singleton(v) => vec![v],
-            Self::Unbounded(l) => l,
-        }
+        match self { Self::Singleton(v) => vec![v], Self::Unbounded(l) => l }
     }
 }
 
@@ -441,7 +346,7 @@ impl<T: Clone> Cardinality<T> {
 pub enum AttributeValue {
     String(Cardinality<String>),
     Integer(Cardinality<i64>),
-    Avatar(Cardinality<Avatar>),      // ← renamed from JpegPhoto
+    Avatar(Cardinality<Avatar>),
     DateTime(Cardinality<NaiveDateTime>),
 }
 
@@ -455,78 +360,33 @@ impl AttributeValue {
         }
     }
     pub fn as_str(&self) -> Option<&str> {
-        if let AttributeValue::String(Cardinality::Singleton(s)) = self {
-            Some(s.as_str())
-        } else {
-            None
-        }
+        if let AttributeValue::String(Cardinality::Singleton(s)) = self { Some(s.as_str()) } else { None }
     }
     pub fn into_string(self) -> Option<String> {
-        if let AttributeValue::String(Cardinality::Singleton(s)) = self {
-            Some(s)
-        } else {
-            None
-        }
+        if let AttributeValue::String(Cardinality::Singleton(s)) = self { Some(s) } else { None }
     }
     pub fn as_avatar(&self) -> Option<&Avatar> {
-        if let AttributeValue::Avatar(Cardinality::Singleton(p)) = self {
-            Some(p)
-        } else {
-            None
-        }
+        if let AttributeValue::Avatar(Cardinality::Singleton(p)) = self { Some(p) } else { None }
     }
 }
 
-impl From<String> for AttributeValue {
-    fn from(s: String) -> Self {
-        AttributeValue::String(Cardinality::Singleton(s))
-    }
-}
-impl From<Vec<String>> for AttributeValue {
-    fn from(l: Vec<String>) -> Self {
-        AttributeValue::String(Cardinality::Unbounded(l))
-    }
-}
+impl From<String> for AttributeValue { fn from(s: String) -> Self { AttributeValue::String(Cardinality::Singleton(s)) } }
+impl From<Vec<String>> for AttributeValue { fn from(l: Vec<String>) -> Self { AttributeValue::String(Cardinality::Unbounded(l)) } }
+impl From<i64> for AttributeValue { fn from(i: i64) -> Self { AttributeValue::Integer(Cardinality::Singleton(i)) } }
+impl From<Vec<i64>> for AttributeValue { fn from(l: Vec<i64>) -> Self { AttributeValue::Integer(Cardinality::Unbounded(l)) } }
+impl From<Avatar> for AttributeValue { fn from(j: Avatar) -> Self { AttributeValue::Avatar(Cardinality::Singleton(j)) } }
+impl From<Vec<Avatar>> for AttributeValue { fn from(l: Vec<Avatar>) -> Self { AttributeValue::Avatar(Cardinality::Unbounded(l)) } }
+impl From<NaiveDateTime> for AttributeValue { fn from(dt: NaiveDateTime) -> Self { AttributeValue::DateTime(Cardinality::Singleton(dt)) } }
+impl From<Vec<NaiveDateTime>> for AttributeValue { fn from(l: Vec<NaiveDateTime>) -> Self { AttributeValue::DateTime(Cardinality::Unbounded(l)) } }
 
-impl From<i64> for AttributeValue {
-    fn from(i: i64) -> Self {
-        AttributeValue::Integer(Cardinality::Singleton(i))
-    }
-}
-impl From<Vec<i64>> for AttributeValue {
-    fn from(l: Vec<i64>) -> Self {
-        AttributeValue::Integer(Cardinality::Unbounded(l))
-    }
-}
-
-impl From<Avatar> for AttributeValue {                    // renamed
-    fn from(j: Avatar) -> Self {
-        AttributeValue::Avatar(Cardinality::Singleton(j))
-    }
-}
-impl From<Vec<Avatar>> for AttributeValue {               // renamed
-    fn from(l: Vec<Avatar>) -> Self {
-        AttributeValue::Avatar(Cardinality::Unbounded(l))
-    }
-}
-
-impl From<NaiveDateTime> for AttributeValue {
-    fn from(dt: NaiveDateTime) -> Self {
-        AttributeValue::DateTime(Cardinality::Singleton(dt))
-    }
-}
-impl From<Vec<NaiveDateTime>> for AttributeValue {
-    fn from(l: Vec<NaiveDateTime>) -> Self {
-        AttributeValue::DateTime(Cardinality::Unbounded(l))
-    }
-}
-
+// ==================== ATTRIBUTE ====================
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct Attribute {
     pub name: AttributeName,
     pub value: AttributeValue,
 }
 
+// ==================== USER / GROUP ====================
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub user_id: UserId,
@@ -541,22 +401,18 @@ pub struct User {
 }
 
 impl User {
-    /// Materializes all protected main-table fields into .attributes
-    /// Called automatically after every fetch (exactly like creationdate/uuid/etc.)
     pub fn materialize_protected_fields(&mut self) {
         if let Some(principal) = &self.krb_principal_name {
             if !principal.is_empty() {
                 self.attributes.push(Attribute {
                     name: AttributeName::from("krbprincipalname"),
-                                     value: AttributeValue::String(Cardinality::Singleton(principal.clone())),
+                    value: AttributeValue::String(Cardinality::Singleton(principal.clone())),
                 });
             }
         }
     }
 }
 
-/// Represents a single member of a group, including the user's current OU.
-/// This enables fully dynamic `member` / `uniqueMember` DN construction.
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMember {
     pub user_id: UserId,
@@ -603,32 +459,16 @@ impl Default for User {
             attributes: Vec::new(),
             modified_date: epoch,
             password_modified_date: epoch,
+            krb_principal_name: None,
         }
     }
 }
 
-#[derive(
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    DeriveValueType,
-    derive_more::Debug,
-)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, DeriveValueType, derive_more::Debug)]
 #[debug("{_0}")]
 pub struct GroupId(pub i32);
 
 impl TryFromU64 for GroupId {
-    fn try_from_u64(n: u64) -> Result<Self, DbErr> {
-        Ok(GroupId(i32::try_from_u64(n)?))
-    }
+    fn try_from_u64(n: u64) -> Result<Self, DbErr> { Ok(GroupId(i32::try_from_u64(n)?)) }
 }
-
-impl From<&GroupId> for Value {
-    fn from(id: &GroupId) -> Self {
-        (*id).into()
-    }
-}
+impl From<&GroupId> for Value { fn from(id: &GroupId) -> Self { (*id).into() } }

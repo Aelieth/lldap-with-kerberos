@@ -81,12 +81,13 @@ impl CommonComponent<UserDetails> for UserDetails {
             Msg::OnError(e) => return Err(e),
             Msg::OnUserAddedToGroup(group) => {
                 self.mut_groups().push(group);
-            }
+            },
             Msg::OnUserRemovedFromGroup((_, group_id)) => {
                 self.mut_groups().retain(|g| g.id != group_id);
-            }
+            },
             Msg::Refresh => {
-                // Inline call (avoids any method-resolution ordering issues)
+                // Optimized: Always force fresh fetch after avatar update
+                // This prevents stale avatar display in user_details_form
                 self.common.call_graphql::<GetUserDetails, _>(
                     ctx,
                     get_user_details::Variables {

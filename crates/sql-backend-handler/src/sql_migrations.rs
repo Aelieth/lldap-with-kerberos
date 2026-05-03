@@ -505,7 +505,7 @@ async fn migrate_to_v3(transaction: DatabaseTransaction) -> Result<DatabaseTrans
         )],
     )
     .await?;
-        // Change Avatar to blob (LONGBLOB on MySQL) for 2 MB support (fixes #1399)
+        // Change Avatar to blob (LONGBLOB on MySQL) for 512KB MB support (fixes #1399)
     let transaction = replace_column(
         transaction,
         Users::Table,
@@ -833,7 +833,7 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
         .await?;
 
         // Migrate old hardcoded columns into EAV user_attributes table
-    // Strings stored as raw UTF-8 bytes, avatar as raw bytes (JPG/PNG/BMP)
+    // Strings stored as raw UTF-8 bytes, avatar as raw bytes (JPG)
     // No Serialized / bincode → zero ser/de headaches forever
     {
         let mut user_statement = Query::insert()

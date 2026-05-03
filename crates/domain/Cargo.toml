@@ -40,9 +40,9 @@ default-features = false
 version = "1"
 
 [dependencies.image]
-features = ["jpeg"]
+features = ["jpeg", "png", "bmp", "webp"]
 default-features = false
-version = "0.24"
+version = "0.25"
 
 [dependencies.lldap_auth]
 path = "../auth"

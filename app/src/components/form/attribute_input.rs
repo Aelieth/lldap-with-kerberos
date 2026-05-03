@@ -20,45 +20,48 @@ struct AttributeInputProps {
 fn attribute_input(props: &AttributeInputProps) -> Html {
     let current_value = use_state(|| props.value.clone().unwrap_or_default());
 
-    // ROBUST GUARD: Force AvatarFileInput for any avatar field
-    // This matches original LLDAP dispatch but survives our EAV + Kerberos schema changes
+    // ROBUST AVATAR GUARD (Improved)
+    // Force AvatarFileInput for any avatar field.
+    // Matches on both type and common field names (case-insensitive).
+    // Survives EAV + Kerberos schema changes.
+    let name_lower = props.name.to_lowercase();
     if props.attribute_type == AttributeType::Avatar
-        || props.name == AttrValue::Static("avatar")
-        || props.name == AttrValue::Static("jpegphoto")
-        || props.name == AttrValue::Static("jpegPhoto") {
+        || name_lower == "avatar"
+        || name_lower == "jpegphoto"
+    {
+        return html! {
+            <AvatarFileInput name={props.name.clone()} value={props.value.clone()} />
+        };
+    }
+
+    let input_type = match props.attribute_type {
+        AttributeType::String => "text",
+        AttributeType::Integer => "number",
+        AttributeType::DateTime => {
             return html! {
-                <AvatarFileInput name={props.name.clone()} value={props.value.clone()} />
+                <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
             };
         }
+        // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
+        AttributeType::Avatar => unreachable!("Avatar already handled by guard above"),
+    };
 
-        let input_type = match props.attribute_type {
-            AttributeType::String => "text",
-            AttributeType::Integer => "number",
-            AttributeType::DateTime => {
-                return html! {
-                    <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
-                };
-            }
-            // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
-            AttributeType::Avatar => unreachable!("Avatar already handled by guard above"),
-        };
+    let onchange = {
+        let current_value = current_value.clone();
+        Callback::from(move |e: Event| {
+            let input: HtmlInputElement = e.target_unchecked_into();
+            current_value.set(input.value());
+        })
+    };
 
-        let onchange = {
-            let current_value = current_value.clone();
-            Callback::from(move |e: Event| {
-                let input: HtmlInputElement = e.target_unchecked_into();
-                current_value.set(input.value());
-            })
-        };
-
-        html! {
-            <input
+    html! {
+        <input
             type={input_type}
             name={props.name.clone()}
             class="form-control"
             value={(*current_value).clone()}
             onchange={onchange} />
-        }
+    }
 }
 
 #[derive(Properties, PartialEq)]
