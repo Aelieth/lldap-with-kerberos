@@ -8,7 +8,7 @@
 // - process_avatar_input is the ONLY way to create a new Avatar from untrusted input.
 // - validate_stored_avatar_bytes is defensive (accepts legacy data + current JPEGs).
 // - All errors are clear and actionable.
-// - PNG/BMP/JPEG/WebP input → always converted to optimized JPEG on write.
+// - PNG/BMP/JPEG input → always converted to optimized JPEG on write.
 
 use base64::engine::general_purpose;
 use base64::Engine;
@@ -60,8 +60,6 @@ pub fn process_avatar_input(input: &[u8]) -> Result<Vec<u8>, AvatarError> {
         return Ok(vec![]);
     }
 
-    tracing::info!(target: "avatar_debug", "process_avatar_input START | len={}", input.len());
-
     let reader = ImageReader::new(Cursor::new(input))
     .with_guessed_format()
     .map_err(|e| {
@@ -74,9 +72,7 @@ pub fn process_avatar_input(input: &[u8]) -> Result<Vec<u8>, AvatarError> {
         AvatarError::UnsupportedFormat
     })?;
 
-    tracing::info!(target: "avatar_debug", "Detected format: {:?}", format);
-
-    if !matches!(format, ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::Bmp | ImageFormat::WebP) {
+    if !matches!(format, ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::Bmp) {
         tracing::error!(target: "avatar_debug", "Unsupported format: {:?}", format);
         return Err(AvatarError::UnsupportedFormat);
     }
@@ -84,7 +80,7 @@ pub fn process_avatar_input(input: &[u8]) -> Result<Vec<u8>, AvatarError> {
     let max_input_size = if format == ImageFormat::Bmp {
         2 * 1024 * 1024
     } else {
-        MAX_AVATAR_JPEG_SIZE   // 512 KiB for JPEG, PNG, and WebP
+        MAX_AVATAR_JPEG_SIZE   // 512 KiB for JPEG, PNG
     };
 
     if input.len() > max_input_size {
@@ -94,15 +90,6 @@ pub fn process_avatar_input(input: &[u8]) -> Result<Vec<u8>, AvatarError> {
     let img = reader
         .decode()
         .map_err(|e| AvatarError::InvalidImage(e.to_string()))?;
-
-    // === TEMP DEBUG LOG ===
-    tracing::info!(
-        target: "avatar_debug",
-        "process_avatar_input: decoded {}x{} image (format: {:?})",
-        img.width(),
-        img.height(),
-        format
-    );
 
     if img.width() > TARGET_AVATAR_SIZE || img.height() > TARGET_AVATAR_SIZE {
         tracing::warn!(

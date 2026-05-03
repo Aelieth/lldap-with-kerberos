@@ -182,11 +182,6 @@ pub fn deserialize_attribute(
 ) -> FieldResult<DomainAttribute> {
     // === TEMP DEBUG ===
     if attribute.name.to_ascii_lowercase() == "avatar" || attribute.name.to_ascii_lowercase() == "jpegphoto" {
-        tracing::info!(
-            target: "avatar_debug",
-            "deserialize_attribute CALLED for avatar | value_len={}",
-            attribute.value.first().map(|s| s.len()).unwrap_or(0)
-        );
     }
     let attribute_name = AttributeName::from(attribute.name.as_str());
 
@@ -229,26 +224,11 @@ pub fn deserialize_attribute(
         } else {
             match general_purpose::STANDARD.decode(&val) {
                 Ok(raw_bytes) => {
-                    tracing::info!(
-                        target: "avatar_debug",
-                        "Avatar base64 decoded successfully | raw_len={}",
-                        raw_bytes.len()
-                    );
                     match process_avatar_input(&raw_bytes) {
                         Ok(jpeg) => {
-                            tracing::info!(
-                                target: "avatar_debug",
-                                "Avatar processed successfully to JPEG | final_len={}",
-                                jpeg.len()
-                            );
                             Serialized(jpeg)
                         }
                         Err(e) => {
-                            tracing::error!(
-                                target: "avatar_debug",
-                                "Avatar processing FAILED: {} — REJECTING upload (error will surface to UI)",
-                                e
-                            );
                             return Err(anyhow!("Invalid avatar upload: {}", e).into());
                         }
                     }

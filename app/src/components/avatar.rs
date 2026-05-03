@@ -95,31 +95,28 @@ pub fn validate_avatar_input(bytes: &[u8]) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fast magic-byte format check
+    // Fast magic-byte format check (no decode needed)
     let is_jpeg = bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8;
     let is_png  = bytes.len() >= 4 && bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]);
     let is_bmp  = bytes.len() >= 2 && bytes.starts_with(&[0x42, 0x4D]);
-    let is_webp = bytes.len() >= 12
-        && bytes[0..4] == *b"RIFF"
-        && bytes[8..12] == *b"WEBP";
 
-    if !(is_jpeg || is_png || is_bmp || is_webp) {
-        anyhow::bail!("Only JPEG, PNG, BMP, or WebP images are allowed");
+    if !(is_jpeg || is_png || is_bmp) {
+        anyhow::bail!("Only JPEG, PNG, or BMP images are allowed");
     }
 
-    // Size limits (match backend)
+    // Size limits (match backend leniency for BMP)
     let max_size = if is_bmp {
         2 * 1024 * 1024   // 2 MB for BMP
     } else {
-        512 * 1024        // 512 KB for JPEG/PNG/WebP
+        512 * 1024        // 512 KB for JPEG/PNG
     };
 
     if bytes.len() > max_size {
         anyhow::bail!(
             "Image must be {} or smaller (got {} bytes). {}",
-            if is_bmp { "2 MB (for BMP)" } else { "512 KiB" },
-            bytes.len(),
-            if is_bmp { "BMPs are allowed larger because they will be compressed." } else { "JPEG/PNG/WebP up to 512 KiB." }
+                if is_bmp { "2 MB (for BMP)" } else { "512 KiB" },
+                    bytes.len(),
+                if is_bmp { "BMPs are allowed larger because they will be compressed." } else { "Only JPEG/PNG up to 512 KiB." }
         );
     }
 

@@ -189,7 +189,7 @@ impl Component for AvatarFileInput {
             <div class="row align-items-center">
             <div class="col-5">
             <input type="hidden" ref={self.hidden_ref.clone()} name={ctx.props().name.clone()} value={avatar_string.clone()} />
-            <input class="form-control" id="avatarInput" type="file" accept="image/jpeg,image/png,image/bmp,image/webp" oninput={link.callback(|e: InputEvent| { let input: HtmlInputElement = e.target_unchecked_into(); Self::upload_files(input.files()) })} />
+            <input class="form-control" id="avatarInput" type="file" accept="image/jpeg,image/png,image/bmp" oninput={link.callback(|e: InputEvent| { let input: HtmlInputElement = e.target_unchecked_into(); Self::upload_files(input.files()) })} />
             </div>
             <div class="col-3">
             <button type="button" class="btn btn-secondary col-auto" onclick={link.callback(|_| Msg::ClearClicked)}>{"Clear"}</button>
