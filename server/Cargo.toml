@@ -1,6 +1,6 @@
 [package]
 name = "lldap"
-version = "0.6.2"
+version = "0.6.3"
 description = "Super-simple and lightweight LDAP server"
 categories = ["authentication", "command-line-utilities"]
 edition.workspace = true
@@ -18,64 +18,57 @@ actix-http = "3"
 actix-rt = "2"
 actix-server = "2"
 actix-service = "2"
+actix-tls = { version = "3", features = ["default", "rustls"] }
 actix-web = "4.3"
 actix-web-httpauth = "0.8"
-anyhow = "*"
-async-trait = "0.1"
-bincode = "1.3"
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
 cron = "*"
 derive_builder = "0.12"
+derive_more = { workspace = true }
+figment = { version = "*", features = ["env", "toml"] }
 figment_file_provider_adapter = "0.1"
 futures = "*"
 futures-util = "*"
 hmac = "0.12"
 http = "*"
-juniper = "0.15"
-jwt = "0.16"
-ldap3_proto = "0.6.0"
-log = "*"
+juniper = { workspace = true }
+jwt = { workspace = true }
+keycloak = "~26.5"
+ldap3_proto = { workspace = true }
+lettre = { version = "0.10.1", features = ["builder", "serde", "smtp-transport", "tokio1-rustls-tls"], default-features = false }
+log = { workspace = true }
+opaque-ke = { workspace = true }
+rand = { workspace = true }
 rand_chacha = "0.3"
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1"
-serde_json = "1"
+sea-orm = {workspace = true }
+secstr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = "0.10"
-thiserror = "2"
+strum = { workspace = true }
+thiserror = { workspace = true }
 time = "0.3"
+tokio = { workspace = true }
 tokio-rustls = "0.23"
 tokio-stream = "*"
 tokio-util = "0.7"
-tracing = "*"
+tracing = { workspace = true }
 tracing-actix-web = "0.7"
 tracing-attributes = "^0.1.21"
-tracing-log = "*"
-urlencoding = "2"
+tracing-forest = { version = "^0.1.6", features = ["smallvec", "chrono", "tokio"] }
+tracing-log = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { version = "2", features = ["serde"] }
+urlencoding = { workspace = true }
+uuid = { workspace = true, features = ["v1", "v3", "v4", "serde"] }
 webpki-roots = "0.22.2"
-keycloak = "~26.5"
-
-[dependencies.chrono]
-features = ["serde"]
-version = "*"
-
-[dependencies.clap]
-features = ["std", "color", "suggestions", "derive", "env"]
-version = "4"
-
-[dependencies.derive_more]
-features = ["debug", "display", "from", "from_str"]
-default-features = false
-version = "1"
-
-[dependencies.figment]
-features = ["env", "toml"]
-version = "*"
-
-[dependencies.tracing-subscriber]
-version = "0.3"
-features = ["env-filter", "tracing-log"]
-
-[dependencies.lettre]
-features = ["builder", "serde", "smtp-transport", "tokio1-rustls-tls"]
-default-features = false
-version = "0.10.1"
 
 [dependencies.lldap_access_control]
 path = "../crates/access-control"
@@ -87,15 +80,11 @@ features = ["opaque_server", "opaque_client", "sea_orm"]
 [dependencies.lldap_domain]
 path = "../crates/domain"
 
-[dev-dependencies.lldap_domain]
-path = "../crates/domain"
-features = ["test"]
+[dependencies.lldap_domain_handlers]
+path = "../crates/domain-handlers"
 
 [dependencies.lldap_domain_model]
 path = "../crates/domain-model"
-
-[dependencies.lldap_domain_handlers]
-path = "../crates/domain-handlers"
 
 [dependencies.lldap_frontend_options]
 path = "../crates/frontend-options"
@@ -106,77 +95,20 @@ path = "../crates/graphql-server"
 [dependencies.lldap_ldap]
 path = "../crates/ldap"
 
-[dependencies.lldap_sql_backend_handler]
-path = "../crates/sql-backend-handler"
-
 [dependencies.lldap_opaque_handler]
 path = "../crates/opaque-handler"
+
+[dependencies.lldap_sql_backend_handler]
+path = "../crates/sql-backend-handler"
 
 [dependencies.lldap_validation]
 path = "../crates/validation"
 
-[dependencies.opaque-ke]
-version = "0.7"
-
-[dependencies.rand]
-features = ["small_rng", "getrandom"]
-version = "0.8"
-
-[dependencies.secstr]
-features = ["serde"]
-version = "*"
-
-[dependencies.serde]
-workspace = true
-
-[dependencies.strum]
-features = ["derive"]
-version = "0.25"
-
-[dependencies.tokio]
-features = ["full"]
-version = "1.25"
-
-[dependencies.uuid]
-features = ["v1", "v3", "v4"]
-version = "1"
-
-[dependencies.tracing-forest]
-features = ["smallvec", "chrono", "tokio"]
-version = "^0.1.6"
-
-[dependencies.actix-tls]
-features = ["default", "rustls"]
-version = "3"
-
-[dependencies.sea-orm]
-workspace = true
-features = [
-    "macros",
-    "with-chrono",
-    "with-uuid",
-    "sqlx-all",
-    "runtime-actix-rustls",
-]
-
-[dependencies.reqwest]
-version = "0.11"
-default-features = false
-features = ["rustls-tls-webpki-roots"]
-
-[dependencies.rustls]
-version = "0.20"
-features = ["dangerous_configuration"]
-
-[dependencies.url]
-version = "2"
-features = ["serde"]
-
 [dev-dependencies]
 assert_cmd = "2.0"
-mockall = "0.11.4"
+mockall = { workspace = true }
 nix = "0.26.2"
-pretty_assertions = "1"
+pretty_assertions = { workspace = true }
 
 [dev-dependencies.graphql_client]
 features = ["graphql_query_derive", "reqwest-rustls"]
@@ -192,16 +124,20 @@ features = ["sync", "tls-rustls-ring"]
 path = "../crates/auth"
 features = ["test"]
 
+[dev-dependencies.lldap_domain]
+path = "../crates/domain"
+features = ["test"]
+
 [dev-dependencies.lldap_opaque_handler]
 path = "../crates/opaque-handler"
 features = ["test"]
 
-[dev-dependencies.lldap_test_utils]
-path = "../crates/test-utils"
-
 [dev-dependencies.lldap_sql_backend_handler]
 path = "../crates/sql-backend-handler"
 features = ["test"]
+
+[dev-dependencies.lldap_test_utils]
+path = "../crates/test-utils"
 
 [dev-dependencies.reqwest]
 version = "*"

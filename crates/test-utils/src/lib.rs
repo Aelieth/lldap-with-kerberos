@@ -4,19 +4,17 @@ use lldap_domain::{
         CreateAttributeRequest, CreateGroupRequest, CreateUserRequest, UpdateGroupRequest,
         UpdateUserRequest,
     },
-    schema::{AttributeList, AttributeSchema, Schema},
-    types::{
-        AttributeName, AttributeType, Group, GroupDetails, GroupId, LdapObjectClass, User,
-        UserAndGroups, UserId,
-    },
+    types::{AttributeName, Group, GroupDetails, GroupId, LdapObjectClass, User, UserAndGroups, UserId},
 };
 use lldap_domain_handlers::handler::{
     BackendHandler, BindRequest, GroupBackendHandler, GroupListerBackendHandler,
-    GroupRequestFilter, LoginHandler, ReadSchemaBackendHandler, SchemaBackendHandler,
-    UserBackendHandler, UserListerBackendHandler, UserRequestFilter,
+    GroupRequestFilter, LoginHandler, PosixBackendHandler, PosixSettings, ReadSchemaBackendHandler,
+    SchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler,
+    UserListerBackendHandler, UserRequestFilter,
 };
 use lldap_domain_model::error::Result;
 use lldap_opaque_handler::{OpaqueHandler, login, registration};
+use lldap_schema::PublicSchema;
 use std::collections::HashSet;
 
 mockall::mock! {
@@ -55,7 +53,7 @@ mockall::mock! {
     }
     #[async_trait]
     impl ReadSchemaBackendHandler for TestBackendHandler {
-        async fn get_schema(&self) -> Result<Schema>;
+        async fn get_schema(&self) -> Result<PublicSchema>;
     }
     #[async_trait]
     impl SchemaBackendHandler for TestBackendHandler {
@@ -86,47 +84,31 @@ mockall::mock! {
             request: registration::ClientRegistrationFinishRequest
         ) -> Result<()>;
     }
+    #[async_trait]
+    impl PosixBackendHandler for TestBackendHandler {
+        async fn get_posix_settings(&self) -> Result<PosixSettings>;
+        async fn set_posix_settings(&self, settings: PosixSettings) -> Result<()>;
+        async fn reassign_gid_numbers(&self) -> Result<()>;
+        async fn reassign_user_uid_numbers(&self) -> Result<()>;
+        async fn reassign_user_gid_numbers(&self) -> Result<()>;
+        async fn reassign_user_homedirectories(&self) -> Result<()>;
+        async fn reassign_user_loginshells(&self) -> Result<()>;
+    }
+
+    #[async_trait]
+    impl SystemConfigBackendHandler for TestBackendHandler {
+        async fn get_allowed_ous(&self) -> Result<Vec<String>>;
+        async fn set_system_config(&self, key: &str, value: String) -> Result<()>;
+        async fn ensure_kerberos_principal_consistency(
+            &self,
+            user_id: &UserId,
+            enabled: bool,
+        ) -> Result<()>;
+    }
 }
 
 pub fn setup_default_schema(mock: &mut MockTestBackendHandler) {
     mock.expect_get_schema().returning(|| {
-        Ok(Schema {
-            user_attributes: AttributeList {
-                attributes: vec![
-                    AttributeSchema {
-                        name: "avatar".into(),
-                        attribute_type: AttributeType::JpegPhoto,
-                        is_list: false,
-                        is_visible: true,
-                        is_editable: true,
-                        is_hardcoded: true,
-                        is_readonly: false,
-                    },
-                    AttributeSchema {
-                        name: "first_name".into(),
-                        attribute_type: AttributeType::String,
-                        is_list: false,
-                        is_visible: true,
-                        is_editable: true,
-                        is_hardcoded: true,
-                        is_readonly: false,
-                    },
-                    AttributeSchema {
-                        name: "last_name".into(),
-                        attribute_type: AttributeType::String,
-                        is_list: false,
-                        is_visible: true,
-                        is_editable: true,
-                        is_hardcoded: true,
-                        is_readonly: false,
-                    },
-                ],
-            },
-            group_attributes: AttributeList {
-                attributes: Vec::new(),
-            },
-            extra_user_object_classes: vec![LdapObjectClass::from("customUserClass")],
-            extra_group_object_classes: Vec::new(),
-        })
+        Ok(PublicSchema::get())   // now returns PublicSchema directly
     });
 }

@@ -301,12 +301,12 @@ impl UserDetailsForm {
         let user_input = update_user::UpdateUserInput {
             id: self.user.id.clone(),
             email: None,
-            displayName: display_name,
-            firstName: None,
-            lastName: None,
+            display_name: display_name,
+            first_name: None,
+            last_name: None,
             avatar,
-            removeAttributes: remove_attributes,
-            insertAttributes: insert_attributes,
+            remove_attributes: remove_attributes,
+            insert_attributes: insert_attributes,
         };
 
         let req = update_user::Variables { user: user_input };

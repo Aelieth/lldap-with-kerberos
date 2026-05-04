@@ -96,8 +96,8 @@ impl CommonComponent<KeycloakSettings> for KeycloakSettings {
                     input: test_keycloak_connection::TestKeycloakConnectionInput {
                         url: self.keycloak_url.clone(),
                         realm: self.realm.clone(),
-                        adminUser: self.admin_username.clone(),
-                        adminPass: self.admin_password.clone(),
+                        admin_user: self.admin_username.clone(),
+                        admin_pass: self.admin_password.clone(),
                     },
                 };
                 self.common.call_graphql::<TestKeycloakConnection, _>(ctx, variables, Msg::TestResponse, "Error testing connection");
@@ -110,7 +110,7 @@ impl CommonComponent<KeycloakSettings> for KeycloakSettings {
                     input: save_keycloak_config::SaveKeycloakConfigInput {
                         url: self.keycloak_url.clone(),
                         realm: self.realm.clone(),
-                        adminUser: self.admin_username.clone(),
+                        admin_user: self.admin_username.clone(),
                     },
                 };
                 self.common.call_graphql::<SaveKeycloakConfig, _>(ctx, variables, Msg::SaveResponse, "Error saving config");

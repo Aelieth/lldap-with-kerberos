@@ -1,6 +1,6 @@
 [package]
 name = "lldap_auth"
-version = "0.6.0"
+version = "0.6.3"
 description = "Authentication protocol for LLDAP"
 edition.workspace = true
 authors.workspace = true
@@ -18,26 +18,17 @@ sea_orm = ["dep:sea-orm"]
 test = []
 
 [dependencies]
-rust-argon2 = "2"
+chrono = { workspace = true }
 curve25519-dalek = "3"
+derive_more = { workspace = true, features = ["debug", "display"] }
 digest = "0.9"
 generic-array = "0.14"
-rand = "0.8"
+opaque-ke = { workspace = true }
+rand = { workspace = true }
+rust-argon2 = "2"
 sha2 = "0.9"
-thiserror = "2"
-uuid = { version = "1.18.1", features = ["serde"] }
-
-[dependencies.derive_more]
-features = ["debug", "display"]
-default-features = false
-version = "1"
-
-[dependencies.opaque-ke]
-version = "0.7"
-
-[dependencies.chrono]
-version = "*"
-features = ["serde"]
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 
 [dependencies.sea-orm]
 workspace = true

@@ -16,6 +16,7 @@ use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
 use lldap_access_control::{AdminBackendHandler, ReadonlyBackendHandler, UserReadableBackendHandler};
 use lldap_domain::types::{GroupId, UserId};
 use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
+use crate::api::FullHandler;
 use std::sync::Arc;
 use tracing::{Instrument, Span, debug, debug_span};
 use lldap_opaque_handler::OpaqueHandler;
@@ -27,7 +28,7 @@ use lldap_schema::PublicSchema;
 
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL query type.
-pub struct Query<Handler: BackendHandler + OpaqueHandler> {
+pub struct Query<Handler: FullHandler + OpaqueHandler> {
     _phantom: std::marker::PhantomData<Box<Handler>>,
 }
 
@@ -91,12 +92,12 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
+impl<Handler: FullHandler + OpaqueHandler> Query<Handler> {
     fn api_version() -> &'static str {
         "1.0"
     }
 
-    pub async fn user(context: &Context<Handler>, user_id: String) -> FieldResult<User<Handler>> {
+    pub async fn user(&self, context: &Context<Handler>, user_id: String) -> FieldResult<User<Handler>> {
         use anyhow::Context;
         let span = debug_span!("[GraphQL query] user");
         span.in_scope(|| {
@@ -105,17 +106,18 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
         let user_id = urlencoding::decode(&user_id).context("Invalid user parameter")?;
         let user_id = UserId::new(&user_id);
         let handler = context
-        .get_readable_handler(user_id.clone())
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized access to user data",
-        ))?;
+            .get_readable_handler(user_id.clone())
+            .ok_or_else(field_error_callback(
+                &span,
+                "Unauthorized access to user data",
+            ))?;
         let schema = Arc::new(self.get_schema(context, span.clone()).await?);
         let user = handler.get_user_details(&user_id).instrument(span).await?;
         User::<Handler>::from_user(user, schema)
     }
 
     async fn users(
+        &self,
         context: &Context<Handler>,
         #[graphql(name = "where")] filters: Option<RequestFilter>,
     ) -> FieldResult<Vec<User<Handler>>> {
@@ -124,63 +126,63 @@ impl<Handler: BackendHandler + OpaqueHandler> Query<Handler> {
             debug!(?filters);
         });
         let handler = context
-        .get_readonly_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized access to user list",
-        ))?;
+            .get_readonly_handler()
+            .ok_or_else(field_error_callback(
+                &span,
+                "Unauthorized access to user list",
+            ))?;
         let schema = Arc::new(self.get_schema(context, span.clone()).await?);
         let users = handler
-        .list_users(
-            filters
-            .map(|f| f.try_into_domain_filter(&schema))
-            .transpose()?,
-                    true,
-        )
-        .instrument(span)
-        .await?;
+            .list_users(
+                filters
+                    .map(|f| f.try_into_domain_filter(&schema))
+                    .transpose()?,
+                true,
+            )
+            .instrument(span)
+            .await?;
         users
-        .into_iter()
-        .map(|u| User::<Handler>::from_user_and_groups(u, schema.clone()))
-        .collect()
+            .into_iter()
+            .map(|u| User::<Handler>::from_user_and_groups(u, schema.clone()))
+            .collect()
     }
 
-    async fn groups(context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
+    async fn groups(&self, context: &Context<Handler>) -> FieldResult<Vec<Group<Handler>>> {
         let span = debug_span!("[GraphQL query] groups");
         let handler = context
-        .get_readonly_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized access to group list",
-        ))?;
+            .get_readonly_handler()
+            .ok_or_else(field_error_callback(
+                &span,
+                "Unauthorized access to group list",
+            ))?;
         let schema = Arc::new(self.get_schema(context, span.clone()).await?);
         let domain_groups = handler.list_groups(None).instrument(span).await?;
         domain_groups
-        .into_iter()
-        .map(|g| Group::<Handler>::from_group(g, schema.clone()))
-        .collect()
+            .into_iter()
+            .map(|g| Group::<Handler>::from_group(g, schema.clone()))
+            .collect()
     }
 
-    async fn group(context: &Context<Handler>, group_id: i32) -> FieldResult<Group<Handler>> {
+    async fn group(&self, context: &Context<Handler>, group_id: i32) -> FieldResult<Group<Handler>> {
         let span = debug_span!("[GraphQL query] group");
         span.in_scope(|| {
             debug!(?group_id);
         });
         let handler = context
-        .get_readonly_handler()
-        .ok_or_else(field_error_callback(
-            &span,
-            "Unauthorized access to group data",
-        ))?;
+            .get_readonly_handler()
+            .ok_or_else(field_error_callback(
+                &span,
+                "Unauthorized access to group data",
+            ))?;
         let schema = Arc::new(self.get_schema(context, span.clone()).await?);
         let group_details = handler
-        .get_group_details(GroupId(group_id))
-        .instrument(span)
-        .await?;
+            .get_group_details(GroupId(group_id))
+            .instrument(span)
+            .await?;
         Group::<Handler>::from_group_details(group_details, schema.clone())
     }
 
-    async fn schema(context: &Context<Handler>) -> FieldResult<Schema<Handler>> {
+    async fn schema(&self, context: &Context<Handler>) -> FieldResult<Schema<Handler>> {
         let span = debug_span!("[GraphQL query] get_schema");
         self.get_schema(context, span).await.map(Into::into)
     }

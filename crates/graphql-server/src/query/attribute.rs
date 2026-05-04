@@ -69,10 +69,6 @@ pub struct AttributeValue<Handler: BackendHandler> {
 
 #[graphql_object(context = Context<Handler>)]
 impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
-    fn name(&self) -> &str {
-        self.attribute.name.as_str()
-    }
-
     fn value(&self) -> FieldResult<Vec<String>> {
         Ok(serialize_attribute_to_graphql(&self.attribute.value))
     }
@@ -83,7 +79,7 @@ impl<Handler: BackendHandler + OpaqueHandler> AttributeValue<Handler> {
 }
 
 impl<Handler: BackendHandler> AttributeValue<Handler> {
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         self.attribute.name.as_str()
     }
 
@@ -97,8 +93,8 @@ impl<Handler: BackendHandler> AttributeValue<Handler> {
 
     fn from_schema(a: DomainAttribute, schema_list: &lldap_schema::AttributeList) -> Option<Self> {
         schema_list
-            .get_by_name_or_alias(a.name.as_str())
-            .map(|s| Self::from_value(a, s.clone()))
+        .get_by_name_or_alias(a.name.as_str())
+        .map(|s| Self::from_value(a, s.clone()))
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "lldap_domain_handlers"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -12,23 +12,13 @@ rust-version.workspace = true
 test = []
 
 [dependencies]
-async-trait = "0.1"
-base64 = "0.21"
-ldap3_proto = "0.6.0"
-serde_bytes = "0.11"
-lldap_opaque_handler = { path = "../opaque-handler" }
-
-[dev-dependencies]
-pretty_assertions = "1"
-
-[dependencies.chrono]
-features = ["serde"]
-version = "0.4"
-
-[dependencies.derive_more]
-features = ["debug", "display", "from", "from_str"]
-default-features = false
-version = "1"
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+derive_more = { workspace = true }
+ldap3_proto = { workspace = true }
+serde_bytes = { workspace = true }
+uuid = { workspace = true }
 
 [dependencies.lldap_auth]
 path = "../auth"
@@ -40,12 +30,14 @@ path = "../domain"
 [dependencies.lldap_domain_model]
 path = "../domain-model"
 
+[dependencies.lldap_opaque_handler]
+path = "../opaque-handler"
+
 [dependencies.lldap_schema]
 path = "../schema"
 
 [dependencies.serde]
 workspace = true
 
-[dependencies.uuid]
-features = ["v1", "v3"]
-version = "1"
+[dev-dependencies]
+pretty_assertions = { workspace = true }

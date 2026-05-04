@@ -213,18 +213,18 @@ impl CommonComponent<PosixOptions> for PosixOptions {
 
             Msg::SaveConfig => {
                 let input = set_posix_config::PosixSettingsInput {
-                    userUidnumberAssign: self.user_uidnumber_assign,
-                    userUidnumberStart: self.user_uidnumber_start.parse().unwrap_or(3000),
-                    userUidnumberMax: self.user_uidnumber_max.parse().unwrap_or(60000),
-                    userGidnumberAssign: self.user_gidnumber_assign,
-                    userGidnumberStart: self.user_gidnumber_start.parse().unwrap_or(3000),
-                    userLoginshellAssign: self.user_loginshell_assign,
-                    userLoginshellDefault: self.user_loginshell_default.clone(),
-                    userHomedirectoryAssign: self.user_homedirectory_assign,
-                    userHomedirectoryPrefix: self.user_homedirectory_prefix.clone(),
-                    groupGidnumberAssign: self.group_gidnumber_assign,
-                    groupGidnumberStart: self.group_gidnumber_start.parse().unwrap_or(3000),
-                    groupGidnumberMax: self.group_gidnumber_max.parse().unwrap_or(60000),
+                    user_uidnumber_assign: self.user_uidnumber_assign,
+                    user_uidnumber_start: self.user_uidnumber_start.parse().unwrap_or(3000),
+                    user_uidnumber_max: self.user_uidnumber_max.parse().unwrap_or(60000),
+                    user_gidnumber_assign: self.user_gidnumber_assign,
+                    user_gidnumber_start: self.user_gidnumber_start.parse().unwrap_or(3000),
+                    user_loginshell_assign: self.user_loginshell_assign,
+                    user_loginshell_default: self.user_loginshell_default.clone(),
+                    user_homedirectory_assign: self.user_homedirectory_assign,
+                    user_homedirectory_prefix: self.user_homedirectory_prefix.clone(),
+                    group_gidnumber_assign: self.group_gidnumber_assign,
+                    group_gidnumber_start: self.group_gidnumber_start.parse().unwrap_or(3000),
+                    group_gidnumber_max: self.group_gidnumber_max.parse().unwrap_or(60000),
                 };
                 let vars = set_posix_config::Variables { input };
                 self.common.call_graphql::<SetPosixConfig, _>(ctx, vars, Msg::SaveResponse, "Save POSIX config failure");

@@ -281,9 +281,9 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 let user = create_user::CreateUserInput {
                     id: model.username,
-                    displayName: display_name,
-                    firstName: first_name,
-                    lastName: last_name,
+                    display_name: display_name,
+                    first_name: first_name,
+                    last_name: last_name,
                     avatar,
                     email,
                     attributes: Some(attributes),

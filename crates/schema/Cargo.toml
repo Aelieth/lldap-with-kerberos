@@ -1,21 +1,15 @@
 [package]
 name = "lldap_schema"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
-
-# SeaORM – required for DeriveActiveEnum in AttributeType
+derive_more = { workspace = true, features = ["display"] }
+juniper = { workspace = true }
 sea-orm = { workspace = true, features = ["macros", "runtime-tokio-rustls"] }
-
-# GraphQL + enum helpers (already had these, now explicit)
-juniper = "0.15"
-strum = { version = "0.26", features = ["derive", "std"] }   # "std" for EnumIter on all platforms
-derive_more = { version = "1.0", features = ["display"] }
-
-# SeaORM column types (for future-proofing)
 sea-query = { version = "0.32", default-features = false, features = ["thread-safe"] }
+serde = { workspace = true, features = ["derive", "std"] }
+strum = { workspace = true }

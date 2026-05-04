@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use ldap3::{ResultEntry, SearchEntry};
 use requestty::{Question, prompt_one};
 use smallvec::SmallVec;
+use base64::Engine;
 
 use crate::lldap::User;
 
@@ -193,7 +194,7 @@ impl TryFrom<ResultEntry> for User {
                 display_name,
                 first_name,
                 last_name,
-                avatar: avatar.map(base64::encode),
+                avatar: avatar.map(|a| base64::engine::general_purpose::STANDARD.encode(a)),
                 attributes: None,
             },
             password,

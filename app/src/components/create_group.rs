@@ -136,7 +136,7 @@ impl CommonComponent<CreateGroupForm> for CreateGroupForm {
                 let model = self.form.model();
                 let req = create_group::Variables {
                     group: create_group::CreateGroupInput {
-                        displayName: model.display_name,
+                        display_name: model.display_name,
                         attributes: Some(attributes),
                     },
                 };

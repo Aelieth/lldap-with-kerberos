@@ -574,7 +574,7 @@ Conflicting emails:
                         .unwrap(),
                 )
             })
-            .group_by(|(_user, email)| email.to_owned())
+            .chunk_by(|(_user, email)| email.to_owned())
         {
             warn!("Email: {email}");
             for (user, _email) in users {

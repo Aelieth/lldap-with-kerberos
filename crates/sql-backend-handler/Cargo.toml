@@ -1,6 +1,6 @@
 [package]
 name = "lldap_sql_backend_handler"
-version = "0.1.0"
+version = "0.1.1"
 description = "SQL backend for LLDAP"
 authors.workspace = true
 edition.workspace = true
@@ -13,48 +13,19 @@ rust-version.workspace = true
 test = []
 
 [dependencies]
-anyhow = "*"
-async-trait = "0.1"
-base64 = "0.21"
-bincode = "1.3"
-itertools = "0.10"
-ldap3_proto = "0.6.0"
-orion = "0.17"
-serde_json = "1"
-tracing = "*"
-lldap-kerberos = { path = "../kerberos" }
-
-[dependencies.chrono]
-features = ["serde"]
-version = "*"
-
-[dependencies.rand]
-features = ["small_rng", "getrandom"]
-version = "0.8"
-
-[dependencies.sea-orm]
-workspace = true
-features = [
-    "macros",
-    "with-chrono",
-    "with-uuid",
-    "sqlx-all",
-    "runtime-actix-rustls",
-]
-
-[dependencies.lldap_schema]
-path = "../schema"
-
-[dependencies.secstr]
-features = ["serde"]
-version = "*"
-
-[dependencies.serde]
-workspace = true
-
-[dependencies.uuid]
-version = "1"
-features = ["v1", "v3"]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+itertools = { workspace = true }
+ldap3_proto = { workspace = true }
+orion = { workspace = true }
+rand = { workspace = true }
+secstr = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dependencies.lldap_access_control]
 path = "../access-control"
@@ -75,18 +46,41 @@ path = "../domain-model"
 [dependencies.lldap_opaque_handler]
 path = "../opaque-handler"
 
-[dev-dependencies.lldap_test_utils]
-path = "../test-utils"
+[dependencies.lldap_schema]
+path = "../schema"
+
+[dependencies.lldap-kerberos]
+path = "../kerberos"
+
+[dependencies.sea-orm]
+workspace = true
+features = [
+    "macros",
+    "with-chrono",
+    "with-uuid",
+    "sqlx-all",
+    "runtime-actix-rustls",
+]
+
+[dependencies.serde]
+workspace = true
 
 [dev-dependencies]
-log = "*"
-mockall = "0.11.4"
-pretty_assertions = "1"
+log = { workspace = true }
+mockall = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[dev-dependencies.lldap_domain]
+path = "../domain"
+features = ["test"]
+
+[dev-dependencies.lldap_test_utils]
+path = "../test-utils"
 
 [dev-dependencies.tokio]
 features = ["full"]
 version = "1.25"
 
 [dev-dependencies.tracing-subscriber]
-version = "0.3"
+workspace = true
 features = ["env-filter", "tracing-log"]

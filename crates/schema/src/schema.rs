@@ -5,24 +5,23 @@ use derive_more::Display;
 
 // ==================== ATTRIBUTE TYPE (SINGLE SOURCE OF TRUTH) ====================
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    sea_orm::DeriveActiveEnum,
-    EnumIter,
-    EnumString,
-    IntoStaticStr,
-    GraphQLEnum,
-    Display,
+Clone,
+Copy,
+Debug,
+PartialEq,
+Eq,
+Serialize,
+Deserialize,
+sea_orm::DeriveActiveEnum,
+EnumIter,
+EnumString,
+IntoStaticStr,
+GraphQLEnum,
+Display,
 )]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-#[display("{_0}")]
 pub enum AttributeType {
     #[sea_orm(string_value = "String")]
     String,

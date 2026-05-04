@@ -7,7 +7,7 @@ pub use inputs::{
 };
 
 use tracing::{Instrument, info, debug, debug_span, warn};
-use crate::api::{Context, field_error_callback};
+use crate::api::{Context, field_error_callback, FullHandler};
 use anyhow::anyhow;
 use juniper::{FieldError, FieldResult, graphql_object, graphql_value};
 use lldap_access_control::{
@@ -134,7 +134,7 @@ fn extract_kerberos_sync(schema: &PublicSchema, attrs: &[lldap_domain::types::At
 }
 
 #[graphql_object(context = Context<Handler>)]
-impl<Handler: BackendHandler + OpaqueHandler> Mutation<Handler> {
+impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
     async fn create_user(
         context: &Context<Handler>,
         user: CreateUserInput,

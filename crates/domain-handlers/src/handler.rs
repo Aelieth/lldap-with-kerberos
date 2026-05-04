@@ -184,6 +184,12 @@ impl<Handler: BackendHandler + OpaqueHandler> PasswordHandler for Handler {}
 pub trait SystemConfigBackendHandler: Send + Sync {
     async fn get_allowed_ous(&self) -> Result<Vec<String>>;
     async fn set_system_config(&self, key: &str, value: String) -> Result<()>;
+
+    async fn ensure_kerberos_principal_consistency(
+        &self,
+        user_id: &UserId,
+        enabled: bool,
+    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -199,7 +205,6 @@ pub trait BackendHandler:
     + SystemConfigBackendHandler
     + PosixBackendHandler
 {
-    async fn ensure_kerberos_principal_consistency(&self, user_id: &UserId, enabled: bool) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
