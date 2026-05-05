@@ -31,7 +31,13 @@ impl RequestFilter {
             self.member_of_id,
         ) {
             (Some(eq), None, None, None, None, None) => {
-                match map_user_field(&eq.field.as_str().into(), schema) {
+                let canonical_field = schema
+                    .resolve_user_canonical_name(&eq.field)
+                    .unwrap_or(&eq.field);
+
+                let attr_name = lldap_domain::types::AttributeName::from(canonical_field);
+
+                match map_user_field(&attr_name, schema) {
                     UserFieldType::NoMatch => {
                         Err(format!("Unknown request filter: {}", &eq.field).into())
                     }

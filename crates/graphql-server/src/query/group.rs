@@ -82,9 +82,10 @@ impl<Handler: BackendHandler + OpaqueHandler> Group<Handler> {
 
     /// Single-layer OU (defaults to "groups" — editable by admin only)
     fn ou(&self) -> String {
+        let canonical = self.schema.resolve_group_canonical_name("ou").unwrap_or("ou");
         self.attributes
         .iter()
-        .find(|a| a.name() == "ou")
+        .find(|a| a.name() == canonical)
         .and_then(|a| a.attribute.value.as_str())
         .unwrap_or("groups")
         .to_string()

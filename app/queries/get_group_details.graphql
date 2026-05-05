@@ -9,7 +9,9 @@ query GetGroupDetails($id: Int!) {
       displayName
     }
     attributes {
-      name
+      schema {
+        name
+      }
       value
     }
   }

@@ -93,7 +93,7 @@ impl AddGroupMemberComponent {
     fn get_user_list(&mut self, ctx: &Context<Self>) {
         self.common.call_graphql::<ListUserNames, _>(
             ctx,
-            list_user_names::Variables { filters: None },
+            list_user_names::Variables { where_: None },
             Msg::UserListResponse,
             "Error trying to fetch user list",
         );

@@ -155,9 +155,9 @@ impl CommonComponent<GroupTable> for GroupTable {
 impl GroupTable {
     fn get_attribute_value(group: &Group, name: &str) -> Option<String> {
         group.attributes
-            .iter()
-            .find(|a| a.name == name)
-            .and_then(|a| a.value.first().cloned())
+        .iter()
+        .find(|a| a.schema.name == name)
+        .and_then(|a| a.value.first().cloned())
     }
 
     fn get_ou(group: &Group) -> String {

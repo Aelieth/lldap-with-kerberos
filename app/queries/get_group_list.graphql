@@ -5,7 +5,9 @@ query GetGroupList {
     creationDate
     memberCount
     attributes {
-      name
+      schema {
+        name
+      }
       value
     }
   }

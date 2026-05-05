@@ -144,7 +144,7 @@ impl CommonComponent<UserTable> for UserTable {
                 self.bulk_selection.clear();
                 self.common.call_graphql::<ListUsersQuery, _>(
                     ctx,
-                    list_users_query::Variables { filters: None },
+                    list_users_query::Variables { where_: None },
                     Msg::ListUsersResponse,
                     "Error trying to fetch users after OU change",
                 );
@@ -161,9 +161,9 @@ impl CommonComponent<UserTable> for UserTable {
 impl UserTable {
     fn get_attribute_value(user: &User, name: &str) -> Option<String> {
         user.attributes
-            .iter()
-            .find(|a| a.name == name)
-            .and_then(|a| a.value.first().cloned())
+        .iter()
+        .find(|a| a.schema.name == name)
+        .and_then(|a| a.value.first().cloned())
     }
 
     fn get_kerberos_sync(user: &User) -> bool {
@@ -202,7 +202,7 @@ impl Component for UserTable {
 
         table.common.call_graphql::<ListUsersQuery, _>(
             ctx,
-            list_users_query::Variables { filters: None },
+            list_users_query::Variables { where_: None },
             Msg::ListUsersResponse,
             "Error trying to fetch users",
         );

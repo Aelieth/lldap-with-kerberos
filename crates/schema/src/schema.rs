@@ -110,6 +110,11 @@ impl AttributeList {
             .collect::<Vec<_>>()
             .join(" $ ")
     }
+
+    pub fn resolve_canonical_name(&self, name_or_alias: &str) -> Option<&str> {
+        self.get_by_name_or_alias(name_or_alias)
+        .map(|a| a.name.as_str())
+    }
 }
 
 

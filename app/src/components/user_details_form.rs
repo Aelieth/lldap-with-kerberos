@@ -106,7 +106,7 @@ impl Component for UserDetailsForm {
 
     fn create(ctx: &Context<Self>) -> Self {
         let kerberossync_enabled = ctx.props().user.attributes.iter()
-            .any(|attr| attr.name.to_lowercase() == "kerberossync" && attr.value == vec!["1"]);
+        .any(|attr| attr.schema.name.to_lowercase() == "kerberossync" && attr.value == vec!["1"]);
         Self {
             common: CommonComponentParts::<Self>::create(),
             just_updated: false,
@@ -233,7 +233,7 @@ impl UserDetailsForm {
                 continue;
             }
 
-            let old_val = base_attributes.iter().find(|b| b.name.to_lowercase() == name_lower);
+            let old_val = base_attributes.iter().find(|b| b.schema.name.to_lowercase() == name_lower);
             let old_values = old_val.map_or(&empty, |v| &v.value);
 
             let has_changed = old_values != &attr.values;
@@ -326,7 +326,7 @@ fn get_custom_attribute_input(
 ) -> Html {
     let values = user_attributes
         .iter()
-        .find(|a| a.name.to_lowercase() == attribute_schema.name.to_lowercase())
+        .find(|a| a.schema.name.to_lowercase() == attribute_schema.name.to_lowercase())
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
 
@@ -356,7 +356,7 @@ fn get_custom_attribute_static(
 ) -> Html {
     let values = user_attributes
         .iter()
-        .find(|a| a.name.to_lowercase() == attribute_schema.name.to_lowercase())
+        .find(|a| a.schema.name.to_lowercase() == attribute_schema.name.to_lowercase())
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
 

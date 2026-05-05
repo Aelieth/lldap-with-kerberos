@@ -166,7 +166,7 @@ fn get_custom_attribute_input(
 ) -> Html {
     let values = group_attributes
         .iter()
-        .find(|a| a.name == attribute_schema.name)
+        .find(|a| a.schema.name == attribute_schema.name)
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
     if attribute_schema.is_list {
@@ -194,7 +194,7 @@ fn get_custom_attribute_static(
 ) -> Html {
     let values = group_attributes
         .iter()
-        .find(|a| a.name == attribute_schema.name)
+        .find(|a| a.schema.name == attribute_schema.name)
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
     html! {
@@ -215,8 +215,8 @@ impl GroupDetailsForm {
         let base_attributes = &self.group.attributes;
         all_values.retain(|a| {
             let base_val = base_attributes
-                .iter()
-                .find(|base_val| base_val.name == a.name);
+            .iter()
+            .find(|base_val| base_val.schema.name == a.name);
             base_val
                 .map(|v| v.value != a.values)
                 .unwrap_or(!a.values.is_empty())

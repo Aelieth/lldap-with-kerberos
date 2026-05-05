@@ -280,97 +280,99 @@ impl Component for KeycloakSettings {
         let push_enabled = self.connection_tested_successfully && !self.sync_password.is_empty();
 
         html! {
-            <div class="row">
-                <div class="col-12">
-                    <div class="card mb-4">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5>{ "Keycloak Federation" }</h5>
-                            <span class={format!("badge {}", self.status_class)}>{ &self.connection_status }</span>
+    <div class="row">
+        <div class="col-12">
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5>{ "Keycloak Federation" }</h5>
+                    <span class={format!("badge {}", self.status_class)}>{ &self.connection_status }</span>
+                </div>
+                <form class="card-body" onsubmit={Callback::from(|e: web_sys::FocusEvent| {
+                    e.prevent_default();
+                })}>
+                    <div class="row">
+                        // LEFT COLUMN — Connection Settings
+                        <div class="col-md-6 border-end border-secondary pe-4">
+                            <h6 class="text-muted mb-3 text-decoration-underline">{ "Keycloak Connection Settings" }</h6>
+
+                            <div class="d-flex align-items-center mb-3">
+                                <label class="form-label me-3" style="min-width: 140px;">{ "Keycloak URL" }</label>
+                                <input type="url" class="form-control flex-grow-1" value={self.keycloak_url.clone()} oninput={on_keycloak_url} />
+                            </div>
+
+                            <div class="d-flex align-items-center mb-3">
+                                <label class="form-label me-3" style="min-width: 140px;">{ "Realm" }</label>
+                                <input type="text" class="form-control flex-grow-1" value={self.realm.clone()} oninput={on_realm} />
+                            </div>
+
+                            <div class="d-flex align-items-center mb-3">
+                                <label class="form-label me-3" style="min-width: 140px;">{ "Admin Username" }</label>
+                                <input type="text" class="form-control flex-grow-1" value={self.admin_username.clone()} oninput={on_admin_username} />
+                            </div>
+
+                            <div class="d-flex align-items-center mb-3">
+                                <label class="form-label me-3" style="min-width: 140px;">{ "Admin Password" }</label>
+                                <input type="password" class="form-control flex-grow-1" value={self.admin_password.clone()} oninput={on_admin_password} placeholder="LLDAP_KEYCLOAK_ADMIN_PASS" />
+                            </div>
+
+                            <div class="text-end">
+                                <button onclick={on_test} class="btn btn-primary me-2">{ "Test Settings" }</button>
+                                <button onclick={on_save} class="btn btn-success">{ "Save Changes" }</button>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <div class="row">
-                                // LEFT COLUMN — Connection Settings
-                                <div class="col-md-6 border-end border-secondary pe-4">
-                                    <h6 class="text-muted mb-3 text-decoration-underline">{ "Keycloak Connection Settings" }</h6>
 
-                                    <div class="d-flex align-items-center mb-3">
-                                        <label class="form-label me-3" style="min-width: 140px;">{ "Keycloak URL" }</label>
-                                        <input type="url" class="form-control flex-grow-1" value={self.keycloak_url.clone()} oninput={on_keycloak_url} />
+                        // RIGHT COLUMN — New Realm Settings
+                        <div class="col-md-6 ps-4">
+                            <h6 class="text-muted mb-3 text-decoration-underline">{ "New Realm Settings" }</h6>
+
+                            <div class={if self.connection_tested_successfully { "" } else { "opacity-50 pe-none" }}>
+                                <div class="d-flex align-items-center mb-3">
+                                    <label class="form-label me-3" style="min-width: 140px;">{ "Realm Name" }</label>
+                                    <input type="text" class="form-control flex-grow-1" value={self.new_realm_name.clone()} oninput={on_new_realm_name} />
+                                </div>
+
+                                <div class="d-flex align-items-center mb-3">
+                                    <label class="form-label me-3" style="min-width: 140px;">{ "LLDAP URL" }</label>
+                                    <input type="text" class="form-control flex-grow-1" value={self.lldap_url.clone()} oninput={on_lldap_url} />
+                                </div>
+
+                                <div class="d-flex align-items-center mb-3">
+                                    <label class="form-label me-3" style="min-width: 140px;">{ "Sync Username" }</label>
+                                    <input type="text" class="form-control flex-grow-1" value={self.sync_username.clone()} oninput={on_sync_username} />
+                                </div>
+
+                                <div class="d-flex align-items-center mb-3">
+                                    <label class="form-label me-3" style="min-width: 140px;">{ "Sync Password" } <span class="text-danger">{ "*" }</span></label>
+                                    <input type="password" class="form-control flex-grow-1" value={self.sync_password.clone()} oninput={on_sync_password} placeholder="REQUIRED - used for bind DN" />
+                                </div>
+
+                                // === Buttons now share the same line as Enable HSTS ===
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div class="form-check">
+                                        <input type="checkbox" class="form-check-input" checked={self.enable_hsts} onchange={on_hsts} />
+                                        <label class="form-check-label">{ "Enable HSTS" }</label>
                                     </div>
 
-                                    <div class="d-flex align-items-center mb-3">
-                                        <label class="form-label me-3" style="min-width: 140px;">{ "Realm" }</label>
-                                        <input type="text" class="form-control flex-grow-1" value={self.realm.clone()} oninput={on_realm} />
-                                    </div>
-
-                                    <div class="d-flex align-items-center mb-3">
-                                        <label class="form-label me-3" style="min-width: 140px;">{ "Admin Username" }</label>
-                                        <input type="text" class="form-control flex-grow-1" value={self.admin_username.clone()} oninput={on_admin_username} />
-                                    </div>
-
-                                    <div class="d-flex align-items-center mb-3">
-                                        <label class="form-label me-3" style="min-width: 140px;">{ "Admin Password" }</label>
-                                        <input type="password" class="form-control flex-grow-1" value={self.admin_password.clone()} oninput={on_admin_password} placeholder="LLDAP_KEYCLOAK_ADMIN_PASS" />
-                                    </div>
-
-                                    <div class="text-end">
-                                        <button onclick={on_test} class="btn btn-primary me-2">{ "Test Settings" }</button>
-                                        <button onclick={on_save} class="btn btn-success">{ "Save Changes" }</button>
+                                    <div>
+                                        <button onclick={on_export} class="btn btn-primary me-2">{ "Export keytab" }</button>
+                                        <button onclick={on_push} class={if push_enabled { "btn btn-danger" } else { "btn btn-secondary disabled" }} disabled={!push_enabled}>
+                                            { "Push To Keycloak" }
+                                        </button>
                                     </div>
                                 </div>
 
-                                // RIGHT COLUMN — New Realm Settings
-                                <div class="col-md-6 ps-4">
-                                    <h6 class="text-muted mb-3 text-decoration-underline">{ "New Realm Settings" }</h6>
-
-                                    <div class={if self.connection_tested_successfully { "" } else { "opacity-50 pe-none" }}>
-                                        <div class="d-flex align-items-center mb-3">
-                                            <label class="form-label me-3" style="min-width: 140px;">{ "Realm Name" }</label>
-                                            <input type="text" class="form-control flex-grow-1" value={self.new_realm_name.clone()} oninput={on_new_realm_name} />
-                                        </div>
-
-                                        <div class="d-flex align-items-center mb-3">
-                                            <label class="form-label me-3" style="min-width: 140px;">{ "LLDAP URL" }</label>
-                                            <input type="text" class="form-control flex-grow-1" value={self.lldap_url.clone()} oninput={on_lldap_url} />
-                                        </div>
-
-                                        <div class="d-flex align-items-center mb-3">
-                                            <label class="form-label me-3" style="min-width: 140px;">{ "Sync Username" }</label>
-                                            <input type="text" class="form-control flex-grow-1" value={self.sync_username.clone()} oninput={on_sync_username} />
-                                        </div>
-
-                                        <div class="d-flex align-items-center mb-3">
-                                            <label class="form-label me-3" style="min-width: 140px;">{ "Sync Password" } <span class="text-danger">{ "*" }</span></label>
-                                            <input type="password" class="form-control flex-grow-1" value={self.sync_password.clone()} oninput={on_sync_password} placeholder="REQUIRED - used for bind DN" />
-                                        </div>
-
-                                        // === Buttons now share the same line as Enable HSTS ===
-                                        <div class="d-flex justify-content-between align-items-center mb-2">
-                                            <div class="form-check">
-                                                <input type="checkbox" class="form-check-input" checked={self.enable_hsts} onchange={on_hsts} />
-                                                <label class="form-check-label">{ "Enable HSTS" }</label>
-                                            </div>
-
-                                            <div>
-                                                <button onclick={on_export} class="btn btn-primary me-2">{ "Export keytab" }</button>
-                                                <button onclick={on_push} class={if push_enabled { "btn btn-danger" } else { "btn btn-secondary disabled" }} disabled={!push_enabled}>
-                                                    { "Push To Keycloak" }
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        // Brute Force stays on its own line below
-                                        <div class="form-check mb-3">
-                                            <input type="checkbox" class="form-check-input" checked={self.enable_brute_force} onchange={on_brute} />
-                                            <label class="form-check-label">{ "Enable Brute Force Protection" }</label>
-                                        </div>
-                                    </div>
+                                // Brute Force stays on its own line below
+                                <div class="form-check mb-3">
+                                    <input type="checkbox" class="form-check-input" checked={self.enable_brute_force} onchange={on_brute} />
+                                    <label class="form-check-label">{ "Enable Brute Force Protection" }</label>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
+                </form>
             </div>
-        }
+        </div>
+    </div>
+}
     }
 }

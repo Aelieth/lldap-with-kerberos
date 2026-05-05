@@ -69,17 +69,19 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
     }
 
     fn first_name(&self) -> &str {
+        let canonical = self.schema.resolve_user_canonical_name("first_name").unwrap_or("firstname");
         self.attributes
         .iter()
-        .find(|a| a.name() == "first_name")
+        .find(|a| a.name() == canonical)
         .and_then(|a| a.attribute.value.as_str())
         .unwrap_or_default()
     }
 
     fn last_name(&self) -> &str {
+        let canonical = self.schema.resolve_user_canonical_name("last_name").unwrap_or("lastname");
         self.attributes
         .iter()
-        .find(|a| a.name() == "last_name")
+        .find(|a| a.name() == canonical)
         .and_then(|a| a.attribute.value.as_str())
         .unwrap_or_default()
     }
@@ -96,9 +98,10 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     /// Single-layer OU (defaults to "people" — editable by admin only)
     fn ou(&self) -> String {
+        let canonical = self.schema.resolve_user_canonical_name("ou").unwrap_or("ou");
         self.attributes
         .iter()
-        .find(|a| a.name() == "ou")
+        .find(|a| a.name() == canonical)
         .and_then(|a| a.attribute.value.as_str())
         .unwrap_or("people")
         .to_string()
@@ -106,9 +109,10 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     /// SSH public keys (multi-value list — exactly like authorized_keys)
     fn ssh_public_keys(&self) -> Vec<String> {
+        let canonical = self.schema.resolve_user_canonical_name("sshpublickey").unwrap_or("sshpublickey");
         self.attributes
         .iter()
-        .find(|a| a.name() == "sshpublickey")
+        .find(|a| a.name() == canonical)
         .map(|a| super::serialize_attribute_to_graphql(&a.attribute.value))
         .unwrap_or_default()
     }

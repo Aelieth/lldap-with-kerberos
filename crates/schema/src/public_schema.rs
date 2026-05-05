@@ -333,4 +333,12 @@ impl PublicSchema {
     pub fn posix_settings_mut(&mut self) -> &mut PosixSettings {
         &mut self.0.posix_settings
     }
+
+    pub fn resolve_user_canonical_name(&self, name_or_alias: &str) -> Option<&str> {
+        self.user_attributes().resolve_canonical_name(name_or_alias)
+    }
+
+    pub fn resolve_group_canonical_name(&self, name_or_alias: &str) -> Option<&str> {
+        self.group_attributes().resolve_canonical_name(name_or_alias)
+    }
 }

@@ -1,19 +1,21 @@
-query ListUsersQuery($filters: RequestFilter) {
-  users(filters: $filters) {
+query ListUsersQuery($where: RequestFilter) {
+  users(where: $where) {
     id
     email
     displayName
     creationDate
     isDisabled
     attributes {
-      name
+      schema {
+        name
+      }
       value
     }
   }
 }
 
-query ListUserNames($filters: RequestFilter) {
-  users(filters: $filters) {
+query ListUserNames($where: RequestFilter) {
+  users(where: $where) {
     id
     displayName
   }

@@ -11,7 +11,9 @@ query GetUserDetails($id: String!) {
       displayName
     }
     attributes {
-      name
+      schema {
+        name
+      }
       value
     }
   }
