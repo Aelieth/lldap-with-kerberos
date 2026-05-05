@@ -1,13 +1,217 @@
-type AttributeValue {
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+enum AttributeType {
+  STRING
+  INTEGER
+  AVATAR
+  DATE_TIME
+}
+
+input AttributeValueInput {
+  """
+    The name of the attribute. It must be present in the schema, and the type informs how
+    to interpret the values.
+  """ name: String!
+  """
+    The values of the attribute.
+    If the attribute is not a list, the vector must contain exactly one element.
+    Integers (signed 64 bits) are represented as strings.
+    Dates are represented as strings in RFC3339 format, e.g. "2019-10-12T07:20:50.52Z".
+    Avatars are represented as base64 encoded strings. Maximum size 512x512
+    (PNG, BMP, or JPEG — automatically converted to optimized JPEG on storage).
+  """ value: [String!]!
+}
+
+"The details required to create a group."
+input CreateGroupInput {
+  displayName: String!
+  "User-defined attributes." attributes: [AttributeValueInput!]
+}
+
+"The details required to create a user."
+input CreateUserInput {
+  id: String!
+  email: String
+  displayName: String
+  """
+    First name of user. Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ firstName: String
+  """
+    Last name of user. Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ lastName: String
+  """
+    Base64 encoded avatar (512x512 recommended). Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ avatar: String
+  "Attributes." attributes: [AttributeValueInput!]
+}
+
+input EqualityConstraint {
+  field: String!
+  value: String!
+}
+
+input PosixSettingsInput {
+  userUidnumberAssign: Boolean!
+  userUidnumberStart: Int!
+  userUidnumberMax: Int!
+  userGidnumberAssign: Boolean!
+  userGidnumberStart: Int!
+  userLoginshellAssign: Boolean!
+  userLoginshellDefault: String!
+  userHomedirectoryAssign: Boolean!
+  userHomedirectoryPrefix: String!
+  groupGidnumberAssign: Boolean!
+  groupGidnumberStart: Int!
+  groupGidnumberMax: Int!
+}
+
+"""
+  A filter for requests, specifying a boolean expression based on field constraints. Only one of
+  the fields can be set at a time.
+"""
+input RequestFilter {
+  any: [RequestFilter!]
+  all: [RequestFilter!]
+  not: RequestFilter
+  eq: EqualityConstraint
+  memberOf: String
+  memberOfId: Int
+}
+
+input SaveKeycloakConfigInput {
+  url: String!
+  realm: String!
+  adminUser: String!
+}
+
+input TestKeycloakConnectionInput {
+  url: String!
+  realm: String!
+  adminUser: String!
+  adminPass: String!
+}
+
+"The fields that can be updated for a group."
+input UpdateGroupInput {
+  "The group ID." id: Int!
+  "The new display name." displayName: String
+  """
+    Attribute names to remove.
+    They are processed before insertions.
+  """ removeAttributes: [String!]
+  """
+    Inserts or updates the given attributes.
+    For lists, the entire list must be provided.
+  """ insertAttributes: [AttributeValueInput!]
+}
+
+"The fields that can be updated for a user."
+input UpdateUserInput {
+  id: String!
+  email: String
+  displayName: String
+  """
+    First name of user. Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ firstName: String
+  """
+    Last name of user. Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ lastName: String
+  """
+    Base64 encoded avatar (512x512 recommended). Deprecated: use attribute instead.
+    If both field and corresponding attribute is supplied, the attribute will take precedence.
+  """ avatar: String
+  """
+    Attribute names to remove.
+    They are processed before insertions.
+  """ removeAttributes: [String!]
+  """
+    Inserts or updates the given attributes.
+    For lists, the entire list must be provided.
+  """ insertAttributes: [AttributeValueInput!]
+}
+
+"""
+  Combined date and time (with time zone) in [RFC 3339][0] format.
+
+  Represents a description of an exact instant on the time-line (such as the
+  instant that a user account was created).
+
+  [`DateTime` scalar][1] compliant.
+
+  See also [`chrono::DateTime`][2] for details.
+
+  [0]: https://datatracker.ietf.org/doc/html/rfc3339#section-5
+  [1]: https://graphql-scalars.dev/docs/scalars/date-time
+  [2]: https://docs.rs/chrono/latest/chrono/struct.DateTime.html
+"""
+scalar DateTime
+
+type AttributeList {
+  attributes: [AttributeSchema!]!
+  extraLdapObjectClasses: [String!]!
+  ldapObjectClasses: [ObjectClassInfo!]!
+}
+
+type AttributeSchema {
   name: String!
+  aliases: [String!]!
+  attributeType: AttributeType!
+  isList: Boolean!
+  isVisible: Boolean!
+  isEditable: Boolean!
+  isHardcoded: Boolean!
+  isReadonly: Boolean!
+}
+
+type AttributeValue {
   value: [String!]!
   schema: AttributeSchema!
+}
+
+type ExportKeytabForKeycloakResponse {
+  ok: Boolean!
+  path: String!
+  errorMsg: String!
+}
+
+type Group {
+  id: Int!
+  displayName: String!
+  creationDate: DateTime!
+  uuid: String!
+  "Single-layer OU (defaults to \"groups\" — editable by admin only)"
+  ou: String!
+  "Real member count (used by group_table.rs)"
+  memberCount: Int!
+  "User-defined attributes (includes ou for legacy clients)."
+  attributes: [AttributeValue!]!
+  "The users that belong to this group."
+  users: [User!]!
+}
+
+type KerberosInfo {
+  publicKeyDerBase64: String
 }
 
 type KeycloakConfigResponse {
   url: String!
   realm: String!
   adminUser: String!
+}
+
+type KeycloakSuggestedConfig {
+  url: String!
+  realm: String!
+  adminUsername: String!
+  keycloakHostname: String!
 }
 
 type Mutation {
@@ -46,260 +250,9 @@ type Mutation {
   reassignGidNumbers: PosixSettingsResponse!
 }
 
-input SaveKeycloakConfigInput {
-  url: String!
-  realm: String!
-  adminUser: String!
-}
-
-type Group {
-  id: Int!
-  displayName: String!
-  creationDate: DateTimeUtc!
-  uuid: String!
-  "Single-layer OU (defaults to \"groups\" — editable by admin only)"
-  ou: String!
-  "Real member count (used by group_table.rs)"
-  memberCount: Int!
-  "User-defined attributes (includes ou for legacy clients)."
-  attributes: [AttributeValue!]!
-  "The users that belong to this group."
-  users: [User!]!
-}
-
-"""
-  A filter for requests, specifying a boolean expression based on field constraints. Only one of
-  the fields can be set at a time.
-"""
-input RequestFilter {
-  any: [RequestFilter!]
-  all: [RequestFilter!]
-  not: RequestFilter
-  eq: EqualityConstraint
-  memberOf: String
-  memberOfId: Int
-}
-
-"DateTime"
-scalar DateTimeUtc
-
-type KerberosInfo {
-  publicKeyDerBase64: String
-}
-
-type Query {
-  apiVersion: String!
-  user(userId: String!): User!
-  users(filters: RequestFilter): [User!]!
-  groups: [Group!]!
-  group(groupId: Int!): Group!
-  schema: Schema!
-  kerberosInfo: KerberosInfo!
-  keycloakSuggestedConfig: KeycloakSuggestedConfig!
-  keycloakConfig: KeycloakConfigResponse!
-  listOus: [String!]!
-  posixSettings: PosixSettings!
-}
-
-"The details required to create a user."
-input CreateUserInput {
-  id: String!
-  email: String
-  displayName: String
-  """
-    First name of user. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ firstName: String
-  """
-    Last name of user. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ lastName: String
-  """
-    Base64 encoded JpegPhoto. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ avatar: String
-  "Attributes." attributes: [AttributeValueInput!]
-}
-
 type ObjectClassInfo {
   objectClass: String!
   isHardcoded: Boolean!
-}
-
-type ExportKeytabForKeycloakResponse {
-  ok: Boolean!
-  path: String!
-  errorMsg: String!
-}
-
-type PushRealmResponse {
-  ok: Boolean!
-  message: String!
-}
-
-input PosixSettingsInput {
-  userUidnumberAssign: Boolean!
-  userUidnumberStart: Int!
-  userUidnumberMax: Int!
-  userGidnumberAssign: Boolean!
-  userGidnumberStart: Int!
-  userLoginshellAssign: Boolean!
-  userLoginshellDefault: String!
-  userHomedirectoryAssign: Boolean!
-  userHomedirectoryPrefix: String!
-  groupGidnumberAssign: Boolean!
-  groupGidnumberStart: Int!
-  groupGidnumberMax: Int!
-}
-
-type AttributeSchema {
-  name: String!
-  aliases: [String!]!
-  attributeType: AttributeType!
-  isList: Boolean!
-  isVisible: Boolean!
-  isEditable: Boolean!
-  isHardcoded: Boolean!
-  isReadonly: Boolean!
-}
-
-"The fields that can be updated for a user."
-input UpdateUserInput {
-  id: String!
-  email: String
-  displayName: String
-  """
-    First name of user. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ firstName: String
-  """
-    Last name of user. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ lastName: String
-  """
-    Base64 encoded JpegPhoto. Deprecated: use attribute instead.
-    If both field and corresponding attribute is supplied, the attribute will take precedence.
-  """ avatar: String
-  """
-    Attribute names to remove.
-    They are processed before insertions.
-  """ removeAttributes: [String!]
-  """
-    Inserts or updates the given attributes.
-    For lists, the entire list must be provided.
-  """ insertAttributes: [AttributeValueInput!]
-}
-
-input EqualityConstraint {
-  field: String!
-  value: String!
-}
-
-type PosixSettingsResponse {
-  success: Boolean!
-  message: String!
-}
-
-type Schema {
-  userSchema: AttributeList!
-  groupSchema: AttributeList!
-  systemSchema: AttributeList!
-}
-
-input TestKeycloakConnectionInput {
-  url: String!
-  realm: String!
-  adminUser: String!
-  adminPass: String!
-}
-
-type KeycloakSuggestedConfig {
-  url: String!
-  realm: String!
-  adminUsername: String!
-  keycloakHostname: String!
-}
-
-"The fields that can be updated for a group."
-input UpdateGroupInput {
-  "The group ID." id: Int!
-  "The new display name." displayName: String
-  """
-    Attribute names to remove.
-    They are processed before insertions.
-  """ removeAttributes: [String!]
-  """
-    Inserts or updates the given attributes.
-    For lists, the entire list must be provided.
-  """ insertAttributes: [AttributeValueInput!]
-}
-
-input AttributeValueInput {
-  """
-    The name of the attribute. It must be present in the schema, and the type informs how
-    to interpret the values.
-  """ name: String!
-  """
-    The values of the attribute.
-    If the attribute is not a list, the vector must contain exactly one element.
-    Integers (signed 64 bits) are represented as strings.
-    Dates are represented as strings in RFC3339 format, e.g. "2019-10-12T07:20:50.52Z".
-    JpegPhotos are represented as base64 encoded strings. They must be valid JPEGs.
-  """ value: [String!]!
-}
-
-"The details required to create a group."
-input CreateGroupInput {
-  displayName: String!
-  "User-defined attributes." attributes: [AttributeValueInput!]
-}
-
-type User {
-  id: String!
-  email: String!
-  displayName: String!
-  firstName: String!
-  lastName: String!
-  avatar: String
-  "Single-layer OU (defaults to \"people\" — editable by admin only)"
-  ou: String!
-  "SSH public keys (multi-value list — exactly like authorized_keys)"
-  sshPublicKeys: [String!]!
-  creationDate: DateTimeUtc!
-  uuid: String!
-  "Whether the user is disabled (member of the built-in lldap_disabled group)."
-  isDisabled: Boolean!
-  "User-defined attributes (includes ou + sshpublickey for legacy clients)."
-  attributes: [AttributeValue!]!
-  "The groups to which this user belongs."
-  groups: [Group!]!
-}
-
-enum AttributeType {
-  STRING
-  INTEGER
-  AVATAR
-  DATE_TIME
-}
-
-type AttributeList {
-  attributes: [AttributeSchema!]!
-  extraLdapObjectClasses: [String!]!
-  ldapObjectClasses: [ObjectClassInfo!]!
-}
-
-type SaveKeycloakConfigResponse {
-  ok: Boolean!
-  message: String!
-}
-
-type TestKeycloakConnectionResponse {
-  ok: Boolean!
-  message: String!
-}
-
-type Success {
-  ok: Boolean!
 }
 
 type PosixSettings {
@@ -317,7 +270,67 @@ type PosixSettings {
   groupGidnumberMax: Int!
 }
 
-schema {
-  query: Query
-  mutation: Mutation
+type PosixSettingsResponse {
+  success: Boolean!
+  message: String!
+}
+
+type PushRealmResponse {
+  ok: Boolean!
+  message: String!
+}
+
+type Query {
+  apiVersion: String!
+  user(userId: String!): User!
+  users(where: RequestFilter): [User!]!
+  groups: [Group!]!
+  group(groupId: Int!): Group!
+  schema: Schema!
+  kerberosInfo: KerberosInfo!
+  keycloakSuggestedConfig: KeycloakSuggestedConfig!
+  keycloakConfig: KeycloakConfigResponse!
+  listOus: [String!]!
+  posixSettings: PosixSettings!
+}
+
+type SaveKeycloakConfigResponse {
+  ok: Boolean!
+  message: String!
+}
+
+type Schema {
+  userSchema: AttributeList!
+  groupSchema: AttributeList!
+  systemSchema: AttributeList!
+}
+
+type Success {
+  ok: Boolean!
+}
+
+type TestKeycloakConnectionResponse {
+  ok: Boolean!
+  message: String!
+}
+
+type User {
+  id: String!
+  email: String!
+  displayName: String!
+  firstName: String!
+  lastName: String!
+  avatar: String
+  "Single-layer OU (defaults to \"people\" — editable by admin only)"
+  ou: String!
+  "SSH public keys (multi-value list — exactly like authorized_keys)"
+  sshPublicKeys: [String!]!
+  creationDate: DateTime!
+  uuid: String!
+  "Whether the user is disabled (member of the built-in lldap_disabled group)."
+  isDisabled: Boolean!
+  "User-defined attributes (includes ou + sshpublickey for legacy clients)."
+  attributes: [AttributeValue!]!
+  "The groups to which this user belongs."
+  groups: [Group!]!
 }

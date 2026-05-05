@@ -16,22 +16,22 @@ if [ -z "$LLDAP_LDAP_BASE_DN" ]; then
     exit 1
 fi
 
-# === Start LLDAP ===
-echo "Starting LLDAP..."
+# === Start KLLDAP ===
+echo "Starting KLLDAP..."
 /start-lldap.sh "$@" &
 LLDAP_PID=$!
 
-echo "Waiting for LLDAP to become ready..."
+echo "Waiting for KLLDAP to become ready..."
 for i in $(seq 1 60); do
     if /app/lldap healthcheck >/dev/null 2>&1; then
-        echo "LLDAP is ready!"
+        echo "KLLDAP is ready!"
         break
     fi
     sleep 1
 done
 
 if [ "$i" -eq 60 ]; then
-    echo "ERROR: LLDAP failed to start within 60 seconds."
+    echo "ERROR: KLLDAP failed to start within 60 seconds."
     exit 1
 fi
 

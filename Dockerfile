@@ -118,5 +118,5 @@ CMD ["run"]
 HEALTHCHECK CMD ["/app/lldap", "healthcheck"]
 
 LABEL maintainer="Aelieth <https://github.com/Aelieth>" \
-      version="0.7.1-alpha1" \
+      version="0.7.1" \
       description="KLLDAP"

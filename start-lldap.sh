@@ -34,7 +34,7 @@ if [[ ! -r "$CONFIG_FILE" ]]; then
   exit 1
 fi
 
-echo "> Starting lldap.."
+echo "> Starting klldap.."
 echo ""
 
 exec gosu lldap:lldap /app/lldap "$@"

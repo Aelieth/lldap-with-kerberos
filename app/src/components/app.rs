@@ -256,10 +256,10 @@ impl App {
         html! {
           <footer class="text-center fixed-bottom text-muted bg-light py-2">
             <div>
-              <span>{format!("LLDAP version {}", env!("CARGO_PKG_VERSION"))}</span>
+              <span>{format!("KLLDAP version {}", env!("CARGO_PKG_VERSION"))}</span>
             </div>
             <div>
-              <a href="https://github.com/lldap/lldap" class="me-4 text-reset">
+              <a href="https://github.com/Aelieth/lldap-with-kerberos" class="me-4 text-reset">
                 <i class="bi-github"></i>
               </a>
               <a href="https://discord.gg/h5PEdRMNyP" class="me-4 text-reset">
