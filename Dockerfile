@@ -1,5 +1,5 @@
-# Use Fedora minimal for builder and runtime (glibc consistency + latest Cargo + reliable bindgen)
-FROM registry.fedoraproject.org/fedora-minimal:43 AS chef
+# Use almalinux minimal for builder and runtime (glibc consistency + latest Cargo + reliable bindgen)
+FROM quay.io/almalinuxorg/10-minimal AS chef
 
 # Install build deps (Fedora packages)
 RUN microdnf install -y --assumeyes \
@@ -42,14 +42,19 @@ RUN cd app && wasm-pack build --target web --release
 RUN cd app && gzip -9 -k -f pkg/lldap_app_bg.wasm
 
 # Final runtime image
-FROM registry.fedoraproject.org/fedora-minimal:43
+FROM quay.io/almalinuxorg/10-minimal
 
 # Gosu for privilege drop
 ENV GOSU_VERSION=1.17
-RUN microdnf install -y --assumeyes ca-certificates dpkg gnupg wget && \
-    dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" && \
-    wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}" && \
-    wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}.asc" && \
+RUN microdnf install -y --assumeyes ca-certificates wget gnupg && \
+    arch="$(uname -m)" && \
+    case "${arch}" in \
+        x86_64) gosuArch='amd64' ;; \
+        aarch64) gosuArch='arm64' ;; \
+        *) echo >&2 "error: unsupported architecture: '${arch}'"; exit 1 ;; \
+    esac && \
+    wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${gosuArch}" && \
+    wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${gosuArch}.asc" && \
     export GNUPGHOME="$(mktemp -d)" && \
     gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 && \
     gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu && \
@@ -113,5 +118,5 @@ CMD ["run"]
 HEALTHCHECK CMD ["/app/lldap", "healthcheck"]
 
 LABEL maintainer="Aelieth <https://github.com/Aelieth>" \
-      version="0.7.0-federation-alpha" \
-      description="LLDAP Federation Edition"
+      version="0.7.1-alpha1" \
+      description="KLLDAP"
