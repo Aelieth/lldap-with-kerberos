@@ -49,7 +49,7 @@ fn attribute_priority(name: &str) -> (i32, String) {
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
-query_path = "src/queries/get_kerberos_info.graphql",
+query_path = "queries/get_kerberos_info.graphql",
 response_derives = "Debug,Clone,PartialEq,Eq",
 custom_scalars_module = "crate::infra::graphql"
 )]
@@ -58,7 +58,7 @@ pub struct GetKerberosInfo;
 #[derive(GraphQLQuery)]
 #[graphql(
 schema_path = "../schema.graphql",
-query_path = "src/queries/sync_kerberos.graphql",
+query_path = "queries/sync_kerberos.graphql",
 response_derives = "Debug,Clone",
 custom_scalars_module = "crate::infra::graphql"
 )]

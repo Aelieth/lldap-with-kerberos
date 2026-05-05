@@ -8,6 +8,24 @@ use lldap_frontend_options::Options;
 use serde::{Serialize, de::DeserializeOwned};
 use web_sys::RequestCredentials;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/get_kerberos_info.graphql",
+response_derives = "Debug,Clone,PartialEq,Eq",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct GetKerberosInfo;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/sync_kerberos.graphql",
+response_derives = "Debug",
+custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct SyncKerberosPassword;
+
 #[derive(Default)]
 pub struct HostService {}
 
@@ -213,21 +231,3 @@ impl HostService {
         .await
     }
 }
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "src/queries/get_kerberos_info.graphql",
-    response_derives = "Debug,Clone,PartialEq,Eq",
-    custom_scalars_module = "crate::infra::graphql"
-)]
-pub struct GetKerberosInfo;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "../schema.graphql",
-    query_path = "src/queries/sync_kerberos.graphql",
-    response_derives = "Debug",
-    custom_scalars_module = "crate::infra::graphql"
-)]
-pub struct SyncKerberosPassword;

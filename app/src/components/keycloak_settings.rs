@@ -10,27 +10,45 @@ use yew::events::InputEvent;
 use wasm_bindgen::JsCast;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/export_keytab.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/export_keytab.graphql",
+response_derives = "Debug")]
 pub struct ExportKeytabForKeycloak;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/keycloak_suggested_config.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/keycloak_suggested_config.graphql",
+response_derives = "Debug")]
 pub struct KeycloakSuggestedConfig;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/keycloak_config.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/keycloak_config.graphql",
+response_derives = "Debug")]
 pub struct KeycloakConfig;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/test_keycloak_connection.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/test_keycloak_connection.graphql",
+response_derives = "Debug")]
 pub struct TestKeycloakConnection;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/save_keycloak_config.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/save_keycloak_config.graphql",
+response_derives = "Debug")]
 pub struct SaveKeycloakConfig;
 
 #[derive(GraphQLQuery)]
-#[graphql(schema_path = "../schema.graphql", query_path = "src/queries/push_realm_to_keycloak.graphql", response_derives = "Debug")]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/push_realm_to_keycloak.graphql",
+response_derives = "Debug")]
 pub struct PushRealmToKeycloak;
 
 pub struct KeycloakSettings {
