@@ -9,7 +9,10 @@ repository.workspace = true
 [dependencies]
 derive_more = { workspace = true, features = ["display"] }
 juniper = { workspace = true }
-sea-orm = { workspace = true, features = ["macros", "runtime-tokio-rustls"] }
+sea-orm = { workspace = true, features = ["macros"] }   # ← only macros for WASM
 sea-query = { version = "0.32", default-features = false, features = ["thread-safe"] }
 serde = { workspace = true, features = ["derive", "std"] }
 strum = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sea-orm = { workspace = true, default-features = false, features = ["sqlx-all", "runtime-tokio-rustls"] }

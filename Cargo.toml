@@ -104,7 +104,7 @@ default-features = false
 [workspace.dependencies.sea-orm]
 version = "1.1.20"
 default-features = false
-features = ["macros", "with-chrono", "with-uuid", "sqlx-all", "runtime-actix-rustls"]
+features = ["macros", "with-chrono", "with-uuid"]
 
 [workspace.dependencies.secstr]
 version = "0"
@@ -127,7 +127,7 @@ features = ["derive", "std"]
 version = "2"
 
 [workspace.dependencies.tokio]
-version = "1"
+version = "1.25"
 features = ["full"]
 
 [workspace.dependencies.tracing]

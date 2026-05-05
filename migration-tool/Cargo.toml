@@ -1,6 +1,6 @@
 [package]
 name = "lldap_migration_tool"
-version = "0.4.2"
+version = "0.4.3"
 description = "CLI migration tool to go from OpenLDAP to LLDAP"
 edition.workspace = true
 authors.workspace = true
@@ -16,7 +16,7 @@ graphql_client = { workspace = true, features = ["graphql_query_derive", "reqwes
 ldap3 = { workspace = true, features = ["sync", "tls-rustls-ring"] }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking", "rustls-tls"] }
-requestty = "0.4.1"
+requestty = "0.6.3"
 serde_json = { workspace = true }
 smallvec = "*"
 
