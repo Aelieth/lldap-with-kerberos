@@ -158,9 +158,11 @@ impl Component for UserDetailsForm {
 
         let can_edit = |a: &AttributeSchema| !a.is_readonly && (is_admin || a.is_editable);
 
+        let is_edited_user_admin = ctx.props().is_edited_user_admin;
+
         let display_field = |a: &AttributeSchema| {
             if can_edit(a) {
-                get_custom_attribute_input(a, &self.user.attributes)
+                get_custom_attribute_input(a, &self.user.attributes, is_edited_user_admin)
             } else {
                 get_custom_attribute_static(a, &self.user.attributes, &self.user.id)
             }
@@ -212,12 +214,18 @@ impl Component for UserDetailsForm {
 
 impl UserDetailsForm {
     fn submit_user_update_form(&mut self, ctx: &Context<Self>) -> bool {
-        let form_values = read_all_form_attributes(
+        let form_values = match read_all_form_attributes(
             ctx.props().user_attributes_schema.iter(),
             &self.form_ref,
             IsAdmin(ctx.props().is_admin),
             EmailIsRequired(!ctx.props().is_edited_user_admin),
-        ).unwrap_or_default();
+        ) {
+            Ok(values) => values,
+            Err(e) => {
+                self.common.error = Some(e);
+                return true;
+            }
+        };
 
         let base_attributes = &self.user.attributes;
         let empty: Vec<String> = vec![];
@@ -323,6 +331,7 @@ impl UserDetailsForm {
 fn get_custom_attribute_input(
     attribute_schema: &AttributeSchema,
     user_attributes: &[Attribute],
+    is_edited_user_admin: bool,
 ) -> Html {
     let values = user_attributes
         .iter()
@@ -330,12 +339,16 @@ fn get_custom_attribute_input(
         .map(|attribute| attribute.value.clone())
         .unwrap_or_default();
 
+    let name_lower = attribute_schema.name.to_lowercase();
+    let mail_is_required = name_lower == "mail" && !is_edited_user_admin;
+
     if attribute_schema.is_list {
         html! {
             <ListAttributeInput
             name={attribute_schema.name.clone()}
             attribute_type={attribute_schema.attribute_type}
             values={values}
+            required={mail_is_required}
             />
         }
     } else {
@@ -344,6 +357,7 @@ fn get_custom_attribute_input(
             name={attribute_schema.name.clone()}
             attribute_type={attribute_schema.attribute_type}
             value={values.first().cloned().unwrap_or_default()}
+            required={mail_is_required}
             />
         }
     }

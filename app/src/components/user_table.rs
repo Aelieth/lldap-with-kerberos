@@ -345,7 +345,7 @@ impl UserTable {
             </td>
             <td>
             {if is_disabled {
-                html! { <span class="text-danger">{"❌ "}</span> }
+                html! { <span class="text-danger">{"✖️ "}</span> }
             } else {
                 html! {}
             }}

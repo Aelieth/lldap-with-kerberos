@@ -48,7 +48,7 @@ pub fn read_all_form_attributes(
                 .get_all(attr.name.as_str())
                 .iter()
                 .map(|js_val| js_val.as_string().unwrap_or_default())
-                .filter(|val| !val.is_empty())
+                .filter(|val| !val.is_empty() && val != "Auto-assign")
                 .collect::<Vec<String>>();
             ensure!(
                 val.len() <= 1 || attr.is_list,

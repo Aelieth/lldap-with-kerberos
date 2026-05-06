@@ -73,6 +73,14 @@ custom_scalars_module = "crate::infra::graphql"
 )]
 pub struct CreateUser;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+schema_path = "../schema.graphql",
+query_path = "queries/get_posix_config.graphql",
+response_derives = "Debug",
+custom_scalars_module = "crate::infra::graphql")]
+pub struct GetPosixConfig;
+
 use create_user::AttributeValueInput as GraphQLAttributeValue;
 
 #[derive(GraphQLQuery)]
@@ -110,16 +118,23 @@ impl From<&Attribute> for GraphQlAttributeSchema {
 pub struct CreateUserForm {
     common: CommonComponentParts<Self>,
     form: yew_form::Form<CreateUserModel>,
-    attributes_schema: Option<Vec<Attribute>>,
-    form_ref: NodeRef,
-    fetched_schema: bool,
-    encrypted_password: Option<String>,
-    user_id: Option<String>,
-    opaque_data: Option<opaque::client::registration::ClientRegistration>,
-    kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
-    kerberossync_enabled: bool,
-    selected_ou: String,
-    ous: Vec<String>,
+        attributes_schema: Option<Vec<Attribute>>,
+        form_ref: NodeRef,
+            fetched_schema: bool,
+            encrypted_password: Option<String>,
+            user_id: Option<String>,
+            opaque_data: Option<opaque::client::registration::ClientRegistration>,
+            kerberos_info: Option<get_kerberos_info::GetKerberosInfoKerberosInfo>,
+            kerberossync_enabled: bool,
+            selected_ou: String,
+            ous: Vec<String>,
+            // POSIX auto-assign flags
+            posix_config_loaded: bool,
+            user_uidnumber_assign: bool,
+            user_gidnumber_assign: bool,
+            user_loginshell_assign: bool,
+            user_homedirectory_assign: bool,
+            group_gidnumber_assign: bool,
 }
 
 #[derive(Model, Validate, PartialEq, Eq, Clone, Default)]
@@ -137,6 +152,7 @@ pub enum Msg {
     ListAttributesResponse(Result<get_user_attributes_schema::ResponseData>),
     ListUserOusResponse(Result<list_ous_query::ResponseData>),
     KerberosInfoResponse(Result<get_kerberos_info::ResponseData>),
+    PosixConfigResponse(Result<get_posix_config::ResponseData>),
     SubmitForm,
     CreateUserResponse(Result<create_user::ResponseData>),
     SuccessfulCreation,
@@ -164,6 +180,12 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     Msg::KerberosInfoResponse,
                     "Error trying to fetch Kerberos info",
                 );
+                self.common.call_graphql::<GetPosixConfig, _>(
+                    ctx,
+                    get_posix_config::Variables {},
+                    Msg::PosixConfigResponse,
+                    "Error trying to fetch POSIX config",
+                );
                 Ok(true)
             }
             Msg::ListUserOusResponse(ous) => {
@@ -172,6 +194,21 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
             }
             Msg::KerberosInfoResponse(res) => {
                 self.kerberos_info = Some(res?.kerberos_info);
+                Ok(true)
+            }
+            Msg::PosixConfigResponse(Ok(data)) => {
+                let cfg = data.posix_settings;
+                self.user_uidnumber_assign = cfg.user_uidnumber_assign;
+                self.user_gidnumber_assign = cfg.user_gidnumber_assign;
+                self.user_loginshell_assign = cfg.user_loginshell_assign;
+                self.user_homedirectory_assign = cfg.user_homedirectory_assign;
+                self.group_gidnumber_assign = cfg.group_gidnumber_assign;
+                self.posix_config_loaded = true;
+                Ok(true)
+            }
+            Msg::PosixConfigResponse(Err(_)) => {
+                // Default to no auto-assign on error
+                self.posix_config_loaded = true;
                 Ok(true)
             }
             Msg::ToggleKerberosSync(enabled) => {
@@ -208,9 +245,9 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 let all_values = read_all_form_attributes(
                     self.attributes_schema.iter().flatten(),
-                    &self.form_ref,
-                    IsAdmin(true),
-                    EmailIsRequired(true),
+                                                          &self.form_ref,
+                                                          IsAdmin(true),
+                                                          EmailIsRequired(true),
                 )?;
 
                 if let Some(avatar_attr) = all_values.iter().find(|a| a.name == "avatar") {
@@ -270,13 +307,13 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
 
                 attributes.push(GraphQLAttributeValue {
                     name: "ou".to_string(),
-                    value: vec![self.selected_ou.clone()],
+                                value: vec![self.selected_ou.clone()],
                 });
 
                 let kerb_value = if self.kerberossync_enabled { "1" } else { "0" };
                 attributes.push(GraphQLAttributeValue {
                     name: "kerberossync".to_string(),
-                    value: vec![kerb_value.to_string()],
+                                value: vec![kerb_value.to_string()],
                 });
 
                 let user = create_user::CreateUserInput {
@@ -302,7 +339,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let mut rng = rand::rngs::OsRng;
                 let registration_start_request = opaque::client::registration::start_registration(
                     self.form.model().password.as_bytes(),
-                    &mut rng,
+                                                                                                  &mut rng,
                 )
                 .context("Could not initiate registration")?;
                 let req = registration::ClientRegistrationStartRequest {
@@ -313,7 +350,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.common.call_backend(
                     ctx,
                     HostService::register_start(req),
-                    Msg::RegistrationStartResponse,
+                                         Msg::RegistrationStartResponse,
                 );
                 Ok(false)
             }
@@ -334,7 +371,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 self.common.call_backend(
                     ctx,
                     HostService::register_finish(req),
-                    Msg::RegistrationFinishResponse,
+                                         Msg::RegistrationFinishResponse,
                 );
                 Ok(false)
             }
@@ -384,16 +421,22 @@ impl Component for CreateUserForm {
         CreateUserForm {
             common: CommonComponentParts::<Self>::create(),
             form: yew_form::Form::<CreateUserModel>::new(CreateUserModel::default()),
-            attributes_schema: None,
-            form_ref: NodeRef::default(),
-            fetched_schema: false,
-            encrypted_password: None,
-            user_id: None,
-            opaque_data: None,
-            kerberos_info: None,
-            kerberossync_enabled: true,
-            selected_ou: "people".to_string(),
-            ous: vec!["people".to_string()],
+                attributes_schema: None,
+                form_ref: NodeRef::default(),
+                    fetched_schema: false,
+                    encrypted_password: None,
+                    user_id: None,
+                    opaque_data: None,
+                    kerberos_info: None,
+                    kerberossync_enabled: true,
+                    selected_ou: "people".to_string(),
+                    ous: vec!["people".to_string()],
+                    posix_config_loaded: false,
+                    user_uidnumber_assign: false,
+                    user_gidnumber_assign: false,
+                    user_loginshell_assign: false,
+                    user_homedirectory_assign: false,
+                    group_gidnumber_assign: false,
         }
     }
 
@@ -403,8 +446,8 @@ impl Component for CreateUserForm {
 
     fn view(&self, ctx: &YewContext<Self>) -> Html {
         let link = ctx.link();
-        if self.attributes_schema.is_none() || self.kerberos_info.is_none() {
-            html! { <div>{"Loading schema and Kerberos info..."}</div> }
+        if self.attributes_schema.is_none() || self.kerberos_info.is_none() || !self.posix_config_loaded {
+            html! { <div>{"Loading schema, Kerberos info and POSIX config..."}</div> }
         } else {
             let attrs = self.attributes_schema.as_ref().unwrap();
 
@@ -424,54 +467,60 @@ impl Component for CreateUserForm {
                 oninput={link.callback(|_| Msg::Update)} />
 
                 { visible_attrs.iter()
-                    .map(|&a| get_custom_attribute_input(a))
+                    .map(|&a| get_custom_attribute_input(
+                        a,
+                        self.user_uidnumber_assign,
+                        self.user_gidnumber_assign,
+                        self.user_loginshell_assign,
+                        self.user_homedirectory_assign
+                    ))
                     .collect::<Vec<Html>>() }
 
-                <KerberosSwitch
+                    <KerberosSwitch
                     enabled={self.kerberossync_enabled}
                     on_toggle={link.callback(Msg::ToggleKerberosSync)}
                     show_banner={false}
-                />
+                    />
 
-                <div class="mb-3 row">
-                <label class="form-label col-4 col-form-label">{"Organizational Unit :"}
-                <button data-bs-placement="right" title="user_ou" type="button" class="btn btn-sm btn-link" aria-label="User OU Info">
-                <i aria-label="Info" class="bi bi-info-circle"></i>
-                </button>
-                </label>
-                <div class="col-8">
-                <OuSelector
-                ous={self.ous.clone()}
-                current_ou={self.selected_ou.clone()}
-                on_ou_changed={link.callback(Msg::OuChanged)}
-                show_all={false} />
-                </div>
-                </div>
+                    <div class="mb-3 row">
+                    <label class="form-label col-4 col-form-label">{"Organizational Unit :"}
+                    <button data-bs-placement="right" title="user_ou" type="button" class="btn btn-sm btn-link" aria-label="User OU Info">
+                    <i aria-label="Info" class="bi bi-info-circle"></i>
+                    </button>
+                    </label>
+                    <div class="col-8">
+                    <OuSelector
+                    ous={self.ous.clone()}
+                    current_ou={self.selected_ou.clone()}
+                    on_ou_changed={link.callback(Msg::OuChanged)}
+                    show_all={false} />
+                    </div>
+                    </div>
 
-                <Field<CreateUserModel>
-                form={&self.form}
-                label="Password"
-                field_name="password"
-                input_type="password"
-                autocomplete="new-password"
-                oninput={link.callback(|_| Msg::Update)} />
-                <Field<CreateUserModel>
-                form={&self.form}
-                label="Confirm password"
-                field_name="confirm_password"
-                input_type="password"
-                autocomplete="new-password"
-                oninput={link.callback(|_| Msg::Update)} />
+                    <Field<CreateUserModel>
+                    form={&self.form}
+                    label="Password"
+                    field_name="password"
+                    input_type="password"
+                    autocomplete="new-password"
+                    oninput={link.callback(|_| Msg::Update)} />
+                    <Field<CreateUserModel>
+                    form={&self.form}
+                    label="Confirm password"
+                    field_name="confirm_password"
+                    input_type="password"
+                    autocomplete="new-password"
+                    oninput={link.callback(|_| Msg::Update)} />
 
-                <Submit
-                disabled={self.common.is_task_running()}
-                onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
-                </form>
+                    <Submit
+                    disabled={self.common.is_task_running()}
+                    onclick={link.callback(|e: MouseEvent| {e.prevent_default(); Msg::SubmitForm})} />
+                    </form>
 
-                { if let Some(e) = &self.common.error {
-                    html! { <div class="alert alert-danger">{e.to_string()}</div> }
-                } else { html! {} }}
-                </div>
+                    { if let Some(e) = &self.common.error {
+                        html! { <div class="alert alert-danger">{e.to_string()}</div> }
+                    } else { html! {} }}
+                    </div>
             }
         }
     }
@@ -496,8 +545,23 @@ impl Component for CreateUserForm {
     }
 }
 
-fn get_custom_attribute_input(attribute_schema: &Attribute) -> Html {
+fn get_custom_attribute_input(
+    attribute_schema: &Attribute,
+    user_uidnumber_assign: bool,
+    user_gidnumber_assign: bool,
+    user_loginshell_assign: bool,
+    user_homedirectory_assign: bool,
+) -> Html {
     let mail_is_required = attribute_schema.name.as_str() == "mail";
+
+    let name_lower = attribute_schema.name.to_lowercase();
+    let auto_assign = match name_lower.as_str() {
+        "uidnumber" | "uid_number" => user_uidnumber_assign,
+        "gidnumber" | "gid_number" => user_gidnumber_assign,
+        "loginshell" | "login_shell" => user_loginshell_assign,
+        "homedirectory" | "home_directory" => user_homedirectory_assign,
+        _ => false,
+    };
 
     if attribute_schema.is_list {
         html! {
@@ -505,6 +569,7 @@ fn get_custom_attribute_input(attribute_schema: &Attribute) -> Html {
             name={attribute_schema.name.clone()}
             attribute_type={attribute_schema.attribute_type}
             required={mail_is_required}
+            auto_assign={auto_assign}
             />
         }
     } else {
@@ -513,6 +578,7 @@ fn get_custom_attribute_input(attribute_schema: &Attribute) -> Html {
             name={attribute_schema.name.clone()}
             attribute_type={attribute_schema.attribute_type}
             required={mail_is_required}
+            auto_assign={auto_assign}
             />
         }
     }

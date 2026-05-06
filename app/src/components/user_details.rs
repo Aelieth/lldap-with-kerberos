@@ -11,7 +11,7 @@ use crate::{
     schema::AttributeType,
   },
 };
-use anyhow::{Error, Result, bail};
+use anyhow::{anyhow, Error, Result, bail};
 use graphql_client::GraphQLQuery;
 use yew::prelude::*;
 
@@ -24,6 +24,33 @@ custom_scalars_module = "crate::infra::graphql",
 extern_enums("AttributeType")
 )]
 pub struct GetUserDetails;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "../schema.graphql",
+    query_path = "queries/add_user_to_group.graphql",
+    response_derives = "Debug",
+    custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct AddUserToGroup;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "../schema.graphql",
+    query_path = "queries/remove_user_from_group.graphql",
+    response_derives = "Debug",
+    custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct RemoveUserFromGroup;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "../schema.graphql",
+    query_path = "queries/get_group_list.graphql",
+    response_derives = "Debug, Clone, PartialEq, Eq",
+    custom_scalars_module = "crate::infra::graphql"
+)]
+pub struct GetGroupList;
 
 pub type User = get_user_details::GetUserDetailsUser;
 pub type Group = get_user_details::GetUserDetailsUserGroups;
@@ -44,6 +71,7 @@ impl From<&AttributeSchema> for GraphQlAttributeSchema {
 pub struct UserDetails {
   common: CommonComponentParts<Self>,
   user_and_schema: Option<(User, Vec<AttributeSchema>)>,
+  lldap_disabled_group_id: Option<i64>,
 }
 
 impl UserDetails {
@@ -58,6 +86,12 @@ pub enum Msg {
   OnUserAddedToGroup(Group),
   OnUserRemovedFromGroup((String, i64)),
   Refresh,
+  AddToLldapDisabled,
+  AddToLldapDisabledResponse(Result<add_user_to_group::ResponseData>),
+  RemoveFromLldapDisabled,
+  RemoveFromLldapDisabledResponse(Result<remove_user_from_group::ResponseData>),
+  GroupListResponse(Result<get_group_list::ResponseData>),
+  GroupListResponseThenAdd(Result<get_group_list::ResponseData>),
 }
 
 #[derive(yew::Properties, Clone, PartialEq, Eq)]
@@ -71,10 +105,16 @@ impl CommonComponent<UserDetails> for UserDetails {
         match msg {
             Msg::UserDetailsResponse(response) => match response {
                 Ok(data) => {
-                    self.user_and_schema = Some((data.user, data.schema.user_schema.attributes));
+                    let user = data.user;
+                    // Store the lldap_disabled group id if present (for toggle button)
+                    self.lldap_disabled_group_id = user.groups.iter()
+                        .find(|g| g.display_name == "lldap_disabled")
+                        .map(|g| g.id);
+                    self.user_and_schema = Some((user, data.schema.user_schema.attributes));
                 }
                 Err(e) => {
                     self.user_and_schema = None;
+                    self.lldap_disabled_group_id = None;
                     bail!("Error getting user details: {}", e);
                 }
             },
@@ -97,6 +137,93 @@ impl CommonComponent<UserDetails> for UserDetails {
                     "Error trying to fetch user details",
                 );
             }
+            Msg::AddToLldapDisabled => {
+                if let Some(group_id) = self.lldap_disabled_group_id {
+                    self.common.call_graphql::<AddUserToGroup, _>(
+                        ctx,
+                        add_user_to_group::Variables {
+                            user: ctx.props().username.clone(),
+                            group: group_id,
+                        },
+                        Msg::AddToLldapDisabledResponse,
+                        "Error trying to add user to lldap_disabled group",
+                    );
+                } else {
+                    // ID missing (user not yet in group) — fetch group list first, then retry
+                    self.common.call_graphql::<GetGroupList, _>(
+                        ctx,
+                        get_group_list::Variables {},
+                        Msg::GroupListResponseThenAdd,
+                        "Error fetching group list before adding to lldap_disabled",
+                    );
+                }
+                return Ok(false);
+            }
+            Msg::AddToLldapDisabledResponse(Ok(_)) => {
+                ctx.link().send_message(Msg::Refresh);
+                return Ok(true);
+            }
+            Msg::AddToLldapDisabledResponse(Err(e)) => {
+                self.common.error = Some(e);
+                return Ok(true);
+            }
+            Msg::RemoveFromLldapDisabled => {
+                if let Some(group_id) = self.lldap_disabled_group_id {
+                    self.common.call_graphql::<RemoveUserFromGroup, _>(
+                        ctx,
+                        remove_user_from_group::Variables {
+                            user: ctx.props().username.clone(),
+                            group: group_id,
+                        },
+                        Msg::RemoveFromLldapDisabledResponse,
+                        "Error trying to remove user from lldap_disabled group",
+                    );
+                }
+                return Ok(false);
+            }
+            Msg::RemoveFromLldapDisabledResponse(Ok(_)) => {
+                ctx.link().send_message(Msg::Refresh);
+                return Ok(true);
+            }
+            Msg::RemoveFromLldapDisabledResponse(Err(e)) => {
+                self.common.error = Some(e);
+                return Ok(true);
+            }
+            Msg::GroupListResponse(Ok(data)) => {
+                // Always store the lldap_disabled group id even if user is not a member
+                self.lldap_disabled_group_id = data.groups
+                    .into_iter()
+                    .find(|g| g.display_name == "lldap_disabled")
+                    .map(|g| g.id);
+                return Ok(true);
+            }
+            Msg::GroupListResponse(Err(_)) => {
+                // Non-fatal; button will still work if user is already in the group
+                return Ok(true);
+            }
+            Msg::GroupListResponseThenAdd(Ok(data)) => {
+                // Find the lldap_disabled group ID from the fresh list
+                if let Some(group) = data.groups.into_iter().find(|g| g.display_name == "lldap_disabled") {
+                    self.lldap_disabled_group_id = Some(group.id);
+                    // Now actually perform the add
+                    self.common.call_graphql::<AddUserToGroup, _>(
+                        ctx,
+                        add_user_to_group::Variables {
+                            user: ctx.props().username.clone(),
+                            group: group.id,
+                        },
+                        Msg::AddToLldapDisabledResponse,
+                        "Error trying to add user to lldap_disabled group",
+                    );
+                } else {
+                    self.common.error = Some(anyhow!("lldap_disabled group does not exist in the system"));
+                }
+                return Ok(false);
+            }
+            Msg::GroupListResponseThenAdd(Err(e)) => {
+                self.common.error = Some(e);
+                return Ok(true);
+            }
         }
         Ok(true)
     }
@@ -114,8 +241,15 @@ impl Component for UserDetails {
     let mut component = Self {
       common: CommonComponentParts::<Self>::create(),
       user_and_schema: None,
+      lldap_disabled_group_id: None,
     };
     component.get_user_details(ctx);
+    component.common.call_graphql::<GetGroupList, _>(
+        ctx,
+        get_group_list::Variables {},
+        Msg::GroupListResponse,
+        "Error trying to fetch group list for disabled toggle",
+    );
     component
   }
 
@@ -127,8 +261,34 @@ impl Component for UserDetails {
     match (&self.user_and_schema, &self.common.error) {
       (Some((u, schema)), error) => {
         let can_change_password = ctx.props().is_admin || ctx.props().username == u.id;
+        let is_disabled = u.groups.iter().any(|g| g.display_name == "lldap_disabled");
 
         let link = ctx.link();  // ← REQUIRED for on_updated callback
+
+        let toggle_button = if ctx.props().is_admin {
+            let onclick = if is_disabled {
+                link.callback(|_| Msg::RemoveFromLldapDisabled)
+            } else {
+                link.callback(|_| Msg::AddToLldapDisabled)
+            };
+            let (label, btn_class) = if is_disabled {
+                ("✖️ Disabled", "btn btn-outline-secondary me-2")
+            } else {
+                ("🟢 Enabled", "btn btn-success me-2")
+            };
+            html! {
+                <button
+                    class={btn_class}
+                    onclick={onclick}
+                    disabled={self.common.is_task_running()}
+                    title={if is_disabled { "Remove from lldap_disabled group (enable user)" } else { "Add to lldap_disabled group (disable user)" }}
+                >
+                    {label}
+                </button>
+            }
+        } else {
+            html! {}
+        };
 
         html! {
           <>
@@ -144,6 +304,7 @@ impl Component for UserDetails {
               </Link>
             }
           } else { html! {} }}
+          {toggle_button}
           </div>
 
           <div>

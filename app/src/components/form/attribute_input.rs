@@ -2,7 +2,7 @@ use crate::{
     components::form::{date_input::DateTimeInput, file_input::AvatarFileInput},
     infra::{schema::AttributeType, tooltip::Tooltip},
 };
-use web_sys::{HtmlInputElement, Element};
+use web_sys::{HtmlInputElement, Element, FocusEvent};
 use yew::{
     Component, Callback, Context, Event, Html, Properties, function_component, html, TargetCast,
     use_effect_with_deps, use_node_ref, use_state, virtual_dom::AttrValue,
@@ -14,11 +14,19 @@ struct AttributeInputProps {
     attribute_type: AttributeType,
     #[prop_or(None)]
     value: Option<String>,
+    #[prop_or(false)]
+    auto_assign: bool,
 }
 
 #[function_component(AttributeInput)]
 fn attribute_input(props: &AttributeInputProps) -> Html {
-    let current_value = use_state(|| props.value.clone().unwrap_or_default());
+    let current_value = use_state(|| {
+        if props.auto_assign && props.value.as_ref().map_or(true, |v| v.is_empty() || *v == "Auto-assign") {
+            "Auto-assign".to_string()
+        } else {
+            props.value.clone().unwrap_or_default()
+        }
+    });
 
     // ROBUST AVATAR GUARD (Improved)
     // Force AvatarFileInput for any avatar field.
@@ -34,16 +42,21 @@ fn attribute_input(props: &AttributeInputProps) -> Html {
         };
     }
 
-    let input_type = match props.attribute_type {
-        AttributeType::String => "text",
-        AttributeType::Integer => "number",
-        AttributeType::DateTime => {
-            return html! {
-                <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
-            };
+    let is_auto_assign = *current_value == "Auto-assign";
+    let input_type = if is_auto_assign {
+        "text"
+    } else {
+        match props.attribute_type {
+            AttributeType::String => "text",
+            AttributeType::Integer => "number",
+            AttributeType::DateTime => {
+                return html! {
+                    <DateTimeInput name={props.name.clone()} value={props.value.clone()} />
+                };
+            }
+            // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
+            AttributeType::Avatar => unreachable!("Avatar already handled by guard above"),
         }
-        // This arm is unreachable because of the if-guard above, but Rust requires it for exhaustiveness
-        AttributeType::Avatar => unreachable!("Avatar already handled by guard above"),
     };
 
     let onchange = {
@@ -54,13 +67,30 @@ fn attribute_input(props: &AttributeInputProps) -> Html {
         })
     };
 
+    let onfocus = {
+        let current_value = current_value.clone();
+        Callback::from(move |_: FocusEvent| {
+            if *current_value == "Auto-assign" {
+                current_value.set("".to_string());
+            }
+        })
+    };
+
+    let input_class = if is_auto_assign {
+        "form-control text-muted fst-italic"
+    } else {
+        "form-control"
+    };
+
     html! {
         <input
             type={input_type}
             name={props.name.clone()}
-            class="form-control"
+            class={input_class}
             value={(*current_value).clone()}
-            onchange={onchange} />
+            onchange={onchange}
+            onfocus={onfocus}
+            title={if is_auto_assign { "Auto-assigned by POSIX config if left unchanged" } else { "" }} />
     }
 }
 
@@ -113,6 +143,8 @@ pub struct SingleAttributeInputProps {
     pub value: Option<String>,
     #[prop_or(false)]
     pub required: bool,
+    #[prop_or(false)]
+    pub auto_assign: bool,
 }
 
 #[function_component(SingleAttributeInput)]
@@ -124,7 +156,8 @@ pub fn single_attribute_input(props: &SingleAttributeInputProps) -> Html {
             <AttributeInput
                 attribute_type={props.attribute_type}
                 name={props.name.clone()}
-                value={props.value.clone()} />
+                value={props.value.clone()}
+                auto_assign={props.auto_assign} />
             </div>
         </div>
     }
@@ -138,6 +171,8 @@ pub struct ListAttributeInputProps {
     pub values: Vec<String>,
     #[prop_or(false)]
     pub required: bool,
+    #[prop_or(false)]
+    pub auto_assign: bool,
 }
 
 pub enum ListAttributeInputMsg {
@@ -197,7 +232,8 @@ impl Component for ListAttributeInput {
                     <AttributeInput
                         attribute_type={props.attribute_type}
                         name={props.name.clone()}
-                        value={props.values.get(i).cloned().unwrap_or_default()} />
+                        value={props.values.get(i).cloned().unwrap_or_default()}
+                        auto_assign={props.auto_assign} />
                     <button
                         class="btn btn-danger"
                         type="button"
