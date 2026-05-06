@@ -98,6 +98,17 @@ struct PosixSettingsResponse {
     message: String,
 }
 
+#[derive(juniper::GraphQLInputObject, Debug)]
+struct PushRealmToKeycloakInput {
+    url: String,
+    realm: String,
+    admin_user: String,
+    admin_pass: String,
+    lldap_url: String,
+    sync_username: String,
+    sync_password: String,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 /// The top-level GraphQL mutation type.
 pub struct Mutation<Handler: BackendHandler + OpaqueHandler> {
@@ -325,7 +336,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
                     .clone()
                     .into_iter()
                     .filter(|attr| attr != "mail" && attr.to_lowercase() != "displayname")
-                    .map(|s| AttributeName::from(s))
+                    .map(AttributeName::from)
                     .collect(),
                 insert_attributes: insert_attributes.clone(),
             })
@@ -376,7 +387,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
                       .unwrap_or_default()
                       .into_iter()
                       .filter(|attr| attr != "displayname")
-                      .map(|s| AttributeName::from(s))
+                      .map(AttributeName::from)
                       .collect(),
                       insert_attributes,
         })
@@ -536,17 +547,16 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
                 juniper::Value::null(),
             ));
         }
-        if let Some(sec) = secondary {
-            if sec.trim().is_empty() ||
-               sec.len() < 2 || sec.len() > 64 ||
-               !sec.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
-               sec.starts_with('-') || sec.starts_with('_') ||
-               sec.ends_with('-') || sec.ends_with('_') {
+        if let Some(sec) = secondary
+            && (sec.trim().is_empty() ||
+            sec.len() < 2 || sec.len() > 64 ||
+            !sec.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') ||
+            sec.starts_with('-') || sec.starts_with('_') ||
+            sec.ends_with('-') || sec.ends_with('_')) {
                 return Err(FieldError::new(
                     "Invalid secondary OU name: 2-64 characters, only a-z A-Z 0-9 - _ allowed. No spaces or special characters.",
                     juniper::Value::null(),
                 ));
-            }
         }
 
         let inner = AdminBackendHandler::unsafe_get_handler(handler);
@@ -826,10 +836,10 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         let attribute_schema = schema
         .user_attributes()
         .get_attribute_schema(name.as_str())
-        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", name))?;
 
         if attribute_schema.is_hardcoded {
-            return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
+            return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", name).into());
         }
         handler
         .delete_user_attribute(&name)
@@ -855,10 +865,10 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         let attribute_schema = schema
         .group_attributes()
         .get_attribute_schema(name.as_str())
-        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", &name))?;
+        .ok_or_else(|| anyhow!("Attribute {} is not defined in the schema", name))?;
 
         if attribute_schema.is_hardcoded {
-            return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", &name).into());
+            return Err(anyhow!("Permission denied: Attribute {} cannot be deleted", name).into());
         }
         handler
         .delete_group_attribute(&name)
@@ -1070,17 +1080,17 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
 
     async fn push_realm_to_keycloak(
         _context: &Context<Handler>,
-        url: String,
-        realm: String,
-        admin_user: String,
-        admin_pass: String,
-        lldap_url: String,
-        sync_username: String,
-        sync_password: String,
+        input: PushRealmToKeycloakInput,
     ) -> FieldResult<PushRealmResponse> {
-        let client = lldap_kerberos::KeycloakClient::from_test_input(url, realm, admin_user, admin_pass);
+        let client = lldap_kerberos::KeycloakClient::from_test_input(
+            input.url,
+            input.realm,
+            input.admin_user,
+            input.admin_pass,
+        );
 
-        let message = client.setup_realm(lldap_url, sync_username, sync_password)
+        let message = client
+        .setup_realm(input.lldap_url, input.sync_username, input.sync_password)
         .await
         .map_err(|e| juniper::FieldError::new(e.to_string(), juniper::Value::null()))?;
 
@@ -1095,14 +1105,13 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| debug!(?input));
 
         // === CONDITIONAL range enforcement — only check fields that are actually enabled ===
-        if input.user_uidnumber_assign {
-            if input.user_uidnumber_start < 3000 || input.user_uidnumber_start > 60000 ||
-               input.user_uidnumber_max < 3000 || input.user_uidnumber_max > 60000 {
+        if input.user_uidnumber_assign
+            && (input.user_uidnumber_start < 3000 || input.user_uidnumber_start > 60000 ||
+            input.user_uidnumber_max < 3000 || input.user_uidnumber_max > 60000) {
                 return Err(FieldError::new(
                     "user_uidnumber must be between 3000 and 60000",
                     juniper::Value::null(),
                 ));
-            }
         }
         if input.user_gidnumber_assign && (input.user_gidnumber_start < 3000 || input.user_gidnumber_start > 60000) {
             return Err(FieldError::new(
@@ -1110,14 +1119,13 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
                 juniper::Value::null(),
             ));
         }
-        if input.group_gidnumber_assign {
-            if input.group_gidnumber_start < 3000 || input.group_gidnumber_start > 60000 ||
-               input.group_gidnumber_max < 3000 || input.group_gidnumber_max > 60000 {
+        if input.group_gidnumber_assign
+            && (input.group_gidnumber_start < 3000 || input.group_gidnumber_start > 60000 ||
+            input.group_gidnumber_max < 3000 || input.group_gidnumber_max > 60000) {
                 return Err(FieldError::new(
                     "group_gidnumber must be between 3000 and 60000",
                     juniper::Value::null(),
                 ));
-            }
         }
 
         let handler = context

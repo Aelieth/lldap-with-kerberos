@@ -253,7 +253,7 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
             }
             _ => vec![make_extended_response(
                 LdapResultCode::UnwillingToPerform,
-                format!("Unsupported extended operation: {}", &request.name),
+                format!("Unsupported extended operation: {}", request.name),
             )],
         }
     }

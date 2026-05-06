@@ -224,10 +224,10 @@ impl Kadm5Handle {
 
         let mut params: kadm5_config_params = unsafe { mem::zeroed() };
         params.mask = KADM5_CONFIG_REALM as c_long;
-        params.realm = realm_cstr.into_raw() as *mut i8;
+        params.realm = realm_cstr.into_raw();
 
         let pass_ptr = match pass {
-            Some(p) => CString::new(p)?.into_raw() as *mut i8,
+            Some(p) => CString::new(p)?.into_raw(),
             None => ptr::null_mut(),
         };
 
@@ -290,7 +290,7 @@ impl Kadm5Handle {
 
         let mut params: kadm5_config_params = unsafe { mem::zeroed() };
         params.mask = KADM5_CONFIG_REALM as c_long;
-        params.realm = realm_cstr.into_raw() as *mut i8;
+        params.realm = realm_cstr.into_raw();
 
         let struct_version: krb5_ui_4 = KADM5_STRUCT_VERSION;
         let api_version: krb5_ui_4 = KADM5_API_VERSION_4;
@@ -506,7 +506,7 @@ impl Drop for Kadm5Handle {
     fn drop(&mut self) {
         unsafe {
             let _ = kadm5_destroy(self.handle as *mut c_void);
-            let _ = krb5_free_context(self.context);
+            krb5_free_context(self.context);
         }
     }
 }

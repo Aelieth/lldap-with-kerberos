@@ -45,7 +45,7 @@ async fn handle_modify_change(
             code: LdapResultCode::InsufficentAccessRights,
             message: format!(
                 r#"User `{}` cannot modify the password of user `{}`"#,
-                &credentials.user, &user_id
+                credentials.user, user_id
             ),
         });
     }

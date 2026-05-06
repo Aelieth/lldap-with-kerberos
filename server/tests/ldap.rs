@@ -47,20 +47,20 @@ fn basic_users_search() {
         found_users
             .get(&user1_name)
             .unwrap()
-            .contains(format!("cn={},ou=groups,{}", &group1_name, base_dn).as_str())
+            .contains(format!("cn={},ou=groups,{}", group1_name, base_dn).as_str())
     );
     assert!(found_users.contains_key(&user2_name));
     assert!(
         found_users
             .get(&user2_name)
             .unwrap()
-            .contains(format!("cn={},ou=groups,{}", &group1_name, base_dn).as_str())
+            .contains(format!("cn={},ou=groups,{}", group1_name, base_dn).as_str())
     );
     assert!(
         found_users
             .get(&user2_name)
             .unwrap()
-            .contains(format!("cn={},ou=groups,{}", &group2_name, base_dn).as_str())
+            .contains(format!("cn={},ou=groups,{}", group2_name, base_dn).as_str())
     );
     assert!(found_users.contains_key(&user3_name));
     assert!(found_users.get(&user3_name).unwrap().is_empty());

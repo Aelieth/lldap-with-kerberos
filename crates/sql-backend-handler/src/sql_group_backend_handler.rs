@@ -349,7 +349,7 @@ impl GroupBackendHandler for SqlBackendHandler {
                         };
 
                         if name == "uidnumber" || name == "gidnumber" {
-                            if value != 0 && (value < 3000 || value > 60000) {
+                            if value != 0 && !(3000..=60000).contains(&value) {
                                 return Err(DomainError::InternalError(format!(
                                     "{} must be between 3000 and 60000", name
                                 )));
@@ -416,7 +416,7 @@ impl GroupBackendHandler for SqlBackendHandler {
                         } else {
                             return Err(DomainError::InternalError(format!(
                                 "Group attribute name {} doesn't exist in the schema",
-                                &attribute.name
+                                attribute.name
                             )));
                         }
                     }
@@ -505,7 +505,7 @@ impl SqlBackendHandler {
             };
 
             if name == "uidnumber" || name == "gidnumber" {
-                if value != 0 && (value < 3000 || value > 20000) {
+                if value != 0 && !(3000..=20000).contains(&value) {
                     return Err(DomainError::InternalError(format!(
                         "{} must be between 3000 and 20000 (or 0 for no limit)", name
                     )));

@@ -130,7 +130,7 @@ pub fn avatar_to_graphql_base64(jpeg_bytes: &[u8]) -> String {
 /// Accepts:
 /// - Valid JPEG (current format)
 /// - Valid input formats (for legacy data that may still be PNG/BMP)
-/// Never fails on legacy data — lets the read path re-process if needed.
+/// - Never fails on legacy data — lets the read path re-process if needed.
 pub fn validate_stored_avatar_bytes(bytes: &[u8]) -> Result<(), AvatarError> {
     if bytes.is_empty() {
         return Ok(());

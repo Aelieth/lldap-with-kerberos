@@ -129,7 +129,7 @@ pub(crate) async fn do_password_modification<Handler: BackendHandler + OpaqueHan
                             code: LdapResultCode::InsufficentAccessRights,
                             message: format!(
                                 r#"User `{}` cannot modify the password of user `{}`"#,
-                                &credentials.user, &uid
+                                credentials.user, uid
                             ),
                         })
                     } else if let Err(e) =

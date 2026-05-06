@@ -39,7 +39,7 @@ impl RequestFilter {
 
                 match map_user_field(&attr_name, schema) {
                     UserFieldType::NoMatch => {
-                        Err(format!("Unknown request filter: {}", &eq.field).into())
+                        Err(format!("Unknown request filter: {}", eq.field).into())
                     }
                     UserFieldType::PrimaryField(UserColumn::UserId) => {
                         Ok(DomainRequestFilter::UserId(UserId::new(&eq.value)))
@@ -49,7 +49,7 @@ impl RequestFilter {
                     }
                     UserFieldType::Attribute(name, typ, false) => {
                         let value = deserialize_attribute_value(&[eq.value], typ, false)
-                            .context(format!("While deserializing attribute {}", &name))?;
+                            .context(format!("While deserializing attribute {}", name))?;
                         Ok(DomainRequestFilter::AttributeEquality(name, value))
                     }
                     UserFieldType::Attribute(_, _, true) => {

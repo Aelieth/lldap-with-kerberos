@@ -302,7 +302,7 @@ impl SqlBackendHandler {
             } else {
                 return Err(DomainError::InternalError(format!(
                     "User attribute name {} doesn't exist in the schema",
-                    &attribute.name
+                    attribute.name
                 )));
             }
         }
@@ -350,7 +350,7 @@ impl SqlBackendHandler {
             };
 
             if name == "uidnumber" || name == "gidnumber" {
-                if value < 3000 || value > 60000 {
+                if !(3000..=60000).contains(&value) {
                     return Err(DomainError::InternalError(format!(
                         "{} must be between 3000 and 60000", name
                     )));
@@ -477,7 +477,7 @@ impl SystemConfigBackendHandler for SqlBackendHandler {
                 modified_date: ActiveValue::Set(now),
                 ..Default::default()
             };
-            update.update(&self.sql_pool).await.map_err(|e| lldap_domain_model::error::DomainError::DatabaseError(e))?;
+            update.update(&self.sql_pool).await.map_err(lldap_domain_model::error::DomainError::DatabaseError)?;
         } else {
             tracing::info!("Kerberos sync disabled → clearing krbPrincipalName for user {}", user_id);
 
@@ -487,7 +487,7 @@ impl SystemConfigBackendHandler for SqlBackendHandler {
                 modified_date: ActiveValue::Set(now),
                 ..Default::default()
             };
-            update.update(&self.sql_pool).await.map_err(|e| lldap_domain_model::error::DomainError::DatabaseError(e))?;
+            update.update(&self.sql_pool).await.map_err(lldap_domain_model::error::DomainError::DatabaseError)?;
         }
         Ok(())
     }
@@ -613,33 +613,31 @@ impl SqlBackendHandler {
                             .order_by_asc(model::groups::Column::CreationDate)
                             .all(transaction)
                             .await?;
-                        let mut next_gid = settings.group_gidnumber_start;
-                        for group in groups {
+                        for (next_gid, group) in (settings.group_gidnumber_start..).zip(groups.into_iter()) {
                             let gid_value = next_gid.to_string().into_bytes();
                             let attr = model::group_attributes::ActiveModel {
                                 group_id: Set(group.group_id),
-                                attribute_name: Set(AttributeName::from("gidnumber")),
-                                value: Set(Serialized(gid_value)),
+                         attribute_name: Set(AttributeName::from("gidnumber")),
+                         value: Set(Serialized(gid_value)),
                             };
                             model::GroupAttributes::insert(attr)
-                                .on_conflict(
-                                    OnConflict::columns([
-                                        model::group_attributes::Column::GroupId,
-                                        model::group_attributes::Column::AttributeName,
-                                    ])
-                                    .update_column(model::group_attributes::Column::Value)
-                                    .to_owned(),
-                                )
-                                .exec(transaction)
-                                .await?;
+                            .on_conflict(
+                                OnConflict::columns([
+                                    model::group_attributes::Column::GroupId,
+                                    model::group_attributes::Column::AttributeName,
+                                ])
+                                .update_column(model::group_attributes::Column::Value)
+                                .to_owned(),
+                            )
+                            .exec(transaction)
+                            .await?;
                             let now = chrono::Utc::now().naive_utc();
                             let update = model::groups::ActiveModel {
                                 group_id: Set(group.group_id),
-                                modified_date: Set(now),
-                                ..Default::default()
+                         modified_date: Set(now),
+                         ..Default::default()
                             };
                             update.update(transaction).await?;
-                            next_gid += 1;
                         }
                     } else {
                         model::GroupAttributes::delete_many()
@@ -661,20 +659,32 @@ impl SqlBackendHandler {
             Box::pin(async move {
                 if settings.user_uidnumber_assign {
                     let users = model::User::find().order_by_asc(model::users::Column::CreationDate).all(tx).await?;
-                    let mut next = settings.user_uidnumber_start;
-                    for user in users {
+                    for (next, user) in (settings.user_uidnumber_start..).zip(users.into_iter()) {
                         let uid_value = next.to_string().into_bytes();
                         let attr = model::user_attributes::ActiveModel {
                             user_id: Set(user.user_id.clone()),
-                            attribute_name: Set(AttributeName::from("uidnumber")),
-                            value: Set(Serialized(uid_value)),
+                     attribute_name: Set(AttributeName::from("uidnumber")),
+                     value: Set(Serialized(uid_value)),
                         };
                         model::UserAttributes::insert(attr)
-                            .on_conflict(OnConflict::columns([model::user_attributes::Column::UserId, model::user_attributes::Column::AttributeName]).update_column(model::user_attributes::Column::Value).to_owned())
-                            .exec(tx).await?;
+                        .on_conflict(
+                            OnConflict::columns([
+                                model::user_attributes::Column::UserId,
+                                model::user_attributes::Column::AttributeName,
+                            ])
+                            .update_column(model::user_attributes::Column::Value)
+                            .to_owned(),
+                        )
+                        .exec(tx)
+                        .await?;
                         let now = chrono::Utc::now().naive_utc();
-                        model::users::ActiveModel { user_id: Set(user.user_id), modified_date: Set(now), ..Default::default() }.update(tx).await?;
-                        next += 1;
+                        model::users::ActiveModel {
+                            user_id: Set(user.user_id),
+                     modified_date: Set(now),
+                     ..Default::default()
+                        }
+                        .update(tx)
+                        .await?;
                     }
                 } else {
                     model::UserAttributes::delete_many()
@@ -884,7 +894,7 @@ impl UserBackendHandler for SqlBackendHandler {
                         };
 
                         if name == "uidnumber" || name == "gidnumber" {
-                            if value != 0 && (value < 3000 || value > 60000) {
+                            if value != 0 && !(3000..=60000).contains(&value) {
                                 return Err(DomainError::InternalError(format!(
                                     "{} must be between 3000 and 60000", name
                                 )));

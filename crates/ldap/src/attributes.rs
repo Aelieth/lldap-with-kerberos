@@ -37,7 +37,7 @@ pub fn get_custom_attribute(
         .map(|attribute| match &attribute.value {
             AttributeValue::String(Cardinality::Singleton(s)) => {
                 if attribute_name.as_str().eq_ignore_ascii_case("ou") {
-                    let leaf = s.split('\\').last().unwrap_or(s).to_string();
+                    let leaf = s.split('\\').next_back().unwrap_or(s).to_string();
                     vec![leaf.into_bytes()]
                 } else {
                     vec![s.clone().into_bytes()]
@@ -46,7 +46,7 @@ pub fn get_custom_attribute(
             AttributeValue::String(Cardinality::Unbounded(l)) => {
                 if attribute_name.as_str().eq_ignore_ascii_case("ou") {
                     l.iter()
-                        .map(|s| s.split('\\').last().unwrap_or(s).to_string().into_bytes())
+                        .map(|s| s.split('\\').next_back().unwrap_or(s).to_string().into_bytes())
                         .collect()
                 } else {
                     l.iter().map(|s| s.clone().into_bytes()).collect()
@@ -218,7 +218,7 @@ pub fn get_user_attribute(
             let internal_ou = get_user_ou(user);
             let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
             let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-            vec![format!("uid={},{}", &user.user_id, ou_part + "," + base_dn_str).into_bytes()]
+            vec![format!("uid={},{}", user.user_id, ou_part + "," + base_dn_str).into_bytes()]
         }
         crate::core::utils::UserFieldType::EntryUuid => {
             vec![user.uuid.to_string().into_bytes()]
@@ -235,7 +235,7 @@ pub fn get_user_attribute(
                         ) = &a.value { Some(s.clone()) } else { None }
                     })
                     .unwrap_or_else(|| "groups".to_string());
-                format!("cn={},ou={},{}", &group.display_name, group_ou, base_dn_str).into_bytes()
+                format!("cn={},ou={},{}", group.display_name, group_ou, base_dn_str).into_bytes()
             })
             .collect(),
         crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => {
@@ -273,7 +273,7 @@ pub fn get_user_attribute(
             if attr.as_str().eq_ignore_ascii_case("ou") {
                 if let Some(first) = values.first() {
                     let s = String::from_utf8_lossy(first);
-                    let leaf = s.split('\\').last().unwrap_or(&s).to_string();
+                    let leaf = s.split('\\').next_back().unwrap_or(&s).to_string();
                     vec![leaf.into_bytes()]
                 } else { vec![] }
             } else { values }
@@ -342,7 +342,7 @@ pub fn get_group_attribute(
             if attr.as_str().eq_ignore_ascii_case("ou") {
                 if let Some(first) = values.first() {
                     let s = String::from_utf8_lossy(first);
-                    let leaf = s.split('\\').last().unwrap_or(&s).to_string();
+                    let leaf = s.split('\\').next_back().unwrap_or(&s).to_string();
                     vec![leaf.into_bytes()]
                 } else { vec![] }
             } else { values }

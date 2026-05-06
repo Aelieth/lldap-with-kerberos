@@ -96,7 +96,7 @@ pub fn is_container_dn(
     let internal_ou = ldap_rdn_chain_to_internal_ou(&ou_chain);
     let is_allowed = allowed_ous
         .iter()
-        .any(|allowed| allowed.to_ascii_lowercase() == internal_ou.to_ascii_lowercase());
+        .any(|allowed| allowed.eq_ignore_ascii_case(&internal_ou));
     is_allowed && dn_parts.len() == base_dn.len() + ou_chain.len()
 }
 

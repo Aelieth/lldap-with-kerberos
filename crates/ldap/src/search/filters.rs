@@ -24,7 +24,7 @@ fn get_user_attribute_equality_filter(
 ) -> UserRequestFilter {
     let value_lc = value.to_ascii_lowercase();
     let attribute_value = deserialize_attribute_value(&[value.to_owned()], typ, is_list);
-    let attribute_value_lc = deserialize_attribute_value(&[value_lc.to_owned()], typ, is_list);
+    let attribute_value_lc = deserialize_attribute_value(std::slice::from_ref(&value_lc), typ, is_list);
     match (attribute_value, attribute_value_lc) {
         (Ok(v), Ok(v_lc)) => UserRequestFilter::Or(vec![
             UserRequestFilter::AttributeEquality(field.clone(), v),
@@ -150,8 +150,7 @@ pub fn convert_user_filter(
                 {
                     Ok(UserRequestFilter::GreaterOrEqual(f, value.to_string()))
                 }
-                crate::core::utils::UserFieldType::Attribute(name, typ, _)
-                    if typ == AttributeType::DateTime =>
+                crate::core::utils::UserFieldType::Attribute(name, AttributeType::DateTime, _) =>
                 {
                     Ok(UserRequestFilter::AttributeGreaterOrEqual(name, value.to_string()))
                 }
@@ -169,8 +168,7 @@ pub fn convert_user_filter(
                 {
                     Ok(UserRequestFilter::LessOrEqual(f, value.to_string()))
                 }
-                crate::core::utils::UserFieldType::Attribute(name, typ, _)
-                    if typ == AttributeType::DateTime =>
+                crate::core::utils::UserFieldType::Attribute(name, AttributeType::DateTime, _) =>
                 {
                     Ok(UserRequestFilter::AttributeLessOrEqual(name, value.to_string()))
                 }
@@ -235,7 +233,7 @@ fn get_group_attribute_equality_filter(
 ) -> GroupRequestFilter {
     let value_lc = value.to_ascii_lowercase();
     let serialized_value = deserialize_attribute_value(&[value.to_owned()], typ, is_list);
-    let serialized_value_lc = deserialize_attribute_value(&[value_lc.to_owned()], typ, is_list);
+    let serialized_value_lc = deserialize_attribute_value(std::slice::from_ref(&value_lc), typ, is_list);
     match (serialized_value, serialized_value_lc) {
         (Ok(v), Ok(v_lc)) => GroupRequestFilter::Or(vec![
             GroupRequestFilter::AttributeEquality(field.clone(), v),
@@ -342,8 +340,7 @@ pub fn convert_group_filter(
                         value.to_string(),
                     ))
                 }
-                crate::core::utils::GroupFieldType::Attribute(name, typ, _)
-                    if typ == AttributeType::DateTime =>
+                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) =>
                 {
                     Ok(GroupRequestFilter::AttributeGreaterOrEqual(
                         name,
@@ -365,8 +362,7 @@ pub fn convert_group_filter(
                         value.to_string(),
                     ))
                 }
-                crate::core::utils::GroupFieldType::Attribute(name, typ, _)
-                    if typ == AttributeType::DateTime =>
+                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) =>
                 {
                     Ok(GroupRequestFilter::AttributeLessOrEqual(
                         name,

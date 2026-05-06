@@ -402,14 +402,14 @@ pub struct User {
 
 impl User {
     pub fn materialize_protected_fields(&mut self) {
-        if let Some(principal) = &self.krb_principal_name {
-            if !principal.is_empty() {
+        if let Some(principal) = &self.krb_principal_name
+            && !principal.is_empty()
+            {
                 self.attributes.push(Attribute {
                     name: AttributeName::from("krbprincipalname"),
-                    value: AttributeValue::String(Cardinality::Singleton(principal.clone())),
+                    value: vec![principal.clone()].into(),
                 });
             }
-        }
     }
 }
 

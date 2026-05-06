@@ -180,9 +180,6 @@ pub fn deserialize_attribute(
     attribute: AttributeValue,
     is_admin: bool,
 ) -> FieldResult<DomainAttribute> {
-    // === TEMP DEBUG ===
-    if attribute.name.to_ascii_lowercase() == "avatar" || attribute.name.to_ascii_lowercase() == "jpegphoto" {
-    }
     let attribute_name = AttributeName::from(attribute.name.as_str());
 
     let attr_schema = attribute_schema
@@ -202,7 +199,7 @@ pub fn deserialize_attribute(
         ).into());
     }
 
-    if attribute.name.to_ascii_lowercase() == "sshpublickey" && attr_schema.is_list {
+    if attribute.name.eq_ignore_ascii_case("sshpublickey") && attr_schema.is_list {
         for key in &attribute.value {
             if let Err(err_msg) = validate_ssh_public_key(key) {
                 return Err(anyhow!(
@@ -213,8 +210,8 @@ pub fn deserialize_attribute(
     }
 
     // === SPECIAL CASE FOR AVATAR: decode base64 BEFORE creating Serialized ===
-    let is_avatar = attribute.name.to_ascii_lowercase() == "avatar"
-    || attribute.name.to_ascii_lowercase() == "jpegphoto";
+    let is_avatar = attribute.name.eq_ignore_ascii_case("avatar")
+    || attribute.name.eq_ignore_ascii_case("jpegphoto");
 
     let serialized = if is_avatar && !attr_schema.is_list {
         let val = attribute.value.first().cloned().unwrap_or_default().trim().to_string();

@@ -881,8 +881,9 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                     sea_orm::Value::from(name.as_bytes().to_vec()).into(),
                 ]);
             }
-            if let Some(avatar) = &user.avatar {
-                if !avatar.is_empty() {
+            if let Some(avatar) = &user.avatar
+                && !avatar.is_empty()
+                {
                     any_user = true;
                     user_statement.values_panic([
                         user.user_id.clone().into(),
@@ -890,7 +891,6 @@ async fn migrate_to_v5(transaction: DatabaseTransaction) -> Result<DatabaseTrans
                         sea_orm::Value::from(avatar).into(),  // ← FIXED: use &Avatar directly (SeaORM has From<&Avatar>)
                     ]);
                 }
-            }
         }
 
         if any_user {

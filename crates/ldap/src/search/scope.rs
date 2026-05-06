@@ -27,11 +27,10 @@ pub fn get_search_scope(
         return SearchScope::Root;
     }
 
-    if matches!(ldap_scope, LdapSearchScope::OneLevel | LdapSearchScope::Subtree) {
-        if dn_parts.len() == base_dn.len() + 1 {
+    if matches!(ldap_scope, LdapSearchScope::OneLevel | LdapSearchScope::Subtree)
+        && dn_parts.len() == base_dn.len() + 1 {
             return SearchScope::Container;
         }
-    }
 
     if matches!(ldap_scope, LdapSearchScope::Base) && dn_parts.len() > base_dn.len() {
         let full_dn = dn_parts.iter()

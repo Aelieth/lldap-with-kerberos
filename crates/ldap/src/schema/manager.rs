@@ -122,11 +122,6 @@ impl SchemaManager {
         }
     }
 
-    /// Convenience constructor that uses the global PublicSchema.
-    pub fn default() -> Self {
-        Self::new(&PublicSchema::get())
-    }
-
     // ========================================================================
     // RESOLVE & CANONICAL NAME
     // ========================================================================
@@ -339,5 +334,11 @@ impl SchemaManager {
 
     pub fn get_all_group_attributes(&self) -> Vec<lldap_schema::AttributeSchema> {
         PublicSchema::get().group_attributes().attributes.clone()
+    }
+}
+
+impl Default for SchemaManager {
+    fn default() -> Self {
+        Self::new(&PublicSchema::get())
     }
 }

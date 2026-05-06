@@ -666,7 +666,7 @@ where
 {
     println!(
         "Loading configuration from {}",
-        &overrides.general_config().config_file
+        overrides.general_config().config_file
     );
 
     let ignore_keys = ["key_file", "cert_file"];
@@ -683,7 +683,7 @@ where
 
     overrides.override_config(&mut config);
     if config.verbose {
-        println!("Configuration: {:#?}", &config);
+        println!("Configuration: {:#?}", config);
     }
     check_for_unexpected_env_variables(env_variable_provider());
     config.server_setup = Some(get_server_setup(
@@ -754,6 +754,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn figment_location_extraction_key_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -783,6 +784,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_seed_success_with_nonexistant_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -795,6 +797,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_seed_failure_with_existing_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -808,6 +811,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_file_success_with_existing_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -820,6 +824,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_file_success_with_nonexistent_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -831,6 +836,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_file_with_previous_different_file() {
         Jail::expect_with(|jail| {
             jail.create_file("lldap_config.toml", r#"key_file = "test""#)?;
@@ -864,6 +870,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_file_to_seed() {
         Jail::expect_with(|jail| {
             jail.clear_env();
@@ -882,6 +889,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn check_server_setup_key_extraction_file_to_seed_removed_file() {
         Jail::expect_with(|jail| {
             jail.clear_env();

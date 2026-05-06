@@ -89,11 +89,10 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
     fn avatar(&self) -> Option<String> {
         // Use the same serialization as the attributes list (proper base64 via avatar_to_graphql_base64)
         // This ensures the top-level avatar field returns clean JPEG base64, matching what the attributes[] list produces.
-        let result = self.attributes
-            .iter()
-            .find(|a| a.name() == "avatar")
-            .and_then(|a| super::serialize_attribute_to_graphql(&a.attribute.value).into_iter().next());
-        result
+        self.attributes
+        .iter()
+        .find(|a| a.name() == "avatar")
+        .and_then(|a| super::serialize_attribute_to_graphql(&a.attribute.value).into_iter().next())
     }
 
     /// Single-layer OU (defaults to "people" — editable by admin only)
@@ -127,7 +126,7 @@ impl<Handler: BackendHandler + OpaqueHandler> User<Handler> {
 
     /// Whether the user is disabled (member of the built-in lldap_disabled group).
     fn is_disabled(&self) -> bool {
-        self.groups.as_ref().map_or(false, |groups| {
+        self.groups.as_ref().is_some_and(|groups| {
             groups.iter().any(|g| g.display_name == "lldap_disabled")
         })
     }

@@ -149,7 +149,7 @@ impl OpaqueHandler for SqlOpaqueHandler {
             .await?
             .map(|bytes| {
                 opaque::server::ServerRegistration::deserialize(&bytes).map_err(|_| {
-                    DomainError::InternalError(format!("Corrupted password file for {}", &user_id))
+                    DomainError::InternalError(format!("Corrupted password file for {}", user_id))
                 })
             })
             .transpose()?;

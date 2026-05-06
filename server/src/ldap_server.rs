@@ -157,7 +157,7 @@ where
             .with_context(|| {
                 format!(
                     "Invalid value for ldap_base_dn in configuration: {}",
-                    &config.ldap_base_dn
+                    config.ldap_base_dn
                 )
             })?,
         )) as &'static LdapInfo,
