@@ -71,6 +71,16 @@ input PosixSettingsInput {
   groupGidnumberMax: Int!
 }
 
+input PushRealmToKeycloakInput {
+  url: String!
+  realm: String!
+  adminUser: String!
+  adminPass: String!
+  lldapUrl: String!
+  syncUsername: String!
+  syncPassword: String!
+}
+
 """
   A filter for requests, specifying a boolean expression based on field constraints. Only one of
   the fields can be set at a time.
@@ -241,7 +251,7 @@ type Mutation {
   exportKeytabForKeycloak(hostname: String!): ExportKeytabForKeycloakResponse!
   testKeycloakConnection(input: TestKeycloakConnectionInput!): TestKeycloakConnectionResponse!
   saveKeycloakConfig(input: SaveKeycloakConfigInput!): SaveKeycloakConfigResponse!
-  pushRealmToKeycloak(url: String!, realm: String!, adminUser: String!, adminPass: String!, lldapUrl: String!, syncUsername: String!, syncPassword: String!): PushRealmResponse!
+  pushRealmToKeycloak(input: PushRealmToKeycloakInput!): PushRealmResponse!
   setPosixSettings(input: PosixSettingsInput!): PosixSettingsResponse!
   reassignUserUidNumbers: PosixSettingsResponse!
   reassignUserGidNumbers: PosixSettingsResponse!

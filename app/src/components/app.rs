@@ -265,9 +265,6 @@ impl App {
               <a href="https://discord.gg/h5PEdRMNyP" class="me-4 text-reset">
                 <i class="bi-discord"></i>
               </a>
-              <a href="https://twitter.com/nitnelave1?ref_src=twsrc%5Etfw" class="me-4 text-reset">
-                <i class="bi-twitter"></i>
-              </a>
             </div>
             <div>
               <span>{"License "}<a href="https://github.com/lldap/lldap/blob/main/LICENSE" class="link-secondary">{"GNU GPL"}</a></span>

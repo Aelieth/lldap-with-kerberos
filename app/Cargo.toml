@@ -1,7 +1,7 @@
 [package]
 name = "lldap_app"
 version = "0.7.1"
-description = "Frontend for KLLDAP"
+description = "Front-end for KLLDAP"
 edition.workspace = true
 include = ["src/**/*", "queries/**/*", "Cargo.toml", "../schema.graphql"]
 authors.workspace = true
