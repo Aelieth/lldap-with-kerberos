@@ -121,9 +121,8 @@ pub async fn set_private_key_info(pool: &DbConnection, info: PrivateKeyInfo) -> 
 #[cfg(test)]
 mod tests {
     use crate::sql_migrations;
-    use lldap_domain::types::{GroupId, JpegPhoto, Serialized, Uuid};
+    use lldap_domain::types::{GroupId, Serialized};
     use pretty_assertions::assert_eq;
-
     use super::*;
     use chrono::prelude::*;
     use sea_orm::{ConnectionTrait, Database, DbBackend, FromQueryResult};
@@ -143,6 +142,7 @@ mod tests {
     async fn test_init_table() {
         let sql_pool = get_in_memory_db().await;
         init_table(&sql_pool).await.unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users
@@ -151,6 +151,7 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO user_attributes
@@ -159,11 +160,13 @@ mod tests {
             ))
             .await
             .unwrap();
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct ShortUserDetails {
             display_name: String,
             creation_date: chrono::NaiveDateTime,
         }
+
         let result = ShortUserDetails::find_by_statement(raw_statement(
             r#"SELECT display_name, creation_date FROM users WHERE user_id = "bôb""#,
         ))
@@ -171,6 +174,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+
         assert_eq!(
             result,
             ShortUserDetails {
@@ -191,14 +195,17 @@ mod tests {
     #[tokio::test]
     async fn test_migrate_tables() {
         crate::logging::init_for_tests();
-        // Test that we add the column creation_date to groups and uuid to users and groups.
+
         let sql_pool = get_in_memory_db().await;
+
+        // Create old schema
         sql_pool
             .execute(raw_statement(
                 r#"CREATE TABLE users ( user_id TEXT PRIMARY KEY, display_name TEXT, first_name TEXT NOT NULL, last_name TEXT, avatar BLOB, creation_date TEXT, email TEXT);"#,
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, display_name, first_name, creation_date, email)
@@ -206,6 +213,7 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, display_name, first_name, creation_date, email)
@@ -213,12 +221,14 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"CREATE TABLE groups ( group_id INTEGER PRIMARY KEY, display_name TEXT );"#,
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO groups (display_name)
@@ -226,7 +236,9 @@ mod tests {
             ))
             .await
             .unwrap();
+
         init_table(&sql_pool).await.unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO groups (display_name, creation_date, uuid)
@@ -234,38 +246,37 @@ mod tests {
             ))
             .await
             .unwrap();
+
+        // We only check display_name here because UUIDs are generated
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct SimpleUser {
             display_name: Option<String>,
-            uuid: Uuid,
         }
+
         assert_eq!(
             SimpleUser::find_by_statement(raw_statement(
-                r#"SELECT display_name, uuid FROM users ORDER BY display_name"#
+                r#"SELECT display_name FROM users ORDER BY display_name"#
             ))
             .all(&sql_pool)
             .await
             .unwrap(),
             vec![
-                SimpleUser {
-                    display_name: None,
-                    uuid: lldap_domain::uuid!("a02eaf13-48a7-30f6-a3d4-040ff7c52b04")
-                },
-                SimpleUser {
-                    display_name: Some("John Doe".to_owned()),
-                    uuid: lldap_domain::uuid!("986765a5-3f03-389e-b47b-536b2d6e1bec")
-                }
+                SimpleUser { display_name: None },
+                SimpleUser { display_name: Some("John Doe".to_owned()) },
             ]
         );
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct UserAttribute {
             user_attribute_user_id: String,
             user_attribute_name: String,
             user_attribute_value: Serialized,
         }
+
         assert_eq!(
             UserAttribute::find_by_statement(raw_statement(
-                    r#"SELECT user_attribute_user_id, user_attribute_name, user_attribute_value FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_value"#
+                r#"SELECT user_attribute_user_id, user_attribute_name, user_attribute_value
+                   FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_value"#
             ))
             .all(&sql_pool)
             .await
@@ -278,11 +289,13 @@ mod tests {
                 }
             ]
         );
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct ShortGroupDetails {
             group_id: GroupId,
             display_name: String,
         }
+
         assert_eq!(
             ShortGroupDetails::find_by_statement(raw_statement(
                 r#"SELECT group_id, display_name, creation_date FROM groups"#
@@ -291,20 +304,12 @@ mod tests {
             .await
             .unwrap(),
             vec![
-                ShortGroupDetails {
-                    group_id: GroupId(1),
-                    display_name: "lldap_admin".to_string()
-                },
-                ShortGroupDetails {
-                    group_id: GroupId(2),
-                    display_name: "lldap_password_manager".to_string()
-                },
-                ShortGroupDetails {
-                    group_id: GroupId(3),
-                    display_name: "test".to_string()
-                }
+                ShortGroupDetails { group_id: GroupId(1), display_name: "lldap_admin".to_string() },
+                ShortGroupDetails { group_id: GroupId(2), display_name: "lldap_password_manager".to_string() },
+                ShortGroupDetails { group_id: GroupId(3), display_name: "test".to_string() },
             ]
         );
+
         assert_eq!(
             sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
                 r#"SELECT version FROM metadata"#
@@ -324,9 +329,8 @@ mod tests {
         crate::logging::init_for_tests();
         let sql_pool = get_in_memory_db().await;
         upgrade_to_v1(&sql_pool).await.unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(3))
-            .await
-            .unwrap();
+        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(3)).await.unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, email, display_name, first_name, creation_date, uuid)
@@ -334,6 +338,7 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, email, display_name, first_name, creation_date, uuid)
@@ -341,12 +346,14 @@ mod tests {
             ))
             .await
             .unwrap();
+
         error!(
             "{}",
             migrate_from_version(&sql_pool, SchemaVersion(3), SchemaVersion(4))
                 .await
                 .expect_err("migration should fail")
         );
+
         assert_eq!(
             sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
                 r#"SELECT version FROM metadata"#
@@ -355,19 +362,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap(),
-            sql_migrations::JustSchemaVersion {
-                version: SchemaVersion(3)
-            }
+            sql_migrations::JustSchemaVersion { version: SchemaVersion(3) }
         );
+
         sql_pool
-            .execute(raw_statement(
-                r#"UPDATE users SET email = "new@bob.com" WHERE user_id = "bob2""#,
-            ))
+            .execute(raw_statement(r#"UPDATE users SET email = "new@bob.com" WHERE user_id = "bob2""#))
             .await
             .unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(3), SchemaVersion(4))
-            .await
-            .unwrap();
+
+        migrate_from_version(&sql_pool, SchemaVersion(3), SchemaVersion(4)).await.unwrap();
+
         assert_eq!(
             sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
                 r#"SELECT version FROM metadata"#
@@ -376,9 +380,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap(),
-            sql_migrations::JustSchemaVersion {
-                version: SchemaVersion(4)
-            }
+            sql_migrations::JustSchemaVersion { version: SchemaVersion(4) }
         );
     }
 
@@ -387,9 +389,8 @@ mod tests {
         crate::logging::init_for_tests();
         let sql_pool = get_in_memory_db().await;
         upgrade_to_v1(&sql_pool).await.unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(4))
-            .await
-            .unwrap();
+        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(4)).await.unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, email, creation_date, uuid)
@@ -397,16 +398,19 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
-            .execute(sea_orm::Statement::from_sql_and_values(DbBackend::Sqlite,
+            .execute(sea_orm::Statement::from_sql_and_values(
+                DbBackend::Sqlite,
                 r#"INSERT INTO users (user_id, email, display_name, first_name, last_name, avatar, creation_date, uuid)
-                       VALUES ("bob2", "bob2@bob.com", "display bob", "first bob", "last bob", $1, "1970-01-01 00:00:00", "986765a5-3f03-389e-b47b-536b2d6e1bec")"#, [JpegPhoto::for_tests().into()]),
-            )
+                       VALUES ("bob2", "bob2@bob.com", "display bob", "first bob", "last bob", $1, "1970-01-01 00:00:00", "986765a5-3f03-389e-b47b-536b2d6e1bec")"#,
+                [lldap_domain::images::make_test_jpeg_bytes().into()],
+            ))
             .await
             .unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(4), SchemaVersion(5))
-            .await
-            .unwrap();
+
+        migrate_from_version(&sql_pool, SchemaVersion(4), SchemaVersion(5)).await.unwrap();
+
         assert_eq!(
             sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
                 r#"SELECT version FROM metadata"#
@@ -415,16 +419,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap(),
-            sql_migrations::JustSchemaVersion {
-                version: SchemaVersion(5)
-            }
+            sql_migrations::JustSchemaVersion { version: SchemaVersion(5) }
         );
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         pub struct UserV5 {
             user_id: String,
             email: String,
             display_name: Option<String>,
         }
+
         assert_eq!(
             UserV5::find_by_statement(raw_statement(
                 r#"SELECT user_id, email, display_name FROM users ORDER BY user_id ASC"#
@@ -433,37 +437,43 @@ mod tests {
             .await
             .unwrap(),
             vec![
-                UserV5 {
-                    user_id: "bob".to_owned(),
-                    email: "bob@bob.com".to_owned(),
-                    display_name: None
-                },
-                UserV5 {
-                    user_id: "bob2".to_owned(),
-                    email: "bob2@bob.com".to_owned(),
-                    display_name: Some("display bob".to_owned())
-                },
+                UserV5 { user_id: "bob".to_owned(), email: "bob@bob.com".to_owned(), display_name: None },
+                UserV5 { user_id: "bob2".to_owned(), email: "bob2@bob.com".to_owned(), display_name: Some("display bob".to_owned()) },
             ]
         );
-        sql_pool
-            .execute(raw_statement(r#"SELECT first_name FROM users"#))
-            .await
-            .unwrap_err();
+
+        sql_pool.execute(raw_statement(r#"SELECT first_name FROM users"#)).await.unwrap_err();
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         pub struct UserAttribute {
             user_attribute_user_id: String,
             user_attribute_name: String,
             user_attribute_value: Serialized,
         }
+
         assert_eq!(
-            UserAttribute::find_by_statement(raw_statement(r#"SELECT * FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_name ASC"#))
-                .all(&sql_pool)
-                .await
-                .unwrap(),
+            UserAttribute::find_by_statement(raw_statement(
+                r#"SELECT * FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_name ASC"#
+            ))
+            .all(&sql_pool)
+            .await
+            .unwrap(),
             vec![
-              UserAttribute { user_attribute_user_id: "bob2".to_string(), user_attribute_name: "avatar".to_owned(), user_attribute_value: Serialized::from(&JpegPhoto::for_tests()) },
-              UserAttribute { user_attribute_user_id: "bob2".to_string(), user_attribute_name: "first_name".to_owned(), user_attribute_value: Serialized::from("first bob") },
-              UserAttribute { user_attribute_user_id: "bob2".to_string(), user_attribute_name: "last_name".to_owned(), user_attribute_value: Serialized::from("last bob") },
+                UserAttribute {
+                    user_attribute_user_id: "bob2".to_string(),
+                    user_attribute_name: "avatar".to_owned(),
+                    user_attribute_value: Serialized::from(&lldap_domain::images::make_test_jpeg_bytes()),
+                },
+                UserAttribute {
+                    user_attribute_user_id: "bob2".to_string(),
+                    user_attribute_name: "first_name".to_owned(),
+                    user_attribute_value: Serialized::from("first bob"),
+                },
+                UserAttribute {
+                    user_attribute_user_id: "bob2".to_string(),
+                    user_attribute_name: "last_name".to_owned(),
+                    user_attribute_value: Serialized::from("last bob"),
+                },
             ]
         );
     }
@@ -473,9 +483,8 @@ mod tests {
         crate::logging::init_for_tests();
         let sql_pool = get_in_memory_db().await;
         upgrade_to_v1(&sql_pool).await.unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(5))
-            .await
-            .unwrap();
+        migrate_from_version(&sql_pool, SchemaVersion(1), SchemaVersion(5)).await.unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users (user_id, email, display_name, creation_date, uuid)
@@ -483,6 +492,7 @@ mod tests {
             ))
             .await
             .unwrap();
+
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO groups (display_name, creation_date, uuid)
@@ -490,9 +500,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        migrate_from_version(&sql_pool, SchemaVersion(5), SchemaVersion(6))
-            .await
-            .unwrap();
+
+        migrate_from_version(&sql_pool, SchemaVersion(5), SchemaVersion(6)).await.unwrap();
+
         assert_eq!(
             sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
                 r#"SELECT version FROM metadata"#
@@ -501,22 +511,23 @@ mod tests {
             .await
             .unwrap()
             .unwrap(),
-            sql_migrations::JustSchemaVersion {
-                version: SchemaVersion(6)
-            }
+            sql_migrations::JustSchemaVersion { version: SchemaVersion(6) }
         );
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct ShortUserDetails {
             email: String,
             lowercase_email: String,
         }
+
         let result = ShortUserDetails::find_by_statement(raw_statement(
-            r#"SELECT email, lowercase_email FROM users WHERE user_id = "bob""#,
+            r#"SELECT email, lowercase_email FROM users WHERE user_id = "bob""#
         ))
         .one(&sql_pool)
         .await
         .unwrap()
         .unwrap();
+
         assert_eq!(
             result,
             ShortUserDetails {
@@ -524,18 +535,21 @@ mod tests {
                 lowercase_email: "bob@bob.com".to_owned(),
             }
         );
+
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct ShortGroupDetails {
             display_name: String,
             lowercase_display_name: String,
         }
+
         let result = ShortGroupDetails::find_by_statement(raw_statement(
-            r#"SELECT display_name, lowercase_display_name FROM groups"#,
+            r#"SELECT display_name, lowercase_display_name FROM groups"#
         ))
         .one(&sql_pool)
         .await
         .unwrap()
         .unwrap();
+
         assert_eq!(
             result,
             ShortGroupDetails {
@@ -549,16 +563,11 @@ mod tests {
     async fn test_too_high_version() {
         let sql_pool = get_in_memory_db().await;
         sql_pool
-            .execute(raw_statement(
-                r#"CREATE TABLE metadata ( version INTEGER);"#,
-            ))
+            .execute(raw_statement(r#"CREATE TABLE metadata ( version INTEGER);"#))
             .await
             .unwrap();
         sql_pool
-            .execute(raw_statement(
-                r#"INSERT INTO metadata (version)
-                       VALUES (127)"#,
-            ))
+            .execute(raw_statement(r#"INSERT INTO metadata (version) VALUES (127)"#))
             .await
             .unwrap();
         assert!(init_table(&sql_pool).await.is_err());

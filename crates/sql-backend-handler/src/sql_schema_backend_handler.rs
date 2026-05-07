@@ -233,7 +233,7 @@ mod tests {
     use super::*;
     use crate::sql_backend_handler::tests::*;
     use lldap_domain::requests::UpdateUserRequest;
-    use lldap_domain::types::{Attribute, AttributeType};
+    use lldap_domain::types::{Attribute, AttributeType, LdapObjectClass};
     use lldap_domain_handlers::handler::{UserBackendHandler, UserRequestFilter};
     use pretty_assertions::assert_eq;
 
@@ -241,6 +241,7 @@ mod tests {
     async fn test_default_schema() {
         let fixture = TestFixture::new().await;
         let schema = fixture.handler.get_schema().await.unwrap();
+
         assert!(schema.user_attributes().get_by_name_or_alias("avatar").is_some());
         assert!(schema.user_attributes().get_by_name_or_alias("kerberossync").is_some());
         assert!(schema.user_attributes().get_by_name_or_alias("uidnumber").is_some());
@@ -249,6 +250,7 @@ mod tests {
     #[tokio::test]
     async fn test_user_attribute_add_and_delete() {
         let fixture = TestFixture::new().await;
+
         let new_attribute = CreateAttributeRequest {
             name: "new_attribute".into(),
             attribute_type: AttributeType::Integer,
@@ -256,20 +258,13 @@ mod tests {
             is_visible: false,
             is_editable: false,
         };
-        fixture
-        .handler
-        .add_user_attribute(new_attribute)
-        .await
-        .unwrap();
+
+        fixture.handler.add_user_attribute(new_attribute).await.unwrap();
 
         let schema = fixture.handler.get_schema().await.unwrap();
         assert!(schema.user_attributes().get_by_name_or_alias("new_attribute").is_some());
 
-        fixture
-        .handler
-        .delete_user_attribute(&"new_attribute".into())
-        .await
-        .unwrap();
+        fixture.handler.delete_user_attribute(&"new_attribute".into()).await.unwrap();
 
         let schema = fixture.handler.get_schema().await.unwrap();
         assert!(schema.user_attributes().get_by_name_or_alias("new_attribute").is_none());
@@ -278,6 +273,7 @@ mod tests {
     #[tokio::test]
     async fn test_user_attribute_present_filter() {
         let fixture = TestFixture::new().await;
+
         let new_attribute = CreateAttributeRequest {
             name: "new_attribute".into(),
             attribute_type: AttributeType::Integer,
@@ -285,36 +281,35 @@ mod tests {
             is_visible: false,
             is_editable: false,
         };
+
+        fixture.handler.add_user_attribute(new_attribute).await.unwrap();
+
         fixture
-        .handler
-        .add_user_attribute(new_attribute)
-        .await
-        .unwrap();
-        fixture
-        .handler
-        .update_user(UpdateUserRequest {
-            user_id: "bob".into(),
-                     insert_attributes: vec![Attribute {
-                         name: "new_attribute".into(),
-                     value: vec![3].into(),
-                     }],
-                     ..Default::default()
-        })
-        .await
-        .unwrap();
+            .handler
+            .update_user(UpdateUserRequest {
+                user_id: "bob".into(),
+                insert_attributes: vec![Attribute {
+                    name: "new_attribute".into(),
+                    value: vec![3].into(),
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
         let users = get_user_names(
             &fixture.handler,
-            Some(UserRequestFilter::CustomAttributePresent(
-                "new_attribute".into(),
-            )),
+            Some(UserRequestFilter::CustomAttributePresent("new_attribute".into())),
         )
         .await;
+
         assert_eq!(users, vec!["bob"]);
     }
 
     #[tokio::test]
     async fn test_group_attribute_add_and_delete() {
         let fixture = TestFixture::new().await;
+
         let new_attribute = CreateAttributeRequest {
             name: "NeW_aTTribute".into(),
             attribute_type: AttributeType::Avatar,
@@ -322,13 +317,12 @@ mod tests {
             is_visible: true,
             is_editable: false,
         };
-        fixture
-        .handler
-        .add_group_attribute(new_attribute)
-        .await
-        .unwrap();
+
+        fixture.handler.add_group_attribute(new_attribute).await.unwrap();
+
         let expected_value = AttributeSchema {
             name: "new_attribute".into(),
+            aliases: vec![],
             attribute_type: AttributeType::Avatar,
             is_list: false,
             is_visible: true,
@@ -336,78 +330,44 @@ mod tests {
             is_hardcoded: false,
             is_readonly: false,
         };
-        assert!(
-            fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .group_attributes
-            .attributes
-            .contains(&expected_value)
-        );
-        fixture
-        .handler
-        .delete_group_attribute(&"new_attriBUte".into())
-        .await
-        .unwrap();
-        assert!(
-            !fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .group_attributes
-            .attributes
-            .contains(&expected_value)
-        );
+
+        let schema = fixture.handler.get_schema().await.unwrap();
+        assert!(schema.group_attributes().attributes.contains(&expected_value));
+
+        fixture.handler.delete_group_attribute(&"new_attriBUte".into()).await.unwrap();
+
+        let schema = fixture.handler.get_schema().await.unwrap();
+        assert!(!schema.group_attributes().attributes.contains(&expected_value));
     }
 
     #[tokio::test]
     async fn test_user_object_class_add_and_delete() {
         let fixture = TestFixture::new().await;
         let new_object_class = LdapObjectClass::new("newObjectClass");
-        fixture
-        .handler
-        .add_user_object_class(&new_object_class)
-        .await
-        .unwrap();
+
+        fixture.handler.add_user_object_class(&new_object_class).await.unwrap();
+
+        let schema = fixture.handler.get_schema().await.unwrap();
         assert_eq!(
-            fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .extra_user_object_classes,
-            vec![new_object_class.clone()]
+            schema.0.extra_user_object_classes,
+            vec!["newObjectClass".to_string()]
         );
+
         fixture
-        .handler
-        .add_user_object_class(&LdapObjectClass::new("newobjEctclass"))
-        .await
-        .expect_err("Should not be able to add the same object class twice");
+            .handler
+            .add_user_object_class(&LdapObjectClass::new("newobjEctclass"))
+            .await
+            .expect_err("Should not be able to add the same object class twice");
+
+        let schema = fixture.handler.get_schema().await.unwrap();
         assert_eq!(
-            fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .extra_user_object_classes,
-            vec![new_object_class.clone()]
+            schema.0.extra_user_object_classes,
+            vec!["newObjectClass".to_string()]
         );
-        fixture
-        .handler
-        .delete_user_object_class(&new_object_class)
-        .await
-        .unwrap();
-        assert!(
-            fixture
-            .handler
-            .get_schema()
-            .await
-            .unwrap()
-            .extra_user_object_classes
-            .is_empty()
-        );
+
+        fixture.handler.delete_user_object_class(&new_object_class).await.unwrap();
+
+        let schema = fixture.handler.get_schema().await.unwrap();
+        assert!(schema.0.extra_user_object_classes.is_empty());
     }
 }

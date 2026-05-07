@@ -65,10 +65,7 @@ mod tests {
     use super::*;
     use crate::handler::tests::setup_bound_admin_handler;
     use chrono::TimeZone;
-    use lldap_domain::{
-        types::{Group, GroupId, User, UserAndGroups, UserId},
-        uuid,
-    };
+    use lldap_domain::types::{Group, GroupId, GroupMember, User, UserAndGroups, UserId, Uuid};
     use lldap_domain_handlers::handler::{GroupRequestFilter, UserRequestFilter};
     use lldap_test_utils::MockTestBackendHandler;
     use pretty_assertions::assert_eq;
@@ -134,8 +131,11 @@ mod tests {
                 id: GroupId(1),
                 display_name: "group".into(),
                 creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                users: vec![UserId::new("bob")],
-                uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
+                users: vec![GroupMember {
+                    user_id: UserId::new("bob"),
+                    ou: "people".to_string(),
+                }],
+                uuid: Uuid::from_name_and_date("group", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
                 attributes: Vec::new(),
                 modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
             }])
@@ -233,8 +233,11 @@ mod tests {
                 id: GroupId(1),
                 display_name: "group".into(),
                 creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                users: vec![UserId::new("bob")],
-                uuid: uuid!("04ac75e0-2900-3e21-926c-2f732c26b3fc"),
+                users: vec![GroupMember {
+                    user_id: UserId::new("bob"),
+                    ou: "people".to_string(),
+                }],
+                uuid: Uuid::from_name_and_date("group", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
                 attributes: Vec::new(),
                 modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
             }])

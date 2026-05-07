@@ -15,3 +15,39 @@ impl std::fmt::Display for LdapError {
 impl std::error::Error for LdapError {}
 
 pub type LdapResult<T> = std::result::Result<T, LdapError>;
+
+#[cfg(test)]
+mod error_tests {
+    use super::super::error::{LdapError, LdapResult};
+    use ldap3_proto::LdapResultCode;
+
+    #[test]
+    fn ldap_error_displays_message() {
+        let err = LdapError {
+            code: LdapResultCode::Other,
+            message: "something went wrong".to_string(),
+        };
+        assert_eq!(err.to_string(), "something went wrong");
+    }
+
+    #[test]
+    fn ldap_error_is_error_trait() {
+        let err: Box<dyn std::error::Error> = Box::new(LdapError {
+            code: LdapResultCode::NoSuchObject,
+            message: "not found".into(),
+        });
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn ldap_result_type_works() {
+        let ok: LdapResult<i32> = Ok(42);
+        assert_eq!(ok.unwrap(), 42);
+
+        let err: LdapResult<()> = Err(LdapError {
+            code: LdapResultCode::Other,
+            message: "boom".into(),
+        });
+        assert!(err.is_err());
+    }
+}

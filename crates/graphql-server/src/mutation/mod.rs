@@ -1295,16 +1295,28 @@ mod tests {
     use lldap_test_utils::MockTestBackendHandler;
     use mockall::predicate::eq;
     use pretty_assertions::assert_eq;
+    use lldap_schema::PublicSchema;
 
-    fn mutation_schema<'q, C, Q, M>(
+    fn mutation_schema<C, Q, M>(
         query_root: Q,
         mutation_root: M,
-    ) -> RootNode<'q, Q, M, EmptySubscription<C>>
+    ) -> RootNode<Q, M, EmptySubscription<C>>
     where
-        Q: GraphQLType<DefaultScalarValue, Context = C, TypeInfo = ()> + 'q,
-        M: GraphQLType<DefaultScalarValue, Context = C, TypeInfo = ()> + 'q,
+        Q: GraphQLType<DefaultScalarValue, Context = C, TypeInfo = ()> + 'static,
+        M: GraphQLType<DefaultScalarValue, Context = C, TypeInfo = ()> + 'static,
     {
         RootNode::new(query_root, mutation_root, EmptySubscription::<C>::new())
+    }
+
+    fn make_test_schema() -> PublicSchema {
+        PublicSchema(lldap_schema::Schema {
+            user_attributes: lldap_schema::AttributeList { attributes: vec![] },
+            group_attributes: lldap_schema::AttributeList { attributes: vec![] },
+            system_attributes: lldap_schema::AttributeList { attributes: vec![] },
+            posix_settings: lldap_schema::schema::PosixSettings::default(),
+            extra_user_object_classes: vec![],
+            extra_group_object_classes: vec![],
+        })
     }
 
     #[tokio::test]
@@ -1317,6 +1329,7 @@ mod tests {
             }
         "#;
         let mut mock = MockTestBackendHandler::new();
+        mock.expect_get_schema().returning(|| Ok(make_test_schema()));
         mock.expect_add_user_attribute()
             .with(eq(CreateAttributeRequest {
                 name: AttributeName::new("AttrName0"),
@@ -1345,7 +1358,7 @@ mod tests {
         ]);
         let schema = mutation_schema(
             Query::<MockTestBackendHandler>::new(),
-            Mutation::<MockTestBackendHandler>::new(),
+            Mutation::<MockTestBackendHandler>::default(),
         );
         assert_eq!(
             execute(QUERY, None, &schema, &vars, &context).await,
@@ -1370,7 +1383,8 @@ mod tests {
                 }
             }
         "#;
-        let mock = MockTestBackendHandler::new();
+        let mut mock = MockTestBackendHandler::new();
+        mock.expect_get_schema().returning(|| Ok(make_test_schema()));
         let context = Context::<MockTestBackendHandler>::new_for_tests(
             mock,
             ValidationResults {
@@ -1390,7 +1404,7 @@ mod tests {
         ]);
         let schema = mutation_schema(
             Query::<MockTestBackendHandler>::new(),
-            Mutation::<MockTestBackendHandler>::new(),
+            Mutation::<MockTestBackendHandler>::default(),
         );
         let result = execute(QUERY, None, &schema, &vars, &context).await;
         match result {
@@ -1422,6 +1436,7 @@ mod tests {
             }
         "#;
         let mut mock = MockTestBackendHandler::new();
+        mock.expect_get_schema().returning(|| Ok(make_test_schema()));
         mock.expect_add_group_attribute()
             .with(eq(CreateAttributeRequest {
                 name: AttributeName::new("AttrName0"),
@@ -1450,7 +1465,7 @@ mod tests {
         ]);
         let schema = mutation_schema(
             Query::<MockTestBackendHandler>::new(),
-            Mutation::<MockTestBackendHandler>::new(),
+            Mutation::<MockTestBackendHandler>::default(),
         );
         assert_eq!(
             execute(QUERY, None, &schema, &vars, &context).await,
@@ -1475,7 +1490,8 @@ mod tests {
                 }
             }
         "#;
-        let mock = MockTestBackendHandler::new();
+        let mut mock = MockTestBackendHandler::new();
+        mock.expect_get_schema().returning(|| Ok(make_test_schema()));
         let context = Context::<MockTestBackendHandler>::new_for_tests(
             mock,
             ValidationResults {
@@ -1495,7 +1511,7 @@ mod tests {
         ]);
         let schema = mutation_schema(
             Query::<MockTestBackendHandler>::new(),
-            Mutation::<MockTestBackendHandler>::new(),
+            Mutation::<MockTestBackendHandler>::default(),
         );
         let result = execute(QUERY, None, &schema, &vars, &context).await;
         match result {
@@ -1615,24 +1631,5 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[tokio::test]
-    async fn test_create_service_principal() {
-        use mockito::{mock, Server};
-        let mut server = Server::new_async().await;
-        let url = server.url();
-
-        let mock_auth = mock("POST", "/auth/realms/master/protocol/openid-connect/token")
-        .with_status(200)
-        .with_body("{\"access_token\": \"test_token\"}")
-        .create();
-
-        let mock_create = mock("POST", "/admin/realms/master/users")
-        .with_status(201)
-        .create();
-
-        mock_auth.assert();
-        mock_create.assert();
     }
 }

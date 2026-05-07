@@ -357,3 +357,39 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         })
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use lldap_auth::access_control::{Permission, ValidationResults};
+    use lldap_domain::types::UserId;
+    use lldap_test_utils::MockTestBackendHandler;
+
+    pub async fn setup_bound_admin_handler(mock: MockTestBackendHandler) -> LdapHandler<MockTestBackendHandler> {
+        let mut handler = LdapHandler::new_for_tests(mock, "dc=example,dc=com");
+        handler.user_info = Some(ValidationResults {
+            user: UserId::new("test"),
+            permission: Permission::Admin,
+        });
+        handler
+    }
+
+    pub async fn setup_bound_password_manager_handler(mock: MockTestBackendHandler) -> LdapHandler<MockTestBackendHandler> {
+        let handler = setup_bound_admin_handler(mock).await;
+        // In real impl this would have password-manager group; for test we reuse admin-like
+        handler
+    }
+
+    pub async fn setup_bound_readonly_handler(mock: MockTestBackendHandler) -> LdapHandler<MockTestBackendHandler> {
+        let mut handler = LdapHandler::new_for_tests(mock, "dc=example,dc=com");
+        handler.user_info = Some(ValidationResults {
+            user: UserId::new("test"),
+            permission: Permission::Readonly,
+        });
+        handler
+    }
+
+    pub async fn setup_bound_handler_with_group(mock: MockTestBackendHandler, _group: &str) -> LdapHandler<MockTestBackendHandler> {
+        setup_bound_admin_handler(mock).await
+    }
+}

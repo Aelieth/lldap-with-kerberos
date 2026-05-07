@@ -29,3 +29,31 @@ pub(crate) async fn get_user_list<Backend: UserListerBackendHandler>(
             message: format!(r#"Error while searching user "{base}": {e:#}"#),
         })
 }
+
+#[cfg(test)]
+mod object_classes_tests {
+    use super::super::user::get_default_user_object_classes;
+
+    #[test]
+    fn default_user_object_classes_includes_kldap_extras() {
+        let classes: Vec<String> = get_default_user_object_classes()
+        .into_iter()
+        .map(|c| c.to_string())
+        .collect();
+
+        // From attributes.rs + public_schema.rs extras (KLLDAP 7.1)
+        assert!(classes.contains(&"top".to_string()));
+        assert!(classes.contains(&"person".to_string()));
+        assert!(classes.contains(&"inetOrgPerson".to_string()));
+        assert!(classes.contains(&"posixAccount".to_string()));
+        assert!(classes.contains(&"ldapPublicKey".to_string()));
+
+        // Should be stable order (top, person, then extras)
+        assert!(classes.len() >= 5);
+    }
+
+    #[test]
+    fn default_object_classes_are_not_empty() {
+        assert!(!get_default_user_object_classes().is_empty());
+    }
+}

@@ -111,10 +111,7 @@ mod tests {
     use super::*;
     use crate::handler::tests::setup_bound_admin_handler;
     use chrono::TimeZone;
-    use lldap_domain::{
-        types::{Group, GroupId, User},
-        uuid,
-    };
+    use lldap_domain::types::{Group, GroupId, User, Uuid};
     use lldap_domain_model::error::DomainError;
     use lldap_test_utils::MockTestBackendHandler;
     use mockall::predicate::eq;
@@ -158,7 +155,7 @@ mod tests {
                     id: GroupId(34),
                     display_name: GroupName::from("bob"),
                     creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+                    uuid: Uuid::from_name_and_date("bob", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
                     users: Vec::new(),
                     attributes: Vec::new(),
                     modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
@@ -289,7 +286,7 @@ mod tests {
                     id: GroupId(34),
                     display_name: GroupName::from("bob"),
                     creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+                    uuid: Uuid::from_name_and_date("bob", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
                     users: Vec::new(),
                     attributes: Vec::new(),
                     modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),

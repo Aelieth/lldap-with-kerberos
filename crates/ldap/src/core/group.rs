@@ -28,3 +28,25 @@ pub(crate) async fn get_groups_list<Backend: GroupListerBackendHandler>(
             message: format!(r#"Error while listing groups "{base}": {e:#}"#),
         })
 }
+
+#[cfg(test)]
+mod object_classes_tests {
+    use super::super::group::get_default_group_object_classes;
+
+    #[test]
+    fn default_group_object_classes_includes_posix() {
+        let classes: Vec<String> = get_default_group_object_classes()
+        .into_iter()
+        .map(|c| c.to_string())
+        .collect();
+
+        assert!(classes.contains(&"groupOfUniqueNames".to_string()));
+        assert!(classes.contains(&"groupOfNames".to_string()));
+        assert!(classes.contains(&"posixGroup".to_string()));
+    }
+
+    #[test]
+    fn default_object_classes_are_not_empty() {
+        assert!(!get_default_group_object_classes().is_empty());
+    }
+}

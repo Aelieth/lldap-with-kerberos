@@ -1140,7 +1140,7 @@ mod tests {
     use super::*;
     use crate::sql_backend_handler::tests::*;
     use lldap_auth::opaque::server::generate_random_private_key;
-    use lldap_domain::types::{Attribute, JpegPhoto};
+    use lldap_domain::types::Attribute;
     use lldap_domain_handlers::handler::SubStringFilter;
     use lldap_domain_model::model::UserColumn;
     use pretty_assertions::{assert_eq, assert_ne};
@@ -1563,7 +1563,7 @@ mod tests {
                          },
                          Attribute {
                              name: "avatar".into(),
-                     value: JpegPhoto::for_tests().into(),
+                     value: lldap_domain::images::make_test_avatar_value(),
                          },
                      ],
         })
@@ -1582,7 +1582,7 @@ mod tests {
             vec![
                 Attribute {
                     name: "avatar".into(),
-                   value: JpegPhoto::for_tests().into()
+                   value: lldap_domain::images::make_test_avatar_value()
                 },
                 Attribute {
                     name: "first_name".into(),
@@ -1607,7 +1607,7 @@ mod tests {
                      delete_attributes: vec!["last_name".into()],
                      insert_attributes: vec![Attribute {
                          name: "avatar".into(),
-                     value: JpegPhoto::for_tests().into(),
+                     value: lldap_domain::images::make_test_avatar_value(),
                      }],
                      ..Default::default()
         })
@@ -1625,7 +1625,7 @@ mod tests {
             vec![
                 Attribute {
                     name: "avatar".into(),
-                   value: JpegPhoto::for_tests().into()
+                   value: lldap_domain::images::make_test_avatar_value()
                 },
                 Attribute {
                     name: "first_name".into(),
@@ -1748,7 +1748,7 @@ mod tests {
             user_id: UserId::new("bob"),
                      insert_attributes: vec![Attribute {
                          name: "avatar".into(),
-                     value: JpegPhoto::for_tests().into(),
+                     value: lldap_domain::images::make_test_avatar_value(),
                      }],
                      ..Default::default()
         })
@@ -1762,7 +1762,7 @@ mod tests {
         .unwrap();
         let avatar = Attribute {
             name: "avatar".into(),
-            value: JpegPhoto::for_tests().into(),
+            value: lldap_domain::images::make_test_avatar_value(),
         };
         assert!(user.attributes.contains(&avatar));
         fixture
@@ -1771,7 +1771,7 @@ mod tests {
             user_id: UserId::new("bob"),
                      insert_attributes: vec![Attribute {
                          name: "avatar".into(),
-                     value: JpegPhoto::null().into(),
+                     value: lldap_domain::images::make_test_avatar_value(),
                      }],
                      ..Default::default()
         })
@@ -1807,7 +1807,7 @@ mod tests {
                          },
                          Attribute {
                              name: "avatar".into(),
-                     value: JpegPhoto::for_tests().into(),
+                     value: lldap_domain::images::make_test_avatar_value(),
                          },
                      ],
         })
@@ -1826,7 +1826,7 @@ mod tests {
             vec![
                 Attribute {
                     name: "avatar".into(),
-                   value: JpegPhoto::for_tests().into()
+                   value: lldap_domain::images::make_test_avatar_value()
                 },
                 Attribute {
                     name: "first_name".into(),

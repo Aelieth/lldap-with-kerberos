@@ -209,7 +209,7 @@ pub mod tests {
         LdapResult as LdapResultOp,
     };
     use ldap3_proto::{LdapPartialAttribute, proto::LdapExtendedRequest};
-    use lldap_domain::{types::*, uuid};
+    use lldap_domain::types::{*, Uuid};
     use lldap_test_utils::MockTestBackendHandler;
     use mockall::predicate::eq;
     use pretty_assertions::assert_eq;
@@ -302,7 +302,7 @@ pub mod tests {
                     group_id: GroupId(42),
                     display_name: "lldap_admin".into(),
                     creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                    uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+                    uuid: Uuid::from_name_and_date("bob", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
                     attributes: Vec::new(),
                     modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
                 });
@@ -560,7 +560,7 @@ pub mod tests {
             group_id: GroupId(0),
             display_name: "lldap_admin".into(),
             creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-            uuid: uuid!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+            uuid: Uuid::from_name_and_date("bob", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
             attributes: Vec::new(),
             modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
         });

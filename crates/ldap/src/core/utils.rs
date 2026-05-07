@@ -37,3 +37,47 @@ impl LdapInfo {
         })
     }
 }
+
+#[cfg(test)]
+mod utils_tests {
+    use super::super::utils::LdapInfo;
+    use lldap_domain::types::AttributeName;
+
+    #[test]
+    fn ldap_info_new_valid_base_dn() {
+        let info = LdapInfo::new(
+            "dc=example,dc=com",
+            vec![AttributeName::from("mail")],
+                                 vec![],
+        )
+        .expect("valid DN should parse");
+
+        assert_eq!(info.base_dn, vec![("dc".to_string(), "example".to_string()), ("dc".to_string(), "com".to_string())]);
+        assert_eq!(info.base_dn_str, "dc=example,dc=com");
+        assert_eq!(info.ignored_user_attributes.len(), 1);
+        assert!(info.ignored_group_attributes.is_empty());
+    }
+
+    #[test]
+    fn ldap_info_new_lowercases_and_trims() {
+        let info = LdapInfo::new("DC=Example, DC=COM", vec![], vec![]).unwrap();
+        assert_eq!(info.base_dn_str, "dc=example,dc=com");
+    }
+
+    #[test]
+    fn ldap_info_new_rejects_malformed_dn() {
+        // Missing value
+        assert!(LdapInfo::new("dc=example,dc", vec![], vec![]).is_err());
+        // Empty element
+        assert!(LdapInfo::new("dc=example,,dc=com", vec![], vec![]).is_err());
+        // Too many =
+        assert!(LdapInfo::new("dc=example=foo,dc=com", vec![], vec![]).is_err());
+    }
+
+    #[test]
+    fn ldap_info_reexports_are_available() {
+        // Just ensure the pub use doesn't break compilation / visibility
+        let _ = crate::core::utils::DEFAULT_PRIMARY_USER_OU;
+        let _ = crate::core::utils::DEFAULT_PRIMARY_GROUP_OU;
+    }
+}

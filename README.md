@@ -10,7 +10,7 @@ Built with aid of Grok / xAI. Thanks Grok and all of my agents - Tasker, Curiell
 
 Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
 
-~16,000 new lines added, ~8,000 lines removed. Designed for reliable home or lab use.
+~18,000 new lines added, ~11,000 lines removed. Designed for reliable home or lab use.
 
 ## Schema System – Single Source of Truth
 - All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`
@@ -49,9 +49,9 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - User table features real-time OU filtering, multi-field search, bulk selection with intelligent Select All, bulk Change OU, and bulk delete
 - Fully modular design — same OuSelector and OuTable will be reused for the Group table
 
-## Standardized LDAP support following RFC guidelines
+## LDAP Standardized support following RFC guidelines
+- Full standards compliant refactor with RFC guidelines, utilizing dynamic new public_schema information
 - LDAP can now be read and connected to via Directory Studios, even as strict as Apache
-- Full standards compliant with RFC guidelines, utilizing dynamic public_schema information
 - Modularized and memory efficient for lookups with POSIX and SSSD
 
 ## Other improvements / Bugfixes
@@ -60,12 +60,12 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
 - #739 [FEATURE REQUEST] SSSD integration support → POSIX groups added. Extra user and group classes inetOrgPerson, posixAccount, and posixGroup mappings.
 - #1165 [BUG] Users and groups objects are seen as containers, instead of leafs
+- #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator."
 
 ## Reccently implemented - needs testing
 - #712 [FEATURE REQUEST] SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure. → ssHPublicKey added to public_schema with ldapsearch functionality. Admins may enter keys for users or users may modify their own keys.
 - #1308 [FEATURE REQUEST] Implement GreaterOrEqual filter for builtin timestamps → extended ldap user.rs and group.rs with handler.rs extensions with appropriate GreaterOrEqual / LessOrEqual for timestamps
 - #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings → simple intercept fix inside of the convert_group_filter
-- #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator."
 
 ## TODOs before release
 - #756 / #847 [BUG] Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing

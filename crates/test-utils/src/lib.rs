@@ -17,6 +17,9 @@ use lldap_opaque_handler::{OpaqueHandler, login, registration};
 use lldap_schema::PublicSchema;
 use std::collections::HashSet;
 
+// Re-export the avatar test helpers so other crates can use them easily
+pub use lldap_domain::images::{make_test_jpeg_bytes, make_test_avatar_value};
+
 mockall::mock! {
     pub TestBackendHandler{}
     impl Clone for TestBackendHandler {
