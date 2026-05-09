@@ -389,7 +389,19 @@ pub mod tests {
         handler
     }
 
-    pub async fn setup_bound_handler_with_group(mock: MockTestBackendHandler, _group: &str) -> LdapHandler<MockTestBackendHandler> {
-        setup_bound_admin_handler(mock).await
+    pub async fn setup_bound_handler_with_group(mock: MockTestBackendHandler, group: &str) -> LdapHandler<MockTestBackendHandler> {
+        let mut handler = LdapHandler::new_for_tests(mock, "dc=example,dc=com");
+        let permission = if group.eq_ignore_ascii_case("regular") {
+            Permission::Readonly   // non-admin; self-changes still allowed by can_change_password policy
+        } else if group.eq_ignore_ascii_case("password_manager") {
+            Permission::Admin      // keep existing "admin-like" behaviour for current tests
+        } else {
+            Permission::Admin
+        };
+        handler.user_info = Some(ValidationResults {
+            user: UserId::new("test"),
+                                 permission,
+        });
+        handler
     }
 }

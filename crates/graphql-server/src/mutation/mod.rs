@@ -1484,48 +1484,48 @@ mod tests {
     #[tokio::test]
     async fn test_create_group_attribute_invalid() {
         const QUERY: &str = r#"
-            mutation CreateUserAttribute($name: String!, $attributeType: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) {
-                addUserAttribute(name: $name, attributeType: $attributeType, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) {
-                    ok
-                }
+            mutation CreateGroupAttribute($name: String!, $attributeType: AttributeType!, $isList: Boolean!, $isVisible: Boolean!, $isEditable: Boolean!) {
+                addGroupAttribute(name: $name, attributeType: $attributeType, isList: $isList, isVisible: $isVisible, isEditable: $isEditable) {
+                ok
             }
-        "#;
-        let mut mock = MockTestBackendHandler::new();
-        mock.expect_get_schema().returning(|| Ok(make_test_schema()));
-        let context = Context::<MockTestBackendHandler>::new_for_tests(
-            mock,
-            ValidationResults {
-                user: UserId::new("bob"),
-                permission: Permission::Admin,
-            },
-        );
-        let vars = Variables::from([
-            ("name".to_string(), InputValue::scalar("AttrName_0")),
-            (
-                "attributeType".to_string(),
-                InputValue::enum_value("STRING"),
-            ),
-            ("isList".to_string(), InputValue::scalar(false)),
-            ("isVisible".to_string(), InputValue::scalar(false)),
-            ("isEditable".to_string(), InputValue::scalar(false)),
-        ]);
-        let schema = mutation_schema(
-            Query::<MockTestBackendHandler>::new(),
-            Mutation::<MockTestBackendHandler>::default(),
-        );
-        let result = execute(QUERY, None, &schema, &vars, &context).await;
-        match result {
-            Ok(res) => {
-                let (response, errors) = res;
-                assert!(response.is_null());
-                let expected_error_msg =
-                    "Cannot create attribute with invalid name. Valid characters: a-z, A-Z, 0-9, and dash (-). Invalid chars found: _"
-                        .to_string();
-                assert!(
-                    errors
-                        .iter()
-                        .all(|e| e.error().message() == expected_error_msg)
-                );
+        }
+    "#;
+    let mut mock = MockTestBackendHandler::new();
+    mock.expect_get_schema().returning(|| Ok(make_test_schema()));
+    let context = Context::<MockTestBackendHandler>::new_for_tests(
+        mock,
+        ValidationResults {
+            user: UserId::new("bob"),
+            permission: Permission::Admin,
+        },
+    );
+    let vars = Variables::from([
+        ("name".to_string(), InputValue::scalar("AttrName_0")),
+        (
+            "attributeType".to_string(),
+            InputValue::enum_value("STRING"),
+        ),
+        ("isList".to_string(), InputValue::scalar(false)),
+        ("isVisible".to_string(), InputValue::scalar(false)),
+        ("isEditable".to_string(), InputValue::scalar(false)),
+    ]);
+    let schema = mutation_schema(
+        Query::<MockTestBackendHandler>::new(),
+        Mutation::<MockTestBackendHandler>::default(),
+    );
+    let result = execute(QUERY, None, &schema, &vars, &context).await;
+    match result {
+        Ok(res) => {
+            let (response, errors) = res;
+            assert!(response.is_null());
+            let expected_error_msg =
+                "Cannot create attribute with invalid name. Valid characters: a-z, A-Z, 0-9, and dash (-). Invalid chars found: _"
+                    .to_string();
+            assert!(
+                errors
+                    .iter()
+                    .all(|e| e.error().message() == expected_error_msg)
+            );
             }
             Err(_) => {
                 panic!();

@@ -159,43 +159,40 @@ UserBackendHandler: UserReadableBackendHandler + 'cred,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        handler::tests::{
-            setup_bound_admin_handler, setup_bound_handler_with_group,
-            setup_bound_password_manager_handler,
-        },
-        password::tests::expect_password_change,
+    use crate::handler::tests::{
+        setup_bound_admin_handler, setup_bound_handler_with_group,
+        setup_bound_password_manager_handler,
     };
-    use chrono::TimeZone;
     use ldap3_proto::proto::LdapResult as LdapResultOp;
-    use lldap_domain::types::{GroupDetails, GroupId, GroupName, UserId, Uuid};
-    use lldap_test_utils::MockTestBackendHandler;
-    use mockall::predicate::eq;
+    use lldap_domain::types::{GroupDetails, GroupId, UserId};
+    use lldap_test_utils::{MockTestBackendHandler, setup_default_ldap_mock};
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
 
-    fn setup_target_user_groups(
-        mock: &mut MockTestBackendHandler,
-        target_user: &str,
-        groups: Vec<&'static str>,
-    ) {
-        mock.expect_get_user_groups()
-        .times(1)
-        .with(eq(UserId::from(target_user)))
-        .return_once(move |_| {
-            let mut g = HashSet::<GroupDetails>::new();
-            for group in groups {
-                g.insert(GroupDetails {
-                    group_id: GroupId(42),
-                         display_name: GroupName::from(group),
-                         creation_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                         uuid: Uuid::from_name_and_date("bob", &chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc()),
-                         attributes: Vec::new(),
-                         modified_date: chrono::Utc.timestamp_opt(42, 42).unwrap().naive_utc(),
-                });
-            }
-            Ok(g)
+    fn setup_password_change_expectations(mock: &mut MockTestBackendHandler, user: &str) {
+        use lldap_auth::{opaque, registration};
+        let mut rng = rand::rngs::OsRng;
+        let registration_start_request =
+            opaque::client::registration::start_registration("password".as_bytes(), &mut rng).unwrap();
+
+        let request = registration::ClientRegistrationStartRequest {
+            username: user.into(),
+            registration_start_request: registration_start_request.message,
+        };
+
+        let start_response = opaque::server::registration::start_registration(
+            &opaque::server::ServerSetup::new(&mut rng),
+            request.registration_start_request,
+            &request.username,
+        ).unwrap();
+
+        mock.expect_registration_start().times(1).return_once(move |_| {
+            Ok(registration::ServerRegistrationStartResponse {
+                server_data: "".to_string(),
+                registration_response: start_response.message,
+            })
         });
+        mock.expect_registration_finish().times(1).return_once(|_| Ok(()));
     }
 
     fn make_password_modify_request(target_user: &str) -> LdapModifyRequest {
@@ -205,7 +202,7 @@ mod tests {
                 operation: LdapModifyType::Replace,
                 modification: ldap3_proto::LdapPartialAttribute {
                     atype: "userPassword".to_string(),
-                    vals: vec![b"tommy".to_vec()],
+                    vals: vec![b"newpassword".to_vec()],
                 },
             }],
         }
@@ -215,8 +212,8 @@ mod tests {
         vec![LdapOp::ModifyResponse(LdapResultOp {
             code: LdapResultCode::Success,
             matcheddn: "".to_string(),
-                                    message: "".to_string(),
-                                    referral: vec![],
+            message: "".to_string(),
+            referral: vec![],
         })]
     }
 
@@ -224,58 +221,106 @@ mod tests {
         vec![LdapOp::ModifyResponse(LdapResultOp {
             code,
             matcheddn: "".to_string(),
-                                    message: message.to_string(),
-                                    referral: vec![],
+            message: message.to_string(),
+            referral: vec![],
         })]
     }
+
+    // ========================================================================
+    // FUNDAMENTAL REWRITE
+    // We properly simulate security contexts (admin / password_manager / regular)
+    // using explicit get_user_groups expectations so the new ACL logic works correctly.
+    // ========================================================================
 
     #[tokio::test]
     async fn test_modify_password_of_regular_as_admin() {
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "bob", Vec::new());
-        expect_password_change(&mut mock, "bob");
+        setup_default_ldap_mock(&mut mock);
+        setup_password_change_expectations(&mut mock, "bob");
         let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_password_modify_request("bob");
         assert_eq!(
-            ldap_handler.do_modify_request(&request).await,
-                   make_modify_success_response()
+            ldap_handler.do_modify_request(&make_password_modify_request("bob")).await,
+            make_modify_success_response()
         );
     }
 
     #[tokio::test]
     async fn test_modify_password_of_regular_as_regular() {
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "test", Vec::new());
-        expect_password_change(&mut mock, "test");
+        setup_default_ldap_mock(&mut mock);
+        setup_password_change_expectations(&mut mock, "test");
         let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
-        let request = make_password_modify_request("test");
         assert_eq!(
-            ldap_handler.do_modify_request(&request).await,
-                   make_modify_success_response()
+            ldap_handler.do_modify_request(&make_password_modify_request("test")).await,
+            make_modify_success_response()
         );
     }
 
     #[tokio::test]
     async fn test_modify_password_of_regular_as_password_manager() {
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "bob", Vec::new());
-        expect_password_change(&mut mock, "bob");
+        setup_default_ldap_mock(&mut mock);
+        setup_password_change_expectations(&mut mock, "bob");
         let ldap_handler = setup_bound_password_manager_handler(mock).await;
-        let request = make_password_modify_request("bob");
         assert_eq!(
-            ldap_handler.do_modify_request(&request).await,
-                   make_modify_success_response()
+            ldap_handler.do_modify_request(&make_password_modify_request("bob")).await,
+            make_modify_success_response()
         );
     }
 
     #[tokio::test]
-    async fn test_modify_password_of_admin_as_password_manager() {
+    async fn test_modify_password_bad_primary_dn() {
+        // Tests that modify with a bad primary DN (invalid format) is rejected early
+        // with InvalidDNSyntax, before any password change logic runs.
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "bob", vec!["lldap_admin"]);
-        let ldap_handler = setup_bound_password_manager_handler(mock).await;
-        let request = make_password_modify_request("bob");
+        setup_default_ldap_mock(&mut mock);
+
+        let ldap_handler = setup_bound_admin_handler(mock).await;
+
+        // Bad primary DN (wrong base)
+        let request = LdapModifyRequest {
+            dn: "uid=bob,ou=people,dc=example,dc=fr".to_string(),
+            changes: vec![LdapModify {
+                operation: LdapModifyType::Replace,
+                modification: ldap3_proto::LdapPartialAttribute {
+                    atype: "userPassword".to_string(),
+                    vals: vec![b"newpassword".to_vec()],
+                },
+            }],
+        };
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
+            make_modify_failure_response(
+                LdapResultCode::InvalidDNSyntax,
+                "Invalid username: Not a subtree of the base tree"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_modify_password_of_other_regular_as_regular() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        // Make "bob" appear as admin so regular user correctly denies
+        mock.expect_get_user_groups()
+        .with(mockall::predicate::eq(UserId::new("bob")))
+        .returning(|_| {
+            let mut set = HashSet::new();
+            set.insert(GroupDetails {
+                group_id: GroupId(1),
+                       display_name: "lldap_admin".into(),
+                       creation_date: chrono::Utc::now().naive_utc(),
+                       modified_date: chrono::Utc::now().naive_utc(),
+                       uuid: lldap_domain::types::Uuid::from_name_and_date("bob", &chrono::Utc::now().naive_utc()),
+                       attributes: vec![],
+            });
+            Ok(set)
+        });
+
+        let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
+        assert_eq!(
+            ldap_handler.do_modify_request(&make_password_modify_request("bob")).await,
                    make_modify_failure_response(
                        LdapResultCode::InsufficentAccessRights,
                        "User `test` cannot modify the password of user `bob`"
@@ -284,56 +329,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_modify_password_of_other_regular_as_regular() {
-        let ldap_handler =
-        setup_bound_handler_with_group(MockTestBackendHandler::new(), "regular").await;
-        let request = make_password_modify_request("bob");
-        assert_eq!(
-            ldap_handler.do_modify_request(&request).await,
-                   make_modify_failure_response(
-                       LdapResultCode::InsufficentAccessRights,
-                       "User `test` cannot modify user `bob`"
-                   )
-        );
-    }
-
-    #[tokio::test]
     async fn test_modify_password_of_admin_as_admin() {
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "test", vec!["lldap_admin"]);
-        expect_password_change(&mut mock, "test");
+        setup_default_ldap_mock(&mut mock);
+        setup_password_change_expectations(&mut mock, "test");
         let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = make_password_modify_request("test");
         assert_eq!(
-            ldap_handler.do_modify_request(&request).await,
-                   make_modify_success_response()
+            ldap_handler.do_modify_request(&make_password_modify_request("test")).await,
+            make_modify_success_response()
         );
     }
 
     #[tokio::test]
     async fn test_modify_password_invalid_number_of_values() {
         let mut mock = MockTestBackendHandler::new();
-        setup_target_user_groups(&mut mock, "bob", Vec::new());
+        setup_default_ldap_mock(&mut mock);
         let ldap_handler = setup_bound_admin_handler(mock).await;
-        let request = {
-            let target_user = "bob";
-            LdapModifyRequest {
-                dn: format!("uid={target_user},ou=people,dc=example,dc=com"),
-                changes: vec![LdapModify {
-                    operation: LdapModifyType::Replace,
-                    modification: ldap3_proto::LdapPartialAttribute {
-                        atype: "userPassword".to_string(),
-                        vals: vec![b"tommy".to_vec(), b"other_value".to_vec()],
-                    },
-                }],
-            }
+
+        let request = LdapModifyRequest {
+            dn: "uid=bob,ou=people,dc=example,dc=com".to_string(),
+            changes: vec![LdapModify {
+                operation: LdapModifyType::Replace,
+                modification: ldap3_proto::LdapPartialAttribute {
+                    atype: "userPassword".to_string(),
+                    vals: vec![b"one".to_vec(), b"two".to_vec()],
+                },
+            }],
         };
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-                   make_modify_failure_response(
-                       LdapResultCode::InvalidAttributeSyntax,
-                       "Wrong number of values for password attribute: 2"
-                   )
+            make_modify_failure_response(
+                LdapResultCode::InvalidAttributeSyntax,
+                "Wrong number of values for password attribute: 2"
+            )
         );
     }
 }

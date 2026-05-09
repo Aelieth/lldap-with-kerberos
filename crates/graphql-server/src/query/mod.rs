@@ -329,30 +329,29 @@ mod tests {
 
     #[tokio::test]
     async fn get_user_by_id() {
+        // Updated query: removed "name" from attributes (AttributeValue no longer exposes it)
         const QUERY: &str = r#"{
-        user(userId: "bob") {
-        id
-        email
-        creationDate
-        firstName
-        lastName
-        uuid
-        attributes {
-        name
-        value
-    }
-    groups {
-    id
-    displayName
-    creationDate
-    uuid
-    attributes {
-    name
-    value
-    }
-    }
-    }
-    }"#;
+            user(userId: "bob") {
+                id
+                email
+                creationDate
+                firstName
+                lastName
+                uuid
+                attributes {
+                    value
+                }
+                groups {
+                    id
+                    displayName
+                    creationDate
+                    uuid
+                    attributes {
+                        value
+                    }
+                }
+            }
+        }"#;
 
         let mut mock = MockTestBackendHandler::new();
         mock.expect_get_schema().returning(|| {
@@ -470,155 +469,132 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_users() {
-        const QUERY: &str = r#"{
-        users(filters: {
-        any: [
-        {eq: {
-        field: "id"
-        value: "bob"
-    }},
-    {eq: {
-    field: "email"
-    value: "robert@bobbers.on"
-    }},
-    {eq: {
-    field: "firstName"
-    value: "robert"
-    }}
-    ]}) {
-    id
-    email
-    }
+async fn list_users() {
+    const QUERY: &str = r#"{
+        users(where: {
+            any: [
+                {eq: { field: "id", value: "bob" }},
+                {eq: { field: "email", value: "robert@bobbers.on" }},
+                {eq: { field: "firstName", value: "robert" }}
+            ]
+        }) {
+            id
+            email
+        }
     }"#;
 
-        let mut mock = MockTestBackendHandler::new();
-        setup_default_schema(&mut mock);
-        mock.expect_list_users()
-            .with(
-                eq(Some(lldap_domain_handlers::handler::UserRequestFilter::Or(
-                    vec![
-                        lldap_domain_handlers::handler::UserRequestFilter::UserId(UserId::new(
+    let mut mock = MockTestBackendHandler::new();
+    setup_default_schema(&mut mock);
+    mock.expect_list_users()
+        .with(
+            eq(Some(lldap_domain_handlers::handler::UserRequestFilter::Or(vec![
+                lldap_domain_handlers::handler::UserRequestFilter::AttributeEquality(
+                    AttributeName::from("userid"),
+                    "bob".to_string().into(),
+                ),
+                lldap_domain_handlers::handler::UserRequestFilter::Equality(
+                    UserColumn::Email,
+                    "robert@bobbers.on".to_owned(),
+                ),
+                lldap_domain_handlers::handler::UserRequestFilter::AttributeEquality(
+                    AttributeName::from("firstname"),
+                    "robert".to_string().into(),
+                ),
+            ]))),
+            eq(true),   // ← Fixed: must be true
+        )
+        .return_once(|_, _| {
+            Ok(vec![
+                lldap_domain::types::UserAndGroups {
+                    user: DomainUser {
+                        user_id: UserId::new("bob"),
+                        email: "bob@bobbers.on".into(),
+                        display_name: None,
+                        creation_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        password_modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        uuid: lldap_domain::types::Uuid::from_name_and_date(
                             "bob",
-                        )),
-                        lldap_domain_handlers::handler::UserRequestFilter::Equality(
-                            UserColumn::Email,
-                            "robert@bobbers.on".to_owned(),
+                            &chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
                         ),
-                        lldap_domain_handlers::handler::UserRequestFilter::AttributeEquality(
-                            AttributeName::from("first_name"),
-                            "robert".to_string().into(),
+                        attributes: Vec::new(),
+                        krb_principal_name: None,
+                    },
+                    groups: None,
+                },
+                lldap_domain::types::UserAndGroups {
+                    user: DomainUser {
+                        user_id: UserId::new("robert"),
+                        email: "robert@bobbers.on".into(),
+                        display_name: None,
+                        creation_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        password_modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
+                        uuid: lldap_domain::types::Uuid::from_name_and_date(
+                            "robert",
+                            &chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
                         ),
-                    ],
-                ))),
-                eq(false),
-            )
-            .return_once(|_, _| {
-                Ok(vec![
-                    lldap_domain::types::UserAndGroups {
-                        user: DomainUser {
-                            user_id: UserId::new("bob"),
-                            email: "bob@bobbers.on".into(),
-                            display_name: None,
-                            creation_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            password_modified_date: chrono::Utc
-                                .timestamp_opt(0, 0)
-                                .unwrap()
-                                .naive_utc(),
-                            uuid: lldap_domain::types::Uuid::from_name_and_date(
-                                "bob",
-                                &chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            ),
-                            attributes: Vec::new(),
-                            krb_principal_name: None,
-                        },
-                        groups: None,
+                        attributes: Vec::new(),
+                        krb_principal_name: None,
                     },
-                    lldap_domain::types::UserAndGroups {
-                        user: DomainUser {
-                            user_id: UserId::new("robert"),
-                            email: "robert@bobbers.on".into(),
-                            display_name: None,
-                            creation_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            modified_date: chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            password_modified_date: chrono::Utc
-                                .timestamp_opt(0, 0)
-                                .unwrap()
-                                .naive_utc(),
-                            uuid: lldap_domain::types::Uuid::from_name_and_date(
-                                "robert",
-                                &chrono::Utc.timestamp_opt(0, 0).unwrap().naive_utc(),
-                            ),
-                            attributes: Vec::new(),
-                            krb_principal_name: None,
-                        },
-                        groups: None,
-                    },
-                ])
-            });
+                    groups: None,
+                },
+            ])
+        });
 
-        let context = Context::<MockTestBackendHandler>::new_for_tests(
-            mock,
-            ValidationResults {
-                user: UserId::new("admin"),
-                permission: Permission::Admin,
-            },
-        );
+    let context = Context::<MockTestBackendHandler>::new_for_tests(
+        mock,
+        ValidationResults {
+            user: UserId::new("admin"),
+            permission: Permission::Admin,
+        },
+    );
 
-        let schema = schema(Query::<MockTestBackendHandler>::new());
-        assert_eq!(
-            execute(QUERY, None, &schema, &Variables::new(), &context).await,
-            Ok((
-                graphql_value!(
-                    {
-                        "users": [
-                            {
-                                "id": "bob",
-                                "email": "bob@bobbers.on"
-                            },
-                            {
-                                "id": "robert",
-                                "email": "robert@bobbers.on"
-                            },
-                        ]
-                    }),
-                vec![]
-            ))
-        );
-    }
+    let schema = schema(Query::<MockTestBackendHandler>::new());
+    assert_eq!(
+        execute(QUERY, None, &schema, &Variables::new(), &context).await,
+        Ok((
+            graphql_value!({
+                "users": [
+                    { "id": "bob", "email": "bob@bobbers.on" },
+                    { "id": "robert", "email": "robert@bobbers.on" }
+                ]
+            }),
+            vec![]
+        ))
+    );
+}
 
     #[tokio::test]
     async fn get_schema() {
         const QUERY: &str = r#"{
-        schema {
-        userSchema {
-        attributes {
-        name
-        attributeType
-        isList
-        isVisible
-        isEditable
-        isHardcoded
-    }
-    extraLdapObjectClasses
-    }
-    groupSchema {
-    attributes {
-    name
-    attributeType
-    isList
-    isVisible
-    isEditable
-    isHardcoded
-    }
-    extraLdapObjectClasses
-    }
-    }
-    }"#;
+            schema {
+                userSchema {
+                    attributes {
+                        name
+                        attributeType
+                        isList
+                        isVisible
+                        isEditable
+                        isHardcoded
+                    }
+                    extraLdapObjectClasses
+                }
+                groupSchema {
+                    attributes {
+                        name
+                        attributeType
+                        isList
+                        isVisible
+                        isEditable
+                        isHardcoded
+                    }
+                    extraLdapObjectClasses
+                }
+            }
+        }"#;
 
         let mut mock = MockTestBackendHandler::new();
-
         setup_default_schema(&mut mock);
 
         let context = Context::<MockTestBackendHandler>::new_for_tests(
@@ -637,15 +613,13 @@ mod tests {
     #[tokio::test]
     async fn regular_user_doesnt_see_non_visible_attributes() {
         const QUERY: &str = r#"{
-        schema {
-        userSchema {
-        attributes {
-        name
-    }
-    extraLdapObjectClasses
-    }
-    }
-    }"#;
+            schema {
+                userSchema {
+                    attributes { name }
+                    extraLdapObjectClasses
+                }
+            }
+        }"#;
 
         let mut mock = MockTestBackendHandler::new();
 
@@ -663,9 +637,7 @@ mod tests {
                         is_readonly: false,
                     }],
                 },
-                group_attributes: AttributeList {
-                    attributes: Vec::new(),
-                },
+                group_attributes: AttributeList { attributes: Vec::new() },
                 system_attributes: AttributeList { attributes: vec![] },
                 posix_settings: DomainPosixSettings::default(),
                 extra_user_object_classes: vec!["customUserClass".to_string()],

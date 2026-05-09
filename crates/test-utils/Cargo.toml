@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+chrono = { workspace = true }
 ldap3_proto = { workspace = true }
 mockall = { workspace = true }
 tracing = { workspace = true }

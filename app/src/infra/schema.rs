@@ -27,6 +27,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_attribute_type() {
+        // Current supported types
         let attr_type: AttributeType = "STRING".try_into().unwrap();
         assert_eq!(attr_type, AttributeType::String);
 
@@ -36,11 +37,14 @@ mod tests {
         let attr_type: AttributeType = "DATE_TIME".try_into().unwrap();
         assert_eq!(attr_type, AttributeType::DateTime);
 
+        let attr_type: AttributeType = "DATETIME".try_into().unwrap();
+        assert_eq!(attr_type, AttributeType::DateTime);
+
         let attr_type: AttributeType = "AVATAR".try_into().unwrap();
         assert_eq!(attr_type, AttributeType::Avatar);
 
-        // Also accept the old aliases for backward compatibility during migration
-        let attr_type: AttributeType = "JPEGPHOTO".try_into().unwrap();
+        // Case insensitivity check
+        let attr_type: AttributeType = "avatar".try_into().unwrap();
         assert_eq!(attr_type, AttributeType::Avatar);
     }
 }

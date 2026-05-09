@@ -1,5 +1,5 @@
 query ListUsers {
-  users(filters: null) {
+  users(where: null) {
     id
   }
 }

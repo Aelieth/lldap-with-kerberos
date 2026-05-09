@@ -294,6 +294,16 @@ pub fn convert_group_filter(
                     warn!("Invalid member filter on group: {}", e);
                     GroupRequestFilter::False
                 })),
+                crate::core::utils::GroupFieldType::UniqueMember => Ok(get_user_id_from_distinguished_name_or_plain_name(
+                    &value_lc,
+                    &ldap_info.base_dn,
+                    &ldap_info.base_dn_str,
+                )
+                .map(GroupRequestFilter::Member)
+                .unwrap_or_else(|e| {
+                    warn!("Invalid uniqueMember filter on group: {}", e);
+                    GroupRequestFilter::False
+                })),
                 crate::core::utils::GroupFieldType::ObjectClass => Ok(GroupRequestFilter::And(vec![])),
                 crate::core::utils::GroupFieldType::Dn | crate::core::utils::GroupFieldType::EntryDn => {
                     Ok(get_group_id_from_distinguished_name_or_plain_name(

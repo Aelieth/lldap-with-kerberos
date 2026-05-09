@@ -336,6 +336,19 @@ pub fn get_group_attribute(
                 .collect();
             members.into_iter().map(|s| s.into_bytes()).collect()
         }
+        crate::core::utils::GroupFieldType::UniqueMember => {
+            // uniqueMember is the standard attribute for groupOfUniqueNames (RFC 4519)
+            // Use the exact same logic as Member
+            let members: std::collections::BTreeSet<_> = group.users.iter()
+                .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
+                .map(|u| {
+                    let rdn_chain = internal_ou_to_ldap_rdn_chain(&u.ou);
+                    let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
+                    format!("uid={},{}", u.user_id, ou_part + "," + base_dn_str)
+                })
+                .collect();
+            members.into_iter().map(|s| s.into_bytes()).collect()
+        }
         crate::core::utils::GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
         crate::core::utils::GroupFieldType::Attribute(attr, _, _) => {
             let values = get_custom_attribute(&group.attributes, &attr)?;

@@ -200,6 +200,11 @@ impl SchemaManager {
             };
         }
 
+        // Explicit handling for uniqueMember (standard for groupOfUniqueNames)
+        if field.as_str().eq_ignore_ascii_case("uniquemember") {
+            return GroupFieldType::UniqueMember;
+        }
+
         schema
             .get_schema()
             .group_attributes

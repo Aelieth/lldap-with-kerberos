@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono;
 use lldap_domain::{
     requests::{
         CreateAttributeRequest, CreateGroupRequest, CreateUserRequest, UpdateGroupRequest,
@@ -74,17 +75,14 @@ mockall::mock! {
     #[async_trait]
     impl OpaqueHandler for TestBackendHandler {
         async fn login_start(
-            &self,
-            request: login::ClientLoginStartRequest
+            &self, request: login::ClientLoginStartRequest
         ) -> Result<login::ServerLoginStartResponse>;
         async fn login_finish(&self, request: login::ClientLoginFinishRequest) -> Result<UserId>;
         async fn registration_start(
-            &self,
-            request: registration::ClientRegistrationStartRequest
+            &self, request: registration::ClientRegistrationStartRequest
         ) -> Result<registration::ServerRegistrationStartResponse>;
         async fn registration_finish(
-            &self,
-            request: registration::ClientRegistrationFinishRequest
+            &self, request: registration::ClientRegistrationFinishRequest
         ) -> Result<()>;
     }
     #[async_trait]
@@ -103,15 +101,46 @@ mockall::mock! {
         async fn get_allowed_ous(&self) -> Result<Vec<String>>;
         async fn set_system_config(&self, key: &str, value: String) -> Result<()>;
         async fn ensure_kerberos_principal_consistency(
-            &self,
-            user_id: &UserId,
-            enabled: bool,
+            &self, user_id: &UserId, enabled: bool,
         ) -> Result<()>;
     }
 }
 
 pub fn setup_default_schema(mock: &mut MockTestBackendHandler) {
     mock.expect_get_schema().returning(|| {
-        Ok(PublicSchema::get())   // now returns PublicSchema directly
+        Ok(PublicSchema::get())
     });
+}
+
+/// Robust default mock for all LDAP tests.
+/// This provides sensible defaults so individual tests only need to override what they assert on.
+pub fn setup_default_ldap_mock(mock: &mut MockTestBackendHandler) {
+    setup_default_schema(mock);
+
+    // New OU system
+    mock.expect_get_allowed_ous()
+        .returning(|| Ok(vec!["people".to_string(), "groups".to_string()]));
+
+    // Default user details
+    mock.expect_get_user_details()
+        .returning(|uid| {
+            Ok(User {
+                user_id: uid.clone(),
+                email: format!("{}@example.com", uid.as_str()).into(),
+                display_name: None,
+                creation_date: chrono::Utc::now().naive_utc(),
+                modified_date: chrono::Utc::now().naive_utc(),
+                password_modified_date: chrono::Utc::now().naive_utc(),
+                uuid: lldap_domain::types::Uuid::from_name_and_date(
+                    uid.as_str(),
+                    &chrono::Utc::now().naive_utc(),
+                ),
+                attributes: vec![],
+                krb_principal_name: None,
+            })
+        });
+
+    // Default empty groups (most tests expect this)
+    mock.expect_get_user_groups()
+        .returning(|_| Ok(HashSet::new()));
 }

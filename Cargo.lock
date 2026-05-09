@@ -3258,6 +3258,7 @@ name = "lldap_test_utils"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "ldap3_proto",
  "lldap_access_control",
  "lldap_domain",
