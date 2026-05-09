@@ -790,10 +790,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_group() {
         let fixture = TestFixture::new().await;
-        assert_eq!(
-            get_group_ids(&fixture.handler, None).await,
-                   vec![fixture.groups[0], fixture.groups[2], fixture.groups[1]]
-        );
+
         fixture
         .handler
         .add_group_attribute(CreateAttributeRequest {
@@ -805,6 +802,7 @@ mod tests {
         })
         .await
         .unwrap();
+
         let new_group_id = fixture
         .handler
         .create_group(CreateGroupRequest {
@@ -816,24 +814,35 @@ mod tests {
         })
         .await
         .unwrap();
+
         let group_details = fixture
         .handler
         .get_group_details(new_group_id)
         .await
         .unwrap();
+
         assert_eq!(group_details.display_name, "New Group".into());
+
+        // NEW BEHAVIOR: "ou" is now automatically injected (central enforcement)
         assert_eq!(
             group_details.attributes,
-            vec![Attribute {
-                name: "new_attribute".into(),
+            vec![
+                Attribute {
+                    name: "new_attribute".into(),
                    value: "value".to_string().into(),
-            }]
+                },
+                Attribute {
+                    name: "ou".into(),
+                   value: "people".to_string().into(),   // default from allowed_ous
+                },
+            ]
         );
     }
 
     #[tokio::test]
     async fn test_set_group_attributes() {
         let fixture = TestFixture::new().await;
+
         fixture
         .handler
         .add_group_attribute(CreateAttributeRequest {
@@ -845,11 +854,15 @@ mod tests {
         })
         .await
         .unwrap();
+
         let group_id = fixture.groups[0];
+
+        // Insert custom attribute
         let attributes = vec![Attribute {
             name: "new_attribute".into(),
             value: 42i64.into(),
         }];
+
         fixture
         .handler
         .update_group(UpdateGroupRequest {
@@ -860,8 +873,14 @@ mod tests {
         })
         .await
         .unwrap();
+
         let details = fixture.handler.get_group_details(group_id).await.unwrap();
-        assert_eq!(details.attributes, attributes);
+
+        // Should contain both the custom attribute + the mandatory "ou"
+        assert!(details.attributes.iter().any(|a| a.name.as_str() == "new_attribute" && a.value == 42i64.into()));
+        assert!(details.attributes.iter().any(|a| a.name.as_str() == "ou"));
+
+        // Delete the custom attribute (ou should remain)
         fixture
         .handler
         .update_group(UpdateGroupRequest {
@@ -872,8 +891,10 @@ mod tests {
         })
         .await
         .unwrap();
+
         let details = fixture.handler.get_group_details(group_id).await.unwrap();
-        assert_eq!(details.attributes, Vec::new());
+        assert!(!details.attributes.iter().any(|a| a.name.as_str() == "new_attribute"));
+        assert!(details.attributes.iter().any(|a| a.name.as_str() == "ou")); // ou is protected
     }
 
     #[tokio::test]

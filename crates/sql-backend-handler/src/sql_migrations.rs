@@ -1444,6 +1444,51 @@ async fn migrate_to_v12(transaction: DatabaseTransaction) -> Result<DatabaseTran
         .execute(sea_orm::Statement::from_string(backend, insert_ou_groups_sql))
         .await;
 
+    // 8. Normalize legacy attribute names → canonical names from PublicSchema
+    //    (critical data integrity fix: pre-v12 rows used aliases like "first_name";
+    //     v12 re-seeded schema with canonical names only, leaving stale data.
+    //     This step ensures every EAV row uses the canonical name going forward.)
+    for attr in &schema.user_attributes.attributes {
+        if attr.aliases.is_empty() {
+            continue;
+        }
+        let canonical = attr.name.as_str();
+        for alias in &attr.aliases {
+            let update_sql = format!(
+                "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
+                UserAttributes::Table.to_string(),
+                UserAttributes::UserAttributeName.to_string(),
+                canonical,
+                UserAttributes::UserAttributeName.to_string(),
+                alias
+            );
+            let _ = transaction
+                .execute(sea_orm::Statement::from_string(backend, update_sql))
+                .await;
+        }
+    }
+    for attr in &schema.group_attributes.attributes {
+        if attr.aliases.is_empty() {
+            continue;
+        }
+        let canonical = attr.name.as_str();
+        for alias in &attr.aliases {
+            let update_sql = format!(
+                "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
+                GroupAttributes::Table.to_string(),
+                GroupAttributes::GroupAttributeName.to_string(),
+                canonical,
+                GroupAttributes::GroupAttributeName.to_string(),
+                alias
+            );
+            let _ = transaction
+                .execute(sea_orm::Statement::from_string(backend, update_sql))
+                .await;
+        }
+    }
+
+    info!("Normalized legacy attribute names to canonical PublicSchema names (data integrity)");
+
     info!("Seeded system_config.allowedous = [\"people\", \"groups\"] as new single source of truth");
 
     Ok(transaction)

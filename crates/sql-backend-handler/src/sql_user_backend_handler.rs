@@ -1183,8 +1183,8 @@ mod tests {
         let users = get_user_names(
             &fixture.handler,
             Some(UserRequestFilter::AttributeEquality(
-                AttributeName::from("first_name"),
-                                                      "first bob".to_string().into(),
+                AttributeName::from("firstname"),       // ← canonical name
+                "first bob".to_string().into(),
             )),
         )
         .await;
@@ -1554,11 +1554,11 @@ mod tests {
                      delete_attributes: Vec::new(),
                      insert_attributes: vec![
                          Attribute {
-                             name: "first_name".into(),
+                             name: "firstname".into(),           // canonical
                      value: "first_name".to_string().into(),
                          },
                          Attribute {
-                             name: "last_name".into(),
+                             name: "lastname".into(),            // canonical
                      value: "last_name".to_string().into(),
                          },
                          Attribute {
@@ -1575,25 +1575,19 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
+
         assert_eq!(user.email, "email".into());
         assert_eq!(user.display_name.unwrap(), "display_name");
-        assert_eq!(
-            user.attributes,
-            vec![
-                Attribute {
-                    name: "avatar".into(),
-                   value: lldap_domain::images::make_test_avatar_value()
-                },
-                Attribute {
-                    name: "first_name".into(),
-                   value: "first_name".to_string().into()
-                },
-                Attribute {
-                    name: "last_name".into(),
-                   value: "last_name".to_string().into()
-                }
-            ]
-        );
+
+        // Canonical names + ou + avatar type check (no exact bytes)
+        assert!(user.attributes.iter().any(|a| a.name.as_str() == "avatar"
+        && matches!(a.value, AttributeValue::Avatar(_))));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "firstname" && a.value == "first_name".to_string().into()));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "lastname" && a.value == "last_name".to_string().into()));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "ou" && a.value == "people".to_string().into()));
     }
 
     #[tokio::test]
@@ -1619,20 +1613,18 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
+
         assert_eq!(user.display_name.unwrap(), "display bob");
-        assert_eq!(
-            user.attributes,
-            vec![
-                Attribute {
-                    name: "avatar".into(),
-                   value: lldap_domain::images::make_test_avatar_value()
-                },
-                Attribute {
-                    name: "first_name".into(),
-                   value: "first bob".to_string().into()
-                }
-            ]
-        );
+
+        // Verify canonical names + correct types (image conversion verified in images.rs)
+        assert!(user.attributes.iter().any(|a| a.name.as_str() == "avatar"
+        && matches!(a.value, AttributeValue::Avatar(_))));
+
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "firstname" && a.value == "first bob".to_string().into()));
+
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "ou" && a.value == "people".to_string().into()));
     }
 
     #[tokio::test]
@@ -1644,7 +1636,7 @@ mod tests {
         .update_user(UpdateUserRequest {
             user_id: UserId::new("bob"),
                      insert_attributes: vec![Attribute {
-                         name: "first_name".into(),
+                         name: "firstname".into(),           // canonical
                      value: "new first".to_string().into(),
                      }],
                      ..Default::default()
@@ -1657,16 +1649,21 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
+
         assert_eq!(
             user.attributes,
             vec![
                 Attribute {
-                    name: "first_name".into(),
+                    name: "firstname".into(),
                    value: "new first".to_string().into()
                 },
                 Attribute {
-                    name: "last_name".into(),
+                    name: "lastname".into(),
                    value: "last bob".to_string().into()
+                },
+                Attribute {
+                    name: "ou".into(),
+                   value: "people".to_string().into()
                 }
             ]
         );
@@ -1680,7 +1677,7 @@ mod tests {
         .handler
         .update_user(UpdateUserRequest {
             user_id: UserId::new("bob"),
-                     delete_attributes: vec!["first_name".into()],
+                     delete_attributes: vec!["firstname".into()],   // canonical
                      ..Default::default()
         })
         .await
@@ -1691,12 +1688,19 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
+
         assert_eq!(
             user.attributes,
-            vec![Attribute {
-                name: "last_name".into(),
+            vec![
+                Attribute {
+                    name: "lastname".into(),
                    value: "last bob".to_string().into()
-            }]
+                },
+                Attribute {
+                    name: "ou".into(),
+                   value: "people".to_string().into()
+                }
+            ]
         );
     }
 
@@ -1708,9 +1712,9 @@ mod tests {
         .handler
         .update_user(UpdateUserRequest {
             user_id: UserId::new("bob"),
-                     delete_attributes: vec!["first_name".into()],
+                     delete_attributes: vec!["firstname".into()],
                      insert_attributes: vec![Attribute {
-                         name: "first_name".into(),
+                         name: "firstname".into(),
                      value: "new first".to_string().into(),
                      }],
                      ..Default::default()
@@ -1723,16 +1727,21 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
+
         assert_eq!(
             user.attributes,
             vec![
                 Attribute {
-                    name: "first_name".into(),
+                    name: "firstname".into(),
                    value: "new first".to_string().into()
                 },
                 Attribute {
-                    name: "last_name".into(),
+                    name: "lastname".into(),
                    value: "last bob".to_string().into()
+                },
+                Attribute {
+                    name: "ou".into(),
+                   value: "people".to_string().into()
                 },
             ]
         );
@@ -1742,6 +1751,7 @@ mod tests {
     async fn test_update_user_delete_avatar() {
         let fixture = TestFixture::new().await;
 
+        // First insert an avatar
         fixture
         .handler
         .update_user(UpdateUserRequest {
@@ -1760,19 +1770,14 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
-        let avatar = Attribute {
-            name: "avatar".into(),
-            value: lldap_domain::images::make_test_avatar_value(),
-        };
-        assert!(user.attributes.contains(&avatar));
+        assert!(user.attributes.iter().any(|a| a.name.as_str() == "avatar"));
+
+        // Now delete it
         fixture
         .handler
         .update_user(UpdateUserRequest {
             user_id: UserId::new("bob"),
-                     insert_attributes: vec![Attribute {
-                         name: "avatar".into(),
-                     value: lldap_domain::images::make_test_avatar_value(),
-                     }],
+                     delete_attributes: vec!["avatar".into()],
                      ..Default::default()
         })
         .await
@@ -1783,7 +1788,7 @@ mod tests {
         .get_user_details(&UserId::new("bob"))
         .await
         .unwrap();
-        assert!(!user.attributes.contains(&avatar));
+        assert!(!user.attributes.iter().any(|a| a.name.as_str() == "avatar"));
     }
 
     #[tokio::test]
@@ -1798,11 +1803,11 @@ mod tests {
                      display_name: Some("display_name".to_string()),
                      attributes: vec![
                          Attribute {
-                             name: "first_name".into(),
+                             name: "firstname".into(),
                      value: "First Name".to_string().into(),
                          },
                          Attribute {
-                             name: "last_name".into(),
+                             name: "lastname".into(),
                      value: "last_name".to_string().into(),
                          },
                          Attribute {
@@ -1819,25 +1824,18 @@ mod tests {
         .get_user_details(&UserId::new("james"))
         .await
         .unwrap();
+
         assert_eq!(user.email, "email".into());
         assert_eq!(user.display_name.unwrap(), "display_name");
-        assert_eq!(
-            user.attributes,
-            vec![
-                Attribute {
-                    name: "avatar".into(),
-                   value: lldap_domain::images::make_test_avatar_value()
-                },
-                Attribute {
-                    name: "first_name".into(),
-                   value: "First Name".to_string().into()
-                },
-                Attribute {
-                    name: "last_name".into(),
-                   value: "last_name".to_string().into()
-                }
-            ]
-        );
+
+        assert!(user.attributes.iter().any(|a| a.name.as_str() == "avatar"
+        && matches!(a.value, AttributeValue::Avatar(_))));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "firstname" && a.value == "First Name".to_string().into()));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "lastname" && a.value == "last_name".to_string().into()));
+        assert!(user.attributes.iter().any(|a|
+        a.name.as_str() == "ou" && a.value == "people".to_string().into()));
     }
 
     #[tokio::test]

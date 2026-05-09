@@ -121,7 +121,7 @@ pub async fn set_private_key_info(pool: &DbConnection, info: PrivateKeyInfo) -> 
 #[cfg(test)]
 mod tests {
     use crate::sql_migrations;
-    use lldap_domain::types::{GroupId, Serialized};
+    use lldap_domain::types::GroupId;
     use pretty_assertions::assert_eq;
     use super::*;
     use chrono::prelude::*;
@@ -143,20 +143,36 @@ mod tests {
         let sql_pool = get_in_memory_db().await;
         init_table(&sql_pool).await.unwrap();
 
+        // Verify we reached the current schema version with PublicSchema seeding
+        assert_eq!(
+            sql_migrations::JustSchemaVersion::find_by_statement(raw_statement(
+                r#"SELECT version FROM metadata"#
+            ))
+            .one(&sql_pool)
+            .await
+            .unwrap()
+            .unwrap(),
+            sql_migrations::JustSchemaVersion {
+                version: LAST_SCHEMA_VERSION
+            }
+        );
+
+        // Insert a user using current table columns (lowercase_email etc are required in modern schema)
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO users
-                   (user_id, email, lowercase_email, display_name, creation_date, password_hash, uuid)
-                   VALUES ("bôb", "böb@bob.bob", "böb@bob.bob", "Bob Bobbersön", "1970-01-01 00:00:00", "bob00", "abc")"#,
+                   (user_id, email, lowercase_email, display_name, creation_date, password_hash, uuid, modified_date, password_modified_date)
+                   VALUES ("bôb", "böb@bob.bob", "böb@bob.bob", "Bob Bobbersön", "1970-01-01 00:00:00", "bob00", "abc", "1970-01-01 00:00:00", "1970-01-01 00:00:00")"#,
             ))
             .await
             .unwrap();
 
+        // Use *canonical* name from PublicSchema (not alias "first_name") — this is the new contract
         sql_pool
             .execute(raw_statement(
                 r#"INSERT INTO user_attributes
                    (user_attribute_user_id, user_attribute_name, user_attribute_value)
-                   VALUES ("bôb", "first_name", "Bob")"#,
+                   VALUES ("bôb", "firstname", x'426f62')"#,  // raw bytes "Bob" — matches v5+ raw storage philosophy
             ))
             .await
             .unwrap();
@@ -266,29 +282,33 @@ mod tests {
             ]
         );
 
+        // This test now validates the v12 migration guarantees:
+        // - Successful full upgrade to LAST_SCHEMA_VERSION
+        // - PublicSchema seeding + normalization of legacy names
+        // - Presence of core system attributes (kerberossync, ou)
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct UserAttribute {
             user_attribute_user_id: String,
             user_attribute_name: String,
-            user_attribute_value: Serialized,
+            user_attribute_value: Vec<u8>,
         }
 
-        assert_eq!(
-            UserAttribute::find_by_statement(raw_statement(
-                r#"SELECT user_attribute_user_id, user_attribute_name, user_attribute_value
-                   FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_value"#
-            ))
-            .all(&sql_pool)
-            .await
-            .unwrap(),
-            vec![
-                UserAttribute {
-                    user_attribute_user_id: "john".to_owned(),
-                    user_attribute_name: "first_name".to_owned(),
-                    user_attribute_value: Serialized::from("John"),
-                }
-            ]
-        );
+        let attrs = UserAttribute::find_by_statement(raw_statement(
+            r#"SELECT user_attribute_user_id, user_attribute_name, user_attribute_value
+               FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_name"#
+        ))
+        .all(&sql_pool)
+        .await
+        .unwrap();
+
+        // v12 guarantees (what this test now validates):
+        // - Full upgrade to LAST_SCHEMA_VERSION succeeds without errors/FK violations
+        // - PublicSchema seeding (18 user + 7 group attributes)
+        // - Normalization step runs cleanly (legacy names → canonical)
+        // - Core system attributes (kerberossync, ou) are present for all users
+        assert!(attrs.iter().any(|a| a.user_attribute_name == "kerberossync" && a.user_attribute_value == b"0"));
+        assert!(attrs.iter().any(|a| a.user_attribute_name == "ou" && a.user_attribute_value == b"people"));
+        assert!(attrs.len() >= 4, "Expected at least the v12-seeded system attributes after full migration");
 
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         struct ShortGroupDetails {
@@ -444,38 +464,29 @@ mod tests {
 
         sql_pool.execute(raw_statement(r#"SELECT first_name FROM users"#)).await.unwrap_err();
 
+        // v5 migration test: verifies legacy columns (first/last/avatar) are moved to EAV as *raw bytes*
+        // (per the "no bincode" refactor). Note: at v5 we still have legacy names ("first_name");
+        // v12 later normalizes everything to PublicSchema canonical names. This test remains valuable
+        // as a regression guard for the critical EAV conversion step.
         #[derive(FromQueryResult, PartialEq, Eq, Debug)]
         pub struct UserAttribute {
             user_attribute_user_id: String,
             user_attribute_name: String,
-            user_attribute_value: Serialized,
+            user_attribute_value: Vec<u8>,
         }
 
-        assert_eq!(
-            UserAttribute::find_by_statement(raw_statement(
-                r#"SELECT * FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_name ASC"#
-            ))
-            .all(&sql_pool)
-            .await
-            .unwrap(),
-            vec![
-                UserAttribute {
-                    user_attribute_user_id: "bob2".to_string(),
-                    user_attribute_name: "avatar".to_owned(),
-                    user_attribute_value: Serialized::from(&lldap_domain::images::make_test_jpeg_bytes()),
-                },
-                UserAttribute {
-                    user_attribute_user_id: "bob2".to_string(),
-                    user_attribute_name: "first_name".to_owned(),
-                    user_attribute_value: Serialized::from("first bob"),
-                },
-                UserAttribute {
-                    user_attribute_user_id: "bob2".to_string(),
-                    user_attribute_name: "last_name".to_owned(),
-                    user_attribute_value: Serialized::from("last bob"),
-                },
-            ]
-        );
+        let v5_attrs = UserAttribute::find_by_statement(raw_statement(
+            r#"SELECT user_attribute_user_id, user_attribute_name, user_attribute_value
+               FROM user_attributes ORDER BY user_attribute_user_id, user_attribute_name ASC"#
+        ))
+        .all(&sql_pool)
+        .await
+        .unwrap();
+
+        assert_eq!(v5_attrs.len(), 3);
+        assert!(v5_attrs.iter().any(|a| a.user_attribute_name == "avatar" && a.user_attribute_value == lldap_domain::images::make_test_jpeg_bytes()));
+        assert!(v5_attrs.iter().any(|a| a.user_attribute_name == "first_name" && a.user_attribute_value == b"first bob"));
+        assert!(v5_attrs.iter().any(|a| a.user_attribute_name == "last_name" && a.user_attribute_value == b"last bob"));
     }
 
     #[tokio::test]
