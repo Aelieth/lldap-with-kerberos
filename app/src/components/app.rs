@@ -262,12 +262,9 @@ impl App {
               <a href="https://github.com/Aelieth/lldap-with-kerberos" class="me-4 text-reset">
                 <i class="bi-github"></i>
               </a>
-              <a href="https://discord.gg/h5PEdRMNyP" class="me-4 text-reset">
-                <i class="bi-discord"></i>
-              </a>
             </div>
             <div>
-              <span>{"License "}<a href="https://github.com/lldap/lldap/blob/main/LICENSE" class="link-secondary">{"GNU GPL"}</a></span>
+              <span>{"License "}<a href="https://github.com/Aelieth/lldap-with-kerberos/blob/main/LICENSE" class="link-secondary">{"GNU GPL"}</a></span>
             </div>
           </footer>
         }

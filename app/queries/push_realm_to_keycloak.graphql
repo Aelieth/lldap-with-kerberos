@@ -1,13 +1,5 @@
-mutation PushRealmToKeycloak($url: String!, $realm: String!, $admin_user: String!, $admin_pass: String!, $lldap_url: String!, $sync_username: String!, $sync_password: String!) {
-  pushRealmToKeycloak(
-    url: $url
-    realm: $realm
-    adminUser: $admin_user
-    adminPass: $admin_pass
-    lldapUrl: $lldap_url
-    syncUsername: $sync_username
-    syncPassword: $sync_password
-  ) {
+mutation PushRealmToKeycloak($input: PushRealmToKeycloakInput!) {
+  pushRealmToKeycloak(input: $input) {
     ok
     message
   }

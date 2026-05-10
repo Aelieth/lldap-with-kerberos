@@ -3,6 +3,6 @@
 # Password not saved here, set via env var LLDAP_KEYCLOAK_ADMIN_PASS
 # Edit via "Federation" settings in UI.
 
-url = "http://keycloak:8080"
+url = "http://localhost:8080"
 realm = "master"
 admin_user = "admin"

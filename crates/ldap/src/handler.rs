@@ -161,25 +161,51 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
 
     #[instrument(skip_all, level = "debug", fields(dn = %request.dn))]
     pub async fn do_bind(&mut self, request: &LdapBindRequest) -> Vec<LdapOp> {
-        let (code, message) =
+        let (code, message) = {
             match password::do_bind(self.ldap_info, request, self.get_login_handler()).await {
                 Ok(user_id) => {
-                    self.user_info = self
-                        .backend_handler
-                        .get_permissions_for_user(user_id)
-                        .await
-                        .ok();
-                    debug!("Success!");
-                    (LdapResultCode::Success, "".to_string())
+                    // Strict OU enforcement
+                    let inner = self.backend_handler.unsafe_get_handler();
+                    match inner.get_user_details(&user_id).await {
+                        Ok(user) => {
+                            let stored_ou = crate::attributes::get_user_ou(&user);
+                            let provided_ou = if let Ok(parts) =
+                            crate::dn::parse_distinguished_name(&request.dn.to_ascii_lowercase())
+                            {
+                                crate::dn::get_internal_ou_from_dn_parts(&parts)
+                            } else {
+                                String::new()
+                            };
+
+                            if provided_ou.eq_ignore_ascii_case(&stored_ou) {
+                                self.user_info = self
+                                .backend_handler
+                                .get_permissions_for_user(user_id)
+                                .await
+                                .ok();
+                                debug!("Success! OU verified: {}", stored_ou);
+                                (LdapResultCode::Success, "".to_string())
+                            } else {
+                                debug!(
+                                    "Bind rejected - OU mismatch: provided='{}', stored='{}'",
+                                    provided_ou, stored_ou
+                                );
+                                (LdapResultCode::InvalidCredentials, "".to_string())
+                            }
+                        }
+                        Err(_) => (LdapResultCode::InvalidCredentials, "".to_string()),
+                    }
                 }
                 Err(err) => (err.code, err.message),
-            };
+            }
+        };
+
         vec![LdapOp::BindResponse(LdapBindResponse {
             res: LdapResultOp {
                 code,
                 matcheddn: "".to_string(),
-                message,
-                referral: vec![],
+                                  message,
+                                  referral: vec![],
             },
             saslcreds: None,
         })]

@@ -155,13 +155,15 @@ impl CommonComponent<KeycloakSettings> for KeycloakSettings {
             }
             Msg::PushRealmToKeycloak => {
                 let variables = push_realm_to_keycloak::Variables {
-                    url: self.keycloak_url.clone(),
-                    realm: self.new_realm_name.clone(),
-                    admin_user: self.admin_username.clone(),
-                    admin_pass: self.admin_password.clone(),
-                    lldap_url: self.lldap_url.clone(),
-                    sync_username: self.sync_username.clone(),
-                    sync_password: self.sync_password.clone(),
+                    input: push_realm_to_keycloak::PushRealmToKeycloakInput {
+                        url: self.keycloak_url.clone(),
+                        realm: self.new_realm_name.clone(),
+                        admin_user: self.admin_username.clone(),
+                        admin_pass: self.admin_password.clone(),
+                        lldap_url: self.lldap_url.clone(),
+                        sync_username: self.sync_username.clone(),
+                        sync_password: self.sync_password.clone(),
+                    },
                 };
                 self.common.call_graphql::<PushRealmToKeycloak, _>(ctx, variables, Msg::PushResponse, "Error pushing realm");
                 self.connection_status = "Pushing realm to Keycloak...".to_string();
