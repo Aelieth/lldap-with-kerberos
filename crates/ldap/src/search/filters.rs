@@ -48,6 +48,22 @@ pub fn convert_user_filter(
 ) -> LdapResult<UserRequestFilter> {
     let rec = |f| convert_user_filter(ldap_info, f, schema);
     match filter {
+        LdapFilter::Equality(field, value) if field.eq_ignore_ascii_case("objectclass") => {
+            let v = value.to_ascii_lowercase();
+            let standard_user_classes = ["top", "person", "inetorgperson", "posixaccount", "ldappublickey"];
+            let extra_classes: Vec<String> = schema
+                .get_schema()
+                .extra_user_object_classes
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            if standard_user_classes.contains(&v.as_str()) || extra_classes.contains(&v) {
+                Ok(UserRequestFilter::True)
+            } else {
+                Ok(UserRequestFilter::False)
+            }
+        }
+
         LdapFilter::And(filters) => {
             let res = filters
                 .iter()
@@ -259,7 +275,14 @@ pub fn convert_group_filter(
     match filter {
         LdapFilter::Equality(field, value) if field.eq_ignore_ascii_case("objectclass") => {
             let v = value.to_ascii_lowercase();
-            if v == "groupofuniquenames" || v == "groupofnames" || v == "posixgroup" {
+            let standard_group_classes = ["groupofuniquenames", "groupofnames", "posixgroup"];
+            let extra_classes: Vec<String> = schema
+                .get_schema()
+                .extra_group_object_classes
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            if standard_group_classes.contains(&v.as_str()) || extra_classes.contains(&v) {
                 Ok(GroupRequestFilter::True)
             } else {
                 Ok(GroupRequestFilter::False)

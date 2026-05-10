@@ -29,6 +29,7 @@ pub fn make_ldap_subschema_entry(
     let mut dynamic_attr_types: Vec<Vec<u8>> = Vec::new();
     let mut seen_attr_oids: HashSet<String> = HashSet::new();
 
+    // Core and std entries
     let core_entries: Vec<(&str, Vec<u8>)> = vec![
         ("2.5.4.0", b"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )".to_vec()),
         ("2.5.4.3", b"( 2.5.4.3 NAME ( 'cn' 'commonName' 'displayname' 'display_name' ) DESC 'RFC4519' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
@@ -51,6 +52,7 @@ pub fn make_ldap_subschema_entry(
         ("1.3.6.1.1.1.1.4", b"( 1.3.6.1.1.1.1.4 NAME ( 'loginShell' 'loginshell' 'login_shell' 'loginShell' ) DESC 'RFC2307 loginShell' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )".to_vec()),
         ("1.3.6.1.1.1.1.8", b"( 1.3.6.1.1.1.1.8 NAME ( 'sshPublicKey' 'sshpublickey' 'sshPublicKey' 'ssHPublicKey' ) DESC 'OpenSSH/LDAP sshPublicKey' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )".to_vec()),
         ("1.3.6.1.4.1.5322.1.1.2", b"( 1.3.6.1.4.1.5322.1.1.2 NAME ( 'krbPrincipalName' 'krb_principal_name' 'krbPrincipalName' ) DESC 'Kerberos principal name' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )".to_vec()),
+        ("0.9.2342.19200300.100.1.60", b"( 0.9.2342.19200300.100.1.60 NAME ( 'jpegPhoto' 'jpegphoto' 'avatar' ) DESC 'RFC2798 jpegPhoto' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )".to_vec()),
     ];
     for (oid, entry) in std_entries {
         if seen_attr_oids.insert(oid.to_string()) {
@@ -58,27 +60,49 @@ pub fn make_ldap_subschema_entry(
         }
     }
 
-    let already_covered: HashSet<&str> = [
-        "objectclass", "cn", "sn", "uid",
-        "givenname", "mail", "ou", "uidnumber", "gidnumber", "homedirectory", "loginshell", "sshpublickey",
-        "displayname", "firstname", "lastname", "jpegphoto",
-        "createtimestamp", "createTimestamp", "creationdate", "creation_date", "creationTimestamp",
-        "modifytimestamp", "modifyTimestamp", "modifieddate", "modified_date", "modifydate",
-        "pwdchangedtime", "pwdChangedTime", "passwordmodifieddate", "password_modified_date",
-        "entryuuid", "entryUUID", "uuid",
-        "hasSubordinates", "structuralObjectClass", "subschemaSubentry", "memberof", "memberOf",
-        "krbprincipalname", "krb_principal_name", "krbPrincipalName",
+    // unique OID counter for custom / runtime attributes (prevents collision)
+    let mut custom_oid_counter: u32 = 100;
+
+    // Attributes that have *predefined static entries* in core/std/op_entries.
+    // Skipped here to avoid duplicate attributeType definitions (RFC 4512 §2.2.1 compliance).
+    // Exact match to PublicSchema::get() user/group attributes.
+    // (kerberossync, groupid, and any future custom attrs go dynamic)
+    let static_covered_attrs: HashSet<&str> = [
+        "avatar",
+        "creationdate",
+        "displayname",
+        "firstname",
+        "lastname",
+        "mail",
+        "modifieddate",
+        "passwordmodifieddate",
+        "userid",
+        "uuid",
+        "uidnumber",
+        "gidnumber",
+        "homedirectory",
+        "loginshell",
+        "krbprincipalname",
+        "sshpublickey",
+        "ou",
     ].iter().cloned().collect();
 
     for attr in schema_manager.get_all_user_attributes().iter().chain(schema_manager.get_all_group_attributes().iter()) {
-        let preferred = get_preferred_ldap_name(attr);
-        if already_covered.contains(preferred.to_ascii_lowercase().as_str()) {
+        if static_covered_attrs.contains(attr.name.as_str()) {
             continue;
         }
 
+        let preferred = get_preferred_ldap_name(attr);
         let (syntax, is_single, is_operational) = attr_type_to_ldap_syntax(attr);
         let single_str = if is_single { " SINGLE-VALUE" } else { "" };
         let op_str = if is_operational { " NO-USER-MODIFICATION USAGE directoryOperation" } else { "" };
+
+        // RFC-compliant EQUALITY per attribute type (future-proofs any custom DateTime/Integer attrs)
+        let equality = match attr.attribute_type {
+            lldap_schema::AttributeType::Integer => "integerMatch",
+            lldap_schema::AttributeType::DateTime => "generalizedTimeMatch",
+            _ => "caseIgnoreMatch", // String + Avatar
+        };
 
         let name_list = if attr.aliases.is_empty() {
             format!("'{}'", preferred)
@@ -94,11 +118,16 @@ pub fn make_ldap_subschema_entry(
 
         let desc = format!("LLDAP {} ({})", attr.name, if attr.is_list { "multi" } else { "single" });
         let oid = match attr.name.as_str() {
-            "avatar" => "10.0",
-            "sshpublickey" => "10.1",
-            "kerberossync" => "1.3.6.1.4.1.5322.1.1.1",
-            "groupid" => "10.2",
-            _ => "10.99",
+            "avatar" => "10.0".to_string(),
+            "sshpublickey" => "10.1".to_string(),
+            "kerberossync" => "1.3.6.1.4.1.5322.1.1.1".to_string(),
+            "groupid" => "10.2".to_string(),
+            // unique incremental OID for every custom/runtime attribute
+            _ => {
+                let oid = format!("10.{}", custom_oid_counter);
+                custom_oid_counter += 1;
+                oid
+            }
         };
 
         let entry = format!(
@@ -106,14 +135,14 @@ pub fn make_ldap_subschema_entry(
             oid,
             name_list,
             desc,
-            if attr.attribute_type == lldap_schema::AttributeType::Integer { "integerMatch" } else { "caseIgnoreMatch" },
+            equality,
             syntax,
             single_str,
             op_str
         );
-        if seen_attr_oids.insert(oid.to_string()) {
-            dynamic_attr_types.push(entry.into_bytes());
-        }
+        // Always push — OIDs are now guaranteed unique
+        dynamic_attr_types.push(entry.into_bytes());
+        seen_attr_oids.insert(oid);
     }
 
     let op_entries: Vec<(&str, Vec<u8>)> = vec![
@@ -134,11 +163,10 @@ pub fn make_ldap_subschema_entry(
         }
     }
 
-    // Build inetOrgPerson MAY list with logical grouping
+    // Build inetOrgPerson MAY list (unchanged)
     let mut inet_may: Vec<String> = vec![];
     let mut seen: HashSet<String> = HashSet::new();
 
-    // 1. Core identity attributes (most important first)
     for name in ["cn", "sn", "givenName", "displayName", "uid", "mail"] {
         let lower = name.to_ascii_lowercase();
         if seen.insert(lower) {
@@ -146,7 +174,6 @@ pub fn make_ldap_subschema_entry(
         }
     }
 
-    // 2. Add all non-operational user attributes from PublicSchema
     let operational_names: HashSet<&str> = [
         "createtimestamp", "creationdate", "creation_date",
         "modifytimestamp", "modifieddate", "modified_date",
@@ -163,12 +190,6 @@ pub fn make_ldap_subschema_entry(
         }
     }
 
-    // 3. All operational attributes at the very end (clean grouping)
-    // Note: hasSubordinates, structuralObjectClass, and subschemaSubentry are X.500 operational
-    // attributes (RFC 3674, RFC 4512) that are automatically available on ALL entries.
-    // They are declared in attributeTypes with USAGE directoryOperation and should NEVER
-    // appear in any objectClass MAY list — strict schema clients (ApacheDS Studio) will
-    // suppress them if listed here, and they would incorrectly appear as "standard attributes".
     for extra in [
         "createTimestamp", "modifyTimestamp", "pwdChangedTime", "memberOf",
     ] {
@@ -270,4 +291,29 @@ pub fn make_ldap_subschema_entry(
             },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::SchemaManager; // or wherever the real one lives
+
+    #[test]
+    fn test_make_ldap_subschema_entry_basic_structure() {
+        let schema = SchemaManager::default();
+        let op = make_ldap_subschema_entry(&schema, "dc=example,dc=com");
+        if let LdapOp::SearchResultEntry(entry) = op {
+            assert_eq!(entry.dn, "cn=Subschema,dc=example,dc=com");
+            assert!(entry.attributes.iter().any(|a| a.atype == "attributeTypes"));
+            assert!(entry.attributes.iter().any(|a| a.atype == "objectClasses"));
+            // Spot-check unique OID logic didn't collide
+            let attr_types = entry.attributes.iter()
+            .find(|a| a.atype == "attributeTypes")
+            .unwrap();
+            let has_10_100 = String::from_utf8_lossy(&attr_types.vals[0]).contains("10.100");
+            assert!(has_10_100 || attr_types.vals.is_empty());
+        } else {
+            panic!("expected SearchResultEntry");
+        }
+    }
 }

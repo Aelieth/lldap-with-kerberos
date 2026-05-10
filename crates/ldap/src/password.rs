@@ -34,8 +34,8 @@ pub(crate) async fn do_bind(
     }
     let user_id = match get_user_id_from_distinguished_name(
         &request.dn.to_ascii_lowercase(),
-                                                            &ldap_info.base_dn,
-                                                            &ldap_info.base_dn_str,
+        &ldap_info.base_dn,
+        &ldap_info.base_dn_str,
     ) {
         Ok(s) => s,
         Err(e) => {

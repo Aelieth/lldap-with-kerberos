@@ -4,7 +4,8 @@
 //! operational attributes, and search result entry building lives here.
 
 use crate::core::utils::{DEFAULT_PRIMARY_GROUP_OU, DEFAULT_PRIMARY_USER_OU};
-use crate::dn::internal_ou_to_ldap_rdn_chain;
+use crate::dn::{build_group_dn, build_user_dn, get_leaf_ou};
+use lldap_domain::types::GroupName;
 use chrono::{NaiveDateTime, TimeZone};
 use ldap3_proto::LdapPartialAttribute;
 use lldap_domain::{
@@ -37,8 +38,7 @@ pub fn get_custom_attribute(
         .map(|attribute| match &attribute.value {
             AttributeValue::String(Cardinality::Singleton(s)) => {
                 if attribute_name.as_str().eq_ignore_ascii_case("ou") {
-                    let leaf = s.split('\\').next_back().unwrap_or(s).to_string();
-                    vec![leaf.into_bytes()]
+                    vec![get_leaf_ou(s).to_string().into_bytes()]
                 } else {
                     vec![s.clone().into_bytes()]
                 }
@@ -46,7 +46,7 @@ pub fn get_custom_attribute(
             AttributeValue::String(Cardinality::Unbounded(l)) => {
                 if attribute_name.as_str().eq_ignore_ascii_case("ou") {
                     l.iter()
-                        .map(|s| s.split('\\').next_back().unwrap_or(s).to_string().into_bytes())
+                        .map(|s| get_leaf_ou(s).to_string().into_bytes())
                         .collect()
                 } else {
                     l.iter().map(|s| s.clone().into_bytes()).collect()
@@ -216,9 +216,7 @@ pub fn get_user_attribute(
         crate::core::utils::UserFieldType::Dn => return None,
         crate::core::utils::UserFieldType::EntryDn => {
             let internal_ou = get_user_ou(user);
-            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
-            let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-            vec![format!("uid={},{}", user.user_id, ou_part + "," + base_dn_str).into_bytes()]
+            vec![build_user_dn(&user.user_id, &internal_ou, base_dn_str).into_bytes()]
         }
         crate::core::utils::UserFieldType::EntryUuid => {
             vec![user.uuid.to_string().into_bytes()]
@@ -228,14 +226,14 @@ pub fn get_user_attribute(
             .flatten()
             .map(|group| {
                 let group_ou = group.attributes.iter()
-                    .find(|a| a.name.as_str() == "ou")
+                    .find(|a| a.name.as_str().eq_ignore_ascii_case("ou"))
                     .and_then(|a| {
                         if let lldap_domain::types::AttributeValue::String(
                             lldap_domain::types::Cardinality::Singleton(s),
                         ) = &a.value { Some(s.clone()) } else { None }
                     })
-                    .unwrap_or_else(|| "groups".to_string());
-                format!("cn={},ou={},{}", group.display_name, group_ou, base_dn_str).into_bytes()
+                    .unwrap_or_else(|| DEFAULT_PRIMARY_GROUP_OU.to_string());
+                build_group_dn(&GroupName::from(group.display_name.clone()), &group_ou, base_dn_str).into_bytes()
             })
             .collect(),
         crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => {
@@ -269,14 +267,7 @@ pub fn get_user_attribute(
             vec![user.krb_principal_name.clone()?.into_bytes()]
         }
         crate::core::utils::UserFieldType::Attribute(attr, _, _) => {
-            let values = get_custom_attribute(&user.attributes, &attr)?;
-            if attr.as_str().eq_ignore_ascii_case("ou") {
-                if let Some(first) = values.first() {
-                    let s = String::from_utf8_lossy(first);
-                    let leaf = s.split('\\').next_back().unwrap_or(&s).to_string();
-                    vec![leaf.into_bytes()]
-                } else { vec![] }
-            } else { values }
+            get_custom_attribute(&user.attributes, &attr)?
         }
         crate::core::utils::UserFieldType::NoMatch => match attribute.as_str() {
             "1.1" => return None,
@@ -314,9 +305,7 @@ pub fn get_group_attribute(
         crate::core::utils::GroupFieldType::Dn => return None,
         crate::core::utils::GroupFieldType::EntryDn => {
             let internal_ou = get_group_ou(group);
-            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
-            let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-            vec![format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str).into_bytes()]
+            vec![build_group_dn(&GroupName::from(group.display_name.clone()), &internal_ou, base_dn_str).into_bytes()]
         }
         crate::core::utils::GroupFieldType::EntryUuid => {
             vec![group.uuid.to_string().into_bytes()]
@@ -328,11 +317,7 @@ pub fn get_group_attribute(
         crate::core::utils::GroupFieldType::Member => {
             let members: std::collections::BTreeSet<_> = group.users.iter()
                 .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
-                .map(|u| {
-                    let rdn_chain = internal_ou_to_ldap_rdn_chain(&u.ou);
-                    let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-                    format!("uid={},{}", u.user_id, ou_part + "," + base_dn_str)
-                })
+                .map(|u| build_user_dn(&u.user_id, &u.ou, base_dn_str))
                 .collect();
             members.into_iter().map(|s| s.into_bytes()).collect()
         }
@@ -341,24 +326,13 @@ pub fn get_group_attribute(
             // Use the exact same logic as Member
             let members: std::collections::BTreeSet<_> = group.users.iter()
                 .filter(|u| user_filter.as_ref().map(|f| u.user_id == *f).unwrap_or(true))
-                .map(|u| {
-                    let rdn_chain = internal_ou_to_ldap_rdn_chain(&u.ou);
-                    let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-                    format!("uid={},{}", u.user_id, ou_part + "," + base_dn_str)
-                })
+                .map(|u| build_user_dn(&u.user_id, &u.ou, base_dn_str))
                 .collect();
             members.into_iter().map(|s| s.into_bytes()).collect()
         }
         crate::core::utils::GroupFieldType::Uuid => vec![group.uuid.to_string().into_bytes()],
         crate::core::utils::GroupFieldType::Attribute(attr, _, _) => {
-            let values = get_custom_attribute(&group.attributes, &attr)?;
-            if attr.as_str().eq_ignore_ascii_case("ou") {
-                if let Some(first) = values.first() {
-                    let s = String::from_utf8_lossy(first);
-                    let leaf = s.split('\\').next_back().unwrap_or(&s).to_string();
-                    vec![leaf.into_bytes()]
-                } else { vec![] }
-            } else { values }
+            get_custom_attribute(&group.attributes, &attr)?
         }
         crate::core::utils::GroupFieldType::NoMatch => match attribute.as_str() {
             "1.1" => return None,
@@ -403,12 +377,7 @@ pub fn make_ldap_search_user_result_entry(
     }
 
     LdapSearchResultEntry {
-        dn: {
-            let internal_ou = get_user_ou(&user);
-            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
-            let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-            format!("uid={},{}", user.user_id.as_str(), ou_part + "," + base_dn_str)
-        },
+        dn: build_user_dn(&user.user_id, &get_user_ou(&user), base_dn_str),
         attributes: {
             let mut attrs: Vec<ldap3_proto::LdapPartialAttribute> = expanded_attributes.attribute_keys.into_iter()
                 .filter(|(attribute, _)| {
@@ -450,12 +419,7 @@ pub fn make_ldap_search_group_result_entry(
     }
 
     LdapSearchResultEntry {
-        dn: {
-            let internal_ou = get_group_ou(&group);
-            let rdn_chain = internal_ou_to_ldap_rdn_chain(&internal_ou);
-            let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
-            format!("cn={},{}", group.display_name, ou_part + "," + base_dn_str)
-        },
+        dn: build_group_dn(&GroupName::from(group.display_name.clone()), &get_group_ou(&group), base_dn_str),
         attributes: {
             let mut attrs: Vec<ldap3_proto::LdapPartialAttribute> = expanded_attributes.attribute_keys.into_iter()
                 .filter(|(attribute, _)| {

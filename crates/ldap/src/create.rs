@@ -6,7 +6,7 @@ use crate::{
         error::{LdapError, LdapResult},
         utils::LdapInfo,
     },
-    dn::{get_user_or_group_id_from_distinguished_name, UserOrGroupName},
+    dn::{get_internal_ou_from_dn_parts, get_user_or_group_id_from_distinguished_name, parse_distinguished_name, UserOrGroupName},
     handler::make_add_response,
 };
 use ldap3_proto::proto::{
@@ -28,12 +28,14 @@ pub(crate) async fn create_user_or_group(
     request: LdapAddRequest,
 ) -> LdapResult<Vec<LdapOp>> {
     let base_dn_str = &ldap_info.base_dn_str;
+    let dn_parts = parse_distinguished_name(&request.dn)?;
+    let internal_ou = get_internal_ou_from_dn_parts(&dn_parts);
     match get_user_or_group_id_from_distinguished_name(&request.dn, &ldap_info.base_dn) {
         UserOrGroupName::User(user_id) => {
-            create_user(backend_handler, user_id, request.attributes).await
+            create_user(backend_handler, user_id, request.attributes, internal_ou).await
         }
         UserOrGroupName::Group(group_name) => {
-            create_group(backend_handler, group_name, request.attributes).await
+            create_group(backend_handler, group_name, request.attributes, internal_ou).await
         }
         err => Err(err.into_ldap_error(
             &request.dn,
@@ -47,6 +49,7 @@ async fn create_user(
     backend_handler: &impl AdminBackendHandler,
     user_id: UserId,
     attributes: Vec<LdapAttribute>,
+    internal_ou: String,
 ) -> LdapResult<Vec<LdapOp>> {
     fn parse_attribute(mut attr: LdapPartialAttribute) -> LdapResult<(String, Vec<u8>)> {
         if attr.vals.len() > 1 {
@@ -76,6 +79,10 @@ async fn create_user(
     if !attributes.contains_key("kerberossync") {
         attributes.insert("kerberossync".to_string(), b"0".to_vec());
     }
+
+    // Set/override ou from DN (full internal form, e.g. "service" or "office\\floor1")
+    // This ensures custom OU hierarchy is persisted for bind/search DN construction.
+    attributes.insert("ou".to_string(), internal_ou.clone().into_bytes());
 
     let get_attribute = |name: &str| {
         attributes
@@ -128,6 +135,17 @@ async fn create_user(
             });
         }
 
+        // Always push ou (from DN) into custom attributes so backend stores the hierarchy value.
+        // get_user_ou() will then return it for correct EntryDn in search results.
+        new_user_attributes.push(Attribute {
+            name: "ou".into(),
+            value: deserialize::deserialize_attribute_value(&[internal_ou.clone()], AttributeType::String, false)
+                .map_err(|e| LdapError {
+                    code: LdapResultCode::ConstraintViolation,
+                    message: format!("Invalid ou value: {e}"),
+                })?,
+        });
+
         backend_handler
         .create_user(CreateUserRequest {
             user_id,
@@ -157,11 +175,21 @@ async fn create_group(
     backend_handler: &impl AdminBackendHandler,
     group_name: GroupName,
     _attributes: Vec<LdapAttribute>,
+    internal_ou: String,
 ) -> LdapResult<Vec<LdapOp>> {
+    let mut group_attributes: Vec<Attribute> = Vec::new();
+    group_attributes.push(Attribute {
+        name: "ou".into(),
+        value: deserialize::deserialize_attribute_value(&[internal_ou.clone()], AttributeType::String, false)
+            .map_err(|e| LdapError {
+                code: LdapResultCode::ConstraintViolation,
+                message: format!("Invalid ou value: {e}"),
+            })?,
+    });
     backend_handler
         .create_group(CreateGroupRequest {
             display_name: group_name,
-            attributes: Vec::new(),
+            attributes: group_attributes,
         })
         .await
         .map_err(|e| LdapError {
@@ -178,7 +206,7 @@ async fn create_group(
 mod tests {
     use super::*;
     use crate::handler::tests::setup_bound_admin_handler;
-    use lldap_domain::types::*;
+    use lldap_domain::{deserialize, types::*};
     use lldap_test_utils::MockTestBackendHandler;
     use mockall::predicate::eq;
     use pretty_assertions::assert_eq;
@@ -186,11 +214,17 @@ mod tests {
     #[tokio::test]
     async fn test_create_user() {
         let mut mock = MockTestBackendHandler::new();
+        let ou_attr = Attribute {
+            name: "ou".into(),
+            value: deserialize::deserialize_attribute_value(&["people".to_string()], AttributeType::String, false)
+                .expect("valid ou for test"),
+        };
         mock.expect_create_user()
             .with(eq(CreateUserRequest {
                 user_id: UserId::new("bob"),
                 email: "".into(),
                 display_name: Some("Bob".to_string()),
+                attributes: vec![ou_attr],
                 ..Default::default()
             }))
             .times(1)
@@ -215,9 +249,15 @@ mod tests {
     #[tokio::test]
     async fn test_create_group() {
         let mut mock = MockTestBackendHandler::new();
+        let ou_attr = Attribute {
+            name: "ou".into(),
+            value: deserialize::deserialize_attribute_value(&["groups".to_string()], AttributeType::String, false)
+                .expect("valid ou for test"),
+        };
         mock.expect_create_group()
             .with(eq(CreateGroupRequest {
                 display_name: GroupName::new("bob"),
+                attributes: vec![ou_attr],
                 ..Default::default()
             }))
             .times(1)
@@ -243,11 +283,17 @@ mod tests {
     #[tokio::test]
     async fn test_create_user_multiple_object_class() {
         let mut mock = MockTestBackendHandler::new();
+        let ou_attr = Attribute {
+            name: "ou".into(),
+            value: deserialize::deserialize_attribute_value(&["people".to_string()], AttributeType::String, false)
+                .expect("valid ou for test"),
+        };
         mock.expect_create_user()
             .with(eq(CreateUserRequest {
                 user_id: UserId::new("bob"),
                 email: "".into(),
                 display_name: Some("Bob".to_string()),
+                attributes: vec![ou_attr],
                 ..Default::default()
             }))
             .times(1)

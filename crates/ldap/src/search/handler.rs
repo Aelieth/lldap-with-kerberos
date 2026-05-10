@@ -7,6 +7,7 @@ use crate::core::{
 use ldap3_proto::LdapResultCode;
 use crate::dn::parse_distinguished_name;
 use crate::search::{get_search_scope, build_ou_entries, make_ou_entry, convert_users_to_ldap_op, convert_groups_to_ldap_op, make_search_success};
+use crate::search::scope::ou_matches_filter;
 use ldap3_proto::proto::{LdapOp, LdapSearchRequest, LdapSearchScope};
 use lldap_access_control::UserAndGroupListerBackendHandler;
 use lldap_domain::public_schema::PublicSchema;
@@ -29,7 +30,7 @@ where
     let scope = get_search_scope(base_dn, &dn_parts, &request.scope, allowed_ous);
     let schema = PublicSchema::get();
     let include_op = request.attrs.iter().any(|a| {
-        a == "+" || 
+        a == "+" ||
         a.eq_ignore_ascii_case("hassubordinates") ||
         a.eq_ignore_ascii_case("structuralobjectclass") ||
         a.eq_ignore_ascii_case("subschemasubentry") ||
@@ -83,7 +84,17 @@ where
                 return Ok(vec![LdapOp::SearchResultEntry(root_entry), make_search_success()]);
             }
             let top_level_ous = crate::dn::get_direct_child_ous("", allowed_ous);
-            let mut results = build_ou_entries(&top_level_ous, &ldap_info.base_dn_str, include_op);
+            let ous_to_add = if request.scope == LdapSearchScope::Subtree {
+                allowed_ous.to_vec()
+            } else {
+                top_level_ous.clone()
+            };
+            // FIX: apply OU filter so (ou=office) returns only office, not all (Problem 2)
+            let ous_to_add: Vec<String> = ous_to_add
+                .into_iter()
+                .filter(|ou| ou_matches_filter(ou, &request.filter))
+                .collect();
+            let mut results = build_ou_entries(&ous_to_add, &ldap_info.base_dn_str, include_op);
 
             if request.scope == LdapSearchScope::Subtree {
                 let user_results = crate::core::user::get_user_list(
@@ -125,8 +136,11 @@ where
             let internal_ou = crate::dn::get_internal_ou_from_dn_parts(&dn_parts);
 
             if request.scope == LdapSearchScope::Base {
-                let ou_entry = make_ou_entry(&internal_ou, &ldap_info.base_dn_str, include_op);
-                results.push(LdapOp::SearchResultEntry(ou_entry));
+                // FIX: only include the OU entry if it matches the filter (Problem 2)
+                if ou_matches_filter(&internal_ou, &request.filter) {
+                    let ou_entry = make_ou_entry(&internal_ou, &ldap_info.base_dn_str, include_op);
+                    results.push(LdapOp::SearchResultEntry(ou_entry));
+                }
             } else {
                 let child_ous: Vec<String> = if request.scope == LdapSearchScope::OneLevel {
                     crate::dn::get_direct_child_ous(&internal_ou, allowed_ous)
@@ -141,6 +155,11 @@ where
                         .cloned()
                         .collect()
                 };
+                // FIX: filter child OUs by the client filter (Problem 2)
+                let child_ous: Vec<String> = child_ous
+                    .into_iter()
+                    .filter(|ou| ou_matches_filter(ou, &request.filter))
+                    .collect();
                 if !child_ous.is_empty() {
                     results.extend(build_ou_entries(&child_ous, &ldap_info.base_dn_str, include_op));
                 }
@@ -175,7 +194,7 @@ where
                     &schema,
                 ).collect();
 
-                // ADS-compatible filtering
+                // ADS-compatible filtering (unchanged, stable)
                 {
                     let base_lower = request.base.to_ascii_lowercase();
                     let expected_rdn_count = dn_parts.len() + 1;
@@ -231,10 +250,26 @@ where
                 Ok(id) => id,
                 Err(_) => return Ok(vec![make_search_success()]),
             };
-            let filter = ldap3_proto::LdapFilter::Equality("uid".to_string(), user_id.to_string());
+            // FIX: existence check with specific filter (preserves NoSuchObject behavior)
+            let specific_filter = ldap3_proto::LdapFilter::Equality("uid".to_string(), user_id.to_string());
+            let exists_users = crate::core::user::get_user_list(
+                ldap_info,
+                &specific_filter,
+                true,
+                &request.base,
+                backend,
+                &schema,
+            ).await?;
+            if exists_users.is_empty() {
+                return Err(LdapError {
+                    code: LdapResultCode::NoSuchObject,
+                    message: "".to_string(),
+                });
+            }
+            // Now apply the REAL client filter (Problem 3)
             let users = crate::core::user::get_user_list(
                 ldap_info,
-                &filter,
+                &request.filter,
                 true,
                 &request.base,
                 backend,
@@ -246,11 +281,18 @@ where
                 ldap_info,
                 &schema,
             ).collect();
+            // Post-filter to exact base DN (consistent with Container pattern, reusable)
+            let base_lower = request.base.to_ascii_lowercase();
+            results.retain(|op| {
+                if let LdapOp::SearchResultEntry(e) = op {
+                    e.dn.to_ascii_lowercase() == base_lower
+                } else {
+                    true
+                }
+            });
             if results.is_empty() {
-                return Err(LdapError {
-                    code: LdapResultCode::NoSuchObject,
-                    message: "".to_string(),
-                });
+                // Entry exists but filter did not match → success, 0 entries (correct LDAP behavior)
+                return Ok(vec![make_search_success()]);
             }
             results.push(make_search_success());
             Ok(results)
@@ -264,10 +306,25 @@ where
                 Ok(name) => name,
                 Err(_) => return Ok(vec![make_search_success()]),
             };
-            let filter = ldap3_proto::LdapFilter::Equality("cn".to_string(), group_name.to_string());
+            // FIX: existence check with specific filter
+            let specific_filter = ldap3_proto::LdapFilter::Equality("cn".to_string(), group_name.to_string());
+            let exists_groups = crate::core::group::get_groups_list(
+                ldap_info,
+                &specific_filter,
+                &request.base,
+                backend,
+                &schema,
+            ).await?;
+            if exists_groups.is_empty() {
+                return Err(LdapError {
+                    code: LdapResultCode::NoSuchObject,
+                    message: "".to_string(),
+                });
+            }
+            // Apply REAL client filter (Problem 3)
             let groups = crate::core::group::get_groups_list(
                 ldap_info,
-                &filter,
+                &request.filter,
                 &request.base,
                 backend,
                 &schema,
@@ -279,11 +336,16 @@ where
                 &None,
                 &schema,
             ).collect();
+            let base_lower = request.base.to_ascii_lowercase();
+            results.retain(|op| {
+                if let LdapOp::SearchResultEntry(e) = op {
+                    e.dn.to_ascii_lowercase() == base_lower
+                } else {
+                    true
+                }
+            });
             if results.is_empty() {
-                return Err(LdapError {
-                    code: LdapResultCode::NoSuchObject,
-                    message: "".to_string(),
-                });
+                return Ok(vec![make_search_success()]);
             }
             results.push(make_search_success());
             Ok(results)

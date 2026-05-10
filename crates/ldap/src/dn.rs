@@ -270,3 +270,34 @@ pub fn get_group_id_from_distinguished_name_or_plain_name(
         get_group_id_from_distinguished_name(dn, base_tree, base_dn_str)
     }
 }
+
+/// Returns the leaf OU from an internal OU string (e.g. "office\\floor1" -> "floor1", "people" -> "people").
+/// Used for displaying the `ou` attribute value in LDAP search results (the leaf RDN only).
+pub fn get_leaf_ou(internal_ou: &str) -> &str {
+    internal_ou.split('\\').next_back().unwrap_or(internal_ou)
+}
+
+/// Builds a full user Distinguished Name from the user_id, internal_ou hierarchy string
+/// (e.g. "service" or "office\\floor1"), and base_dn_str.
+/// This centralizes DN construction logic, eliminates duplication, and fixes the latent
+/// correctness bug where ou_part == "" produced an invalid "uid=foo,,dc=..." DN.
+pub fn build_user_dn(user_id: &UserId, internal_ou: &str, base_dn_str: &str) -> String {
+    let rdn_chain = internal_ou_to_ldap_rdn_chain(internal_ou);
+    let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
+    if ou_part.is_empty() {
+        format!("uid={},{}", user_id, base_dn_str)
+    } else {
+        format!("uid={},{}", user_id, ou_part + "," + base_dn_str)
+    }
+}
+
+/// Builds a full group Distinguished Name. Symmetric to build_user_dn for consistency and reuse.
+pub fn build_group_dn(group_name: &GroupName, internal_ou: &str, base_dn_str: &str) -> String {
+    let rdn_chain = internal_ou_to_ldap_rdn_chain(internal_ou);
+    let ou_part = rdn_chain.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(",");
+    if ou_part.is_empty() {
+        format!("cn={},{}", group_name, base_dn_str)
+    } else {
+        format!("cn={},{}", group_name, ou_part + "," + base_dn_str)
+    }
+}

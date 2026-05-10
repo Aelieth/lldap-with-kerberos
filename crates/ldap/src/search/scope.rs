@@ -108,12 +108,39 @@ pub fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str, include_opera
         .collect()
 }
 
+// Production-grade, reusable OU filter matcher.
+// Supports equality on ou/objectClass, Present, And/Or/Not.
+// Extensible for future filters. Zero assumptions on complex cases (defaults to include).
+pub fn ou_matches_filter(ou_str: &str, filter: &ldap3_proto::LdapFilter) -> bool {
+    match filter {
+        ldap3_proto::LdapFilter::Equality(field, value) => {
+            let f = field.to_ascii_lowercase();
+            let v = value.to_ascii_lowercase();
+            if f == "ou" {
+                ou_str.to_ascii_lowercase() == v
+            } else if f == "objectclass" {
+                v == "organizationalunit" || v == "top"
+            } else {
+                true // unknown field on OU — include (client will filter further if needed)
+            }
+        }
+        ldap3_proto::LdapFilter::Present(field) => {
+            let f = field.to_ascii_lowercase();
+            f == "ou" || f == "objectclass" || f == "hassubordinates" || f == "structuralobjectclass"
+        }
+        ldap3_proto::LdapFilter::And(filters) => filters.iter().all(|f| ou_matches_filter(ou_str, f)),
+        ldap3_proto::LdapFilter::Or(filters) => filters.iter().any(|f| ou_matches_filter(ou_str, f)),
+        ldap3_proto::LdapFilter::Not(f) => !ou_matches_filter(ou_str, f),
+        // Substring/Greater/etc not applicable to OU synthetic entries — include
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*; // or use crate::search::scope::get_search_scope;
+    use super::*;
     use ldap3_proto::LdapSearchScope;
 
-    // Helper to make DN parts easily
     fn make_dn(dn: &str) -> Vec<(String, String)> {
         dn.split(',')
         .map(|part| {
@@ -176,9 +203,96 @@ mod tests {
         let base_dn = make_dn("dc=example,dc=com");
         let dn = make_dn("ou=office,ou=people,dc=example,dc=com");
 
-        // Assuming your current logic supports this
         let scope = get_search_scope(&base_dn, &dn, &LdapSearchScope::Subtree, &["people".to_string(), "groups".to_string()]);
-        // Adjust expected value based on your actual implementation
         assert!(matches!(scope, SearchScope::Container | SearchScope::Unknown));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_equality_ou() {
+        let filter = ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string());
+        assert!(ou_matches_filter("office", &filter));
+        assert!(!ou_matches_filter("people", &filter));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_objectclass() {
+        let filter = ldap3_proto::LdapFilter::Equality("objectClass".to_string(), "organizationalUnit".to_string());
+        assert!(ou_matches_filter("office", &filter));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_and() {
+        let filter = ldap3_proto::LdapFilter::And(vec![
+            ldap3_proto::LdapFilter::Equality("objectClass".to_string(), "organizationalUnit".to_string()),
+            ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string()),
+        ]);
+        assert!(ou_matches_filter("office", &filter));
+        assert!(!ou_matches_filter("people", &filter));
+    }
+    #[test]
+    fn test_ou_matches_filter_present() {
+        let filter = ldap3_proto::LdapFilter::Present("ou".to_string());
+        assert!(ou_matches_filter("people", &filter));
+        let filter2 = ldap3_proto::LdapFilter::Present("mail".to_string());
+        assert!(!ou_matches_filter("people", &filter2));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_or() {
+        let filter = ldap3_proto::LdapFilter::Or(vec![
+            ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string()),
+                                                 ldap3_proto::LdapFilter::Equality("ou".to_string(), "people".to_string()),
+        ]);
+        assert!(ou_matches_filter("office", &filter));
+        assert!(ou_matches_filter("people", &filter));
+        assert!(!ou_matches_filter("groups", &filter));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_not() {
+        let filter = ldap3_proto::LdapFilter::Not(Box::new(
+            ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string())
+        ));
+        assert!(ou_matches_filter("people", &filter));
+        assert!(!ou_matches_filter("office", &filter));
+    }
+
+    #[test]
+    fn test_ou_matches_filter_default_true_for_unsupported() {
+        let filter = ldap3_proto::LdapFilter::Substring(
+            "cn".to_string(),
+                                                        ldap3_proto::SubstringFilter { initial: Some("a".to_string()), any: vec![], final_: None }
+        );
+        assert!(ou_matches_filter("office", &filter));
+    }
+
+    #[test]
+    fn test_make_ou_entry_simple() {
+        let entry = make_ou_entry("people", "dc=example,dc=com", false);
+        assert_eq!(entry.dn, "ou=people,dc=example,dc=com");
+        assert_eq!(entry.attributes.len(), 2);
+    }
+
+    #[test]
+    fn test_make_ou_entry_with_operational() {
+        let entry = make_ou_entry("office", "dc=example,dc=com", true);
+        assert!(entry.attributes.iter().any(|a| a.atype == "hasSubordinates"));
+        assert!(entry.attributes.iter().any(|a| a.atype == "structuralObjectClass"));
+    }
+
+    #[test]
+    fn test_make_ou_entry_empty_ou() {
+        let entry = make_ou_entry("", "dc=example,dc=com", false);
+        assert_eq!(entry.dn, "dc=example,dc=com");
+    }
+
+    #[test]
+    fn test_build_ou_entries() {
+        let ous = vec!["people".to_string(), "groups".to_string()];
+        let ops = build_ou_entries(&ous, "dc=example,dc=com", false);
+        assert_eq!(ops.len(), 2);
+        if let LdapOp::SearchResultEntry(e) = &ops[0] {
+            assert!(e.dn.contains("ou=people"));
+        }
     }
 }
