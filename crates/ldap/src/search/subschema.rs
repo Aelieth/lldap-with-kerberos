@@ -283,6 +283,7 @@ pub fn make_ldap_subschema_entry(
                         "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' DESC 'RFC2307' STRUCTURAL MUST ( cn $ gidNumber $ objectClass ) MAY ( {} ) )",
                         posix_group_may
                     ).into_bytes(),
+                    b"( 1.3.6.1.4.1.24552.500.1.1.2.0 NAME 'ldapPublicKey' SUP top AUXILIARY DESC 'OpenSSH LPK auxiliary object class for SSH public keys' MAY sshPublicKey )".to_vec(),
                 ],
             },
             LdapPartialAttribute {
