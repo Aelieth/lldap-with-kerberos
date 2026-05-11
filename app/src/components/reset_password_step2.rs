@@ -140,6 +140,7 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                 };
                 let registration_finish = opaque::client::registration::finish_registration(
                     registration,
+                    self.form.model().password.as_bytes(),
                     res.registration_response,
                     &mut rand::rngs::OsRng,
                 )?;

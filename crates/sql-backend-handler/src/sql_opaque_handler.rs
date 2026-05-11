@@ -37,7 +37,9 @@ fn passwords_match(
     )?;
     client::login::finish_login(
         client_login_start_result.state,
+        clear_password.as_bytes(),
         server_login_start_result.message,
+        &mut rng,
     )?;
     Ok(())
 }
@@ -45,7 +47,7 @@ fn passwords_match(
 impl SqlBackendHandler {
     fn get_orion_secret_key(&self) -> Result<orion::aead::SecretKey> {
         Ok(orion::aead::SecretKey::from_slice(
-            self.opaque_setup.keypair().private(),
+            self.opaque_setup.keypair().private().serialize().as_ref(),
         )?)
     }
 
@@ -250,7 +252,7 @@ impl OpaqueHandler for SqlOpaqueHandler {
         let now = chrono::Utc::now().naive_utc();
         let user_update = model::users::ActiveModel {
             user_id: ActiveValue::Set(username.clone()),
-            password_hash: ActiveValue::Set(Some(password_file.serialize())),
+            password_hash: ActiveValue::Set(Some(password_file.serialize().to_vec())),
             password_modified_date: ActiveValue::Set(now),
             modified_date: ActiveValue::Set(now),
             ..Default::default()
@@ -278,11 +280,12 @@ pub async fn register_password(
             registration_start_request: registration_start.message,
         })
         .await?;
-    let registration_finish = opaque::client::registration::finish_registration(
-        registration_start.state,
-        start_response.registration_response,
-        &mut rng,
-    )?;
+        let registration_finish = opaque::client::registration::finish_registration(
+            registration_start.state,
+            password.unsecure().as_bytes(),
+            start_response.registration_response,
+            &mut rng,
+        )?;
     opaque_handler
         .registration_finish(ClientRegistrationFinishRequest {
             server_data: start_response.server_data,
@@ -314,10 +317,12 @@ mod tests {
                 login_start_request: login_start.message,
             })
             .await?;
-        let login_finish = opaque::client::login::finish_login(
-            login_start.state,
-            start_response.credential_response,
-        )?;
+            let login_finish = opaque::client::login::finish_login(
+                login_start.state,
+                password.as_bytes(),
+                start_response.credential_response,
+                &mut rng,
+            )?;
         opaque_handler
             .login_finish(ClientLoginFinishRequest {
                 server_data: start_response.server_data,

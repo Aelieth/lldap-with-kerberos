@@ -143,7 +143,12 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                     OpaqueData::Login(s) => s,
                     _ => bail!("Invalid state"),
                 };
-                let login_finish = opaque::client::login::finish_login(login_state, res.credential_response)?;
+                let login_finish = opaque::client::login::finish_login(
+                    login_state,
+                    self.form.model().old_password.as_bytes(),
+                    res.credential_response,
+                    &mut rand::rngs::OsRng,
+                )?;
                 let req = login::ClientLoginFinishRequest {
                     server_data: res.server_data,
                     credential_finalization: login_finish.message,
@@ -205,6 +210,7 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                 };
                 let registration_finish = opaque::client::registration::finish_registration(
                     registration,
+                    self.form.model().password.as_bytes(),
                     res.registration_response,
                     &mut rand::rngs::OsRng,
                 )?;

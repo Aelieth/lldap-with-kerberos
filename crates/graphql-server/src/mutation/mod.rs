@@ -235,6 +235,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         .context("Registration start failed")?;
         let registration_finish = opaque::client::registration::finish_registration(
             registration_start_request.state,
+            password.as_bytes(),
             start_response.registration_response,
             &mut rng,
         )

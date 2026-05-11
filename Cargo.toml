@@ -50,7 +50,7 @@ default-features = false
 features = ["debug", "display", "from", "from_str"]
 
 [workspace.dependencies.graphql_client]
-version = "0.11"
+version = "0.16"
 default-features = false
 features = ["graphql_query_derive"]
 
@@ -85,7 +85,8 @@ version = "0"
 version = "0.14"
 
 [workspace.dependencies.opaque-ke]
-version = "0.7"
+version = "4"
+features = ["ristretto255", "argon2"]
 
 [workspace.dependencies.orion]
 version = "0.17"
@@ -98,7 +99,7 @@ version = "0.8"
 features = ["small_rng", "getrandom"]
 
 [workspace.dependencies.reqwest]
-version = "0.11"
+version = "0.12"
 default-features = false
 
 [workspace.dependencies.sea-orm]

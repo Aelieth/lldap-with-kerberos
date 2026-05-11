@@ -136,6 +136,7 @@ fn main() -> Result<()> {
 
     let registration_finish = opaque::client::registration::finish_registration(
         registration_start_request.state,
+        password.as_bytes(),
         res.registration_response,
         &mut rng,
     )

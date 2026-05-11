@@ -360,6 +360,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 let mut rng = rand::rngs::OsRng;
                 let registration_finish = opaque::client::registration::finish_registration(
                     registration,
+                    self.form.model().password.as_bytes(),   // ← added password
                     res.registration_response,
                     &mut rng,
                 )

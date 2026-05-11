@@ -1,10 +1,5 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [0.7.1] 2026-05-15
 
 Major fork release, integration of MIT Kerberos into a docker container, OU's, redesign of public_schema, LDAP system and more
@@ -18,6 +13,8 @@ Major fork release, integration of MIT Kerberos into a docker container, OU's, r
  - jpegPhoto / Avatar enhancements
  - Federation page with Keycloak realm setup assistant
  - Migraton to v12 to support new schema and system_settings
+ - Updated rust toolchain to 1.95.0
+ - Dependency updates, including opaque version 4, graphql .16 and many others
 
 ## [0.6.3] 2026-05-01
 

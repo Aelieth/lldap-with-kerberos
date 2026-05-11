@@ -93,11 +93,14 @@ being contained within the same environment as LLDAP, acting in unison with one 
 
 ---
 
-**KLLDAP** is built turtle-step style: one file at a time, full builds verified, security-first, and designed to be reliable - because I want to use it too!
+**KLLDAP** is built turtle-step style: one file at a time, full builds verified, security-first,
+and designed to be reliable - because I want to use it too!
 
 ## Environment Variables
 
-Only the variables that are actually used. Everything else is either defaulted inside the container or configured via the new Federation tab or toml files.
+Only the variables that are actually needed for KLLDAP. Everything else is either defaulted inside the container or configured
+via the new Federation tab or toml files.
+Please see LLDAP variables for the remaining LLDAP remaining toml and env var information!
 
 | Variable                  | Required | Default                          | Description |
 |---------------------------|----------|----------------------------------|---------------------------------------------------|

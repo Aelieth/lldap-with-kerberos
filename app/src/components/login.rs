@@ -87,18 +87,21 @@ impl CommonComponent<LoginForm> for LoginForm {
                         return Ok(true);
                     }
                 };
-                let login_finish =
-                    match opaque::client::login::finish_login(login_start, res.credential_response)
-                    {
-                        Err(e) => {
-                            // Common error, we want to print a full error to the console but only a
-                            // simple one to the user.
-                            error!(&format!("Invalid username or password: {}", e));
-                            self.common.error = Some(anyhow!("Invalid username or password"));
-                            return Ok(true);
-                        }
-                        Ok(l) => l,
-                    };
+                let login_finish = match opaque::client::login::finish_login(
+                    login_start,
+                    self.form.model().password.as_bytes(),   // ← fixed
+                    res.credential_response,
+                    &mut rand::rngs::OsRng,
+                ) {
+                    Err(e) => {
+                        // Common error, we want to print a full error to the console but only a
+                        // simple one to the user.
+                        error!(&format!("Invalid username or password: {}", e));
+                        self.common.error = Some(anyhow!("Invalid username or password"));
+                        return Ok(true);
+                    }
+                    Ok(l) => l,
+                };
                 let req = login::ClientLoginFinishRequest {
                     server_data: res.server_data,
                     credential_finalization: login_finish.message,
@@ -106,7 +109,7 @@ impl CommonComponent<LoginForm> for LoginForm {
                 self.common.call_backend(
                     ctx,
                     HostService::login_finish(req),
-                    Msg::AuthenticationFinishResponse,
+                                         Msg::AuthenticationFinishResponse,
                 );
                 Ok(false)
             }
