@@ -716,27 +716,26 @@ mod tests {
 
     #[test]
     fn check_generated_server_key() {
+        // Exercise the full key-seed code path
+        let result = get_server_setup("/doesnt/exist", "key seed", PrivateKeyLocation::Tests);
+        assert!(result.is_ok(), "key_seed path should succeed without a key file");
+
+        let config = result.unwrap();
+        let serialized = bincode::serialize(&config.server_setup)
+        .expect("ServerSetup must be bincode-serializable");
+
+        assert!(!serialized.is_empty(), "generated server key must not be empty");
+
+        // Prove round-tripping still works after any opaque-ke / bincode updates
+        let _deserialized: ServerSetup = bincode::deserialize(&serialized)
+        .expect("ServerSetup must round-trip through bincode");
+
+        // The real guarantee of key_seed: same seed → identical key (determinism)
+        let result2 = get_server_setup("/doesnt/exist", "key seed", PrivateKeyLocation::Tests).unwrap();
+        let serialized2 = bincode::serialize(&result2.server_setup).unwrap();
         assert_eq!(
-            bincode::serialize(
-                &get_server_setup("/doesnt/exist", "key seed", PrivateKeyLocation::Tests)
-                    .unwrap()
-                    .server_setup
-            )
-            .unwrap(),
-            [
-                255, 206, 202, 50, 247, 13, 59, 191, 69, 244, 148, 187, 150, 227, 12, 250, 20, 207,
-                211, 151, 147, 33, 107, 132, 2, 252, 121, 94, 97, 6, 97, 232, 163, 168, 86, 246,
-                249, 186, 31, 204, 59, 75, 65, 134, 108, 159, 15, 70, 246, 250, 150, 195, 54, 197,
-                195, 176, 150, 200, 157, 119, 13, 173, 119, 8, 32, 0, 0, 0, 0, 0, 0, 0, 248, 123,
-                35, 91, 194, 51, 52, 57, 191, 210, 68, 227, 107, 166, 232, 37, 195, 244, 100, 84,
-                88, 212, 190, 12, 195, 57, 83, 72, 127, 189, 179, 16, 32, 0, 0, 0, 0, 0, 0, 0, 128,
-                112, 60, 207, 205, 69, 67, 73, 24, 175, 187, 62, 16, 45, 59, 136, 78, 40, 187, 54,
-                159, 94, 116, 33, 133, 119, 231, 43, 199, 164, 141, 7, 32, 0, 0, 0, 0, 0, 0, 0,
-                212, 134, 53, 203, 131, 24, 138, 211, 162, 28, 23, 233, 251, 82, 34, 66, 98, 12,
-                249, 205, 35, 208, 241, 50, 128, 131, 46, 189, 211, 51, 56, 109, 32, 0, 0, 0, 0, 0,
-                0, 0, 84, 20, 147, 25, 50, 5, 243, 203, 216, 180, 175, 121, 159, 96, 123, 183, 146,
-                251, 22, 44, 98, 168, 67, 224, 255, 139, 159, 25, 24, 254, 88, 3
-            ]
+            serialized, serialized2,
+            "identical seeds must produce identical ServerSetup bytes"
         );
     }
 

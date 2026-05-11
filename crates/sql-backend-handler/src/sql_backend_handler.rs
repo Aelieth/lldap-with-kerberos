@@ -71,12 +71,13 @@ pub mod tests {
             })
             .await
             .unwrap();
-        let registration_upload = opaque::client::registration::finish_registration(
-            client_registration_start.state,
-            response.registration_response,
-            &mut rng,
-        )
-        .unwrap();
+            let registration_upload = opaque::client::registration::finish_registration(
+                client_registration_start.state,
+                pass.as_bytes(),
+                response.registration_response,
+                &mut rng,
+            )
+            .unwrap();
         handler
             .registration_finish(registration::ClientRegistrationFinishRequest {
                 server_data: response.server_data,

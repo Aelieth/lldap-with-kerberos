@@ -259,10 +259,8 @@ mod tests {
 
     #[test]
     fn test_ou_matches_filter_default_true_for_unsupported() {
-        let filter = ldap3_proto::LdapFilter::Substring(
-            "cn".to_string(),
-                                                        ldap3_proto::SubstringFilter { initial: Some("a".to_string()), any: vec![], final_: None }
-        );
+        // GreaterOrEqual (and similar) are not handled by ou_matches_filter → should default to true
+        let filter = ldap3_proto::LdapFilter::GreaterOrEqual("cn".to_string(), "a".to_string());
         assert!(ou_matches_filter("office", &filter));
     }
 

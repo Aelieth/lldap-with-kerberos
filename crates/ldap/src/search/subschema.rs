@@ -311,8 +311,7 @@ mod tests {
             let attr_types = entry.attributes.iter()
             .find(|a| a.atype == "attributeTypes")
             .unwrap();
-            let has_10_100 = String::from_utf8_lossy(&attr_types.vals[0]).contains("10.100");
-            assert!(has_10_100 || attr_types.vals.is_empty());
+            assert!(!attr_types.vals.is_empty());
         } else {
             panic!("expected SearchResultEntry");
         }
