@@ -1,16 +1,30 @@
-# LLDAP with Kerberos
+<h1 align="center">KLLDAP - Enhanced Light LDAP with Kerberos</h1>
 
-DISCLAIMER:
-WORK IN PROGRESS / PERSONAL PROJECT and my first foray into Rust. Use at your own risk with optimistic caution!
-While you may report issues don't expect me to be on top of them as this is a hobby project.
-Built with aid of Grok / xAI. Thanks Grok and all of my agents - Tasker, Curiella, and ふわりね!
+*DISCLAIMER:
+Personal project and first foray into Rust. Use at your own risk with optimistic caution!
+You may report issues don't expect me to be on top of them as this is a hobby project.
+Built with aid of Grok / xAI. Thanks Grok and all of my agents.
 -----------
 
-# KLLDAP – Lightweight LDAP with Kerberos
+## About
 
-Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
+This is a major fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos
+KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
+<img
+  src="https://raw.githubusercontent.com/lldap/lldap/master/screenshot.png"
+  alt="Screenshot of the user list page"
+  width="50%"
+  align="right"
+/>
+This is not supported by LLDAP or its team, this is project by a lone network admin that
+needed Kerberos and full POSIX compliance and compatibility on his home hosted systems.
+Refer to [LLDAP](https://github.com/lldap/lldap) for a more community supported version.
 
-~18,000 new lines added, ~11,000 lines removed. Designed for reliable home or lab use.
+## Installation
+
+KLLDAP only supports Docker images at this time. Why? MIT Kerberos is a must in order to get
+Kerberos functionality with the system. Kerberos is setup to be tight-knit and secure by
+being contained within the same environment as LLDAP, acting in unison with one another.
 
 ## Schema System – Single Source of Truth
 - All LDAP attributes for users, groups, and system settings defined in one central place: `crates/schema/src/public_schema.rs`
@@ -55,23 +69,15 @@ Fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos KDC
 - Modularized and memory efficient for lookups with POSIX and SSSD
 
 ## Other improvements / Bugfixes
-- #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB size
+- #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB size to be consistent among databases
 - #401 [FEATURE REQUEST] Avatar supports upload of JPG, JPEG, BMP, and PNG formats converting to JPG now with 512x512 resolution and <512KB size support
 - #1202 [BUG] Attributes with the same name can be created with different types → Fixed with strict cross-schema check in add_user_attribute / add_group_attribute. Same name (even matching type) now blocked entirely.
 - #739 [FEATURE REQUEST] SSSD integration support → POSIX groups added. Extra user and group classes inetOrgPerson, posixAccount, and posixGroup mappings.
 - #1165 [BUG] Users and groups objects are seen as containers, instead of leafs
-- #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator."
-
-## Reccently implemented - needs testing
-- #712 [FEATURE REQUEST] SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure. → ssHPublicKey added to public_schema with ldapsearch functionality. Admins may enter keys for users or users may modify their own keys.
+- #750 [FEATURE REQUEST] Ability to disable LDAP users → lldap_disabled group added, if a user is added to this group they become inactive and grayed out on the user list, ldap search does not return them, and if they attempt to login they are returned "Account disabled. Contact administrator." Admin side can easily disable user with a button on the user_details_form.rs
 - #1308 [FEATURE REQUEST] Implement GreaterOrEqual filter for builtin timestamps → extended ldap user.rs and group.rs with handler.rs extensions with appropriate GreaterOrEqual / LessOrEqual for timestamps
 - #1425 [BUG] (&(objectClass=person)(...)) still performs group search, logging warnings → simple intercept fix inside of the convert_group_filter
-
-## TODOs before release
-- #756 / #847 [BUG] Database UNIQUE constraint failures on fresh install / k8s → v12 migration may fix, needs testing
-- ldap specific testing for OU's, user account modification, etc TEST PASSWORD UPDATE, USER CREATION, DELETION ETC
-- Cleanup: Logging
-- Cleanup: Code pass / Tests
+- #712 [FEATURE REQUEST] SSH public key support (ssHPublicKey attribute, list type, POSIX-style) — add to PublicSchema + migration + LDAP exposure. → ssHPublicKey added to public_schema with ldapsearch functionality. Admins may enter keys for users or users may modify their own keys.
 
 ## Future Plans
 - Continued integration of LLDAP features
