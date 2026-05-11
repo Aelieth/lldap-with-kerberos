@@ -10,14 +10,17 @@ Built with aid of Grok / xAI. Thanks Grok and all of my agents.
 
 This is a major fork of [LLDAP](https://github.com/lldap/lldap) with integrated MIT Kerberos
 KDC, POSIX extensions, admin-controlled Organizational Units, and Keycloak federation support.
+
 <img
-  src="https://raw.githubusercontent.com/lldap/lldap/master/screenshot.png"
+  src="https://raw.githubusercontent.com/Aelieth/lldap-with-kerberos/refs/heads/main/screenshot.png"
   alt="Screenshot of the user list page"
   width="50%"
   align="right"
 />
-This is not supported by LLDAP or its team, this is project by a lone network admin that
+
+KLLDAP is not supported by LLDAP or its team, this is project by a lone network admin that
 needed Kerberos and full POSIX compliance and compatibility on his home hosted systems.
+
 Refer to [LLDAP](https://github.com/lldap/lldap) for a more community supported version.
 
 ## Installation
