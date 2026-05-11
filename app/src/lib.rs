@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 #![forbid(non_ascii_idents)]
+#![forbid(unsafe_code)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::let_unit_value)]
 #![allow(clippy::unnecessary_operation)] // Doesn't work well with the html macro.

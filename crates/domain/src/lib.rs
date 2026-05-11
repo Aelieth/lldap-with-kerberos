@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 pub mod deserialize;
 pub mod public_schema;
 pub mod requests;

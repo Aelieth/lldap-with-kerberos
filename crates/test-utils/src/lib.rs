@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono;
 use lldap_domain::{
     requests::{
         CreateAttributeRequest, CreateGroupRequest, CreateUserRequest, UpdateGroupRequest,

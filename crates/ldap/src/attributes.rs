@@ -5,7 +5,6 @@
 
 use crate::core::utils::{DEFAULT_PRIMARY_GROUP_OU, DEFAULT_PRIMARY_USER_OU};
 use crate::dn::{build_group_dn, build_user_dn, get_leaf_ou};
-use lldap_domain::types::GroupName;
 use chrono::{NaiveDateTime, TimeZone};
 use ldap3_proto::LdapPartialAttribute;
 use lldap_domain::{
@@ -233,7 +232,7 @@ pub fn get_user_attribute(
                         ) = &a.value { Some(s.clone()) } else { None }
                     })
                     .unwrap_or_else(|| DEFAULT_PRIMARY_GROUP_OU.to_string());
-                build_group_dn(&GroupName::from(group.display_name.clone()), &group_ou, base_dn_str).into_bytes()
+                build_group_dn(&group.display_name, &group_ou, base_dn_str).into_bytes()
             })
             .collect(),
         crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => {
@@ -305,7 +304,7 @@ pub fn get_group_attribute(
         crate::core::utils::GroupFieldType::Dn => return None,
         crate::core::utils::GroupFieldType::EntryDn => {
             let internal_ou = get_group_ou(group);
-            vec![build_group_dn(&GroupName::from(group.display_name.clone()), &internal_ou, base_dn_str).into_bytes()]
+            vec![build_group_dn(&group.display_name, &internal_ou, base_dn_str).into_bytes()]
         }
         crate::core::utils::GroupFieldType::EntryUuid => {
             vec![group.uuid.to_string().into_bytes()]
@@ -419,7 +418,7 @@ pub fn make_ldap_search_group_result_entry(
     }
 
     LdapSearchResultEntry {
-        dn: build_group_dn(&GroupName::from(group.display_name.clone()), &get_group_ou(&group), base_dn_str),
+        dn: build_group_dn(&group.display_name, &get_group_ou(&group), base_dn_str),
         attributes: {
             let mut attrs: Vec<ldap3_proto::LdapPartialAttribute> = expanded_attributes.attribute_keys.into_iter()
                 .filter(|(attribute, _)| {

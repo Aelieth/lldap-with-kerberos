@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 pub(crate) mod attributes;
 pub(crate) mod compare;
 pub(crate) mod core;

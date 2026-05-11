@@ -303,7 +303,6 @@ impl LLDAPFixture {
         )
         .map(|_| {
             self.users.remove(user);
-            ()
         })
         .map_err(|e| e.to_string())
     }
@@ -318,7 +317,6 @@ impl LLDAPFixture {
             )
             .map(|_| {
                 self.groups.remove(group);
-                ()
             })
             .map_err(|e| e.to_string())
         } else {

@@ -139,7 +139,7 @@ async fn create_user(
         // get_user_ou() will then return it for correct EntryDn in search results.
         new_user_attributes.push(Attribute {
             name: "ou".into(),
-            value: deserialize::deserialize_attribute_value(&[internal_ou.clone()], AttributeType::String, false)
+            value: deserialize::deserialize_attribute_value(std::slice::from_ref(&internal_ou), AttributeType::String, false)
                 .map_err(|e| LdapError {
                     code: LdapResultCode::ConstraintViolation,
                     message: format!("Invalid ou value: {e}"),
@@ -180,7 +180,7 @@ async fn create_group(
     let mut group_attributes: Vec<Attribute> = Vec::new();
     group_attributes.push(Attribute {
         name: "ou".into(),
-        value: deserialize::deserialize_attribute_value(&[internal_ou.clone()], AttributeType::String, false)
+        value: deserialize::deserialize_attribute_value(std::slice::from_ref(&internal_ou), AttributeType::String, false)
             .map_err(|e| LdapError {
                 code: LdapResultCode::ConstraintViolation,
                 message: format!("Invalid ou value: {e}"),

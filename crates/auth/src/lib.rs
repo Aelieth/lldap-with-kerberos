@@ -1,4 +1,5 @@
 #![forbid(non_ascii_idents)]
+#![forbid(unsafe_code)]
 #![allow(clippy::nonstandard_macro_braces)]
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};

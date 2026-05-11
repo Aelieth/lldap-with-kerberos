@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 pub(crate) mod logging;
 pub(crate) mod sql_backend_handler;
 pub(crate) mod sql_group_backend_handler;
