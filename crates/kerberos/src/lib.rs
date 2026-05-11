@@ -1,5 +1,5 @@
 #![recursion_limit = "256"]
-
+#![allow(unsafe_code)]
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 use base64::engine::general_purpose::STANDARD;
