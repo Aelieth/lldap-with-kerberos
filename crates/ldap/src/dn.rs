@@ -209,12 +209,20 @@ pub fn get_user_or_group_id_from_distinguished_name(
         .cloned()
         .collect();
 
+    // Dual resolution: support uid= or cn= for users (in people/* OUs for POSIX/traditional LDAP compatibility)
+    // cn= only for groups (in groups/* OUs). This allows both traditional (cn) and POSIX (uid) clients.
+    let primary_ou = ou_chain
+        .last()
+        .map(|(_, v)| v.to_ascii_lowercase())
+        .unwrap_or_default();
+
     if parts.len() == base_tree.len() + ou_chain.len() + 1 {
         let rdn = &parts[0];
-        if rdn.0.eq_ignore_ascii_case("uid") {
-            return UserOrGroupName::User(UserId::from(rdn.1.clone()));
-        } else if rdn.0.eq_ignore_ascii_case("cn") {
-            return UserOrGroupName::Group(GroupName::from(rdn.1.clone()));
+        let rdn_type = rdn.0.to_ascii_lowercase();
+        if rdn_type == "uid" || (rdn_type == "cn" && (primary_ou == "people" || primary_ou.is_empty())) {
+                return UserOrGroupName::User(UserId::from(rdn.1.clone()));
+        } else if rdn_type == "cn" && primary_ou == "groups" {
+                return UserOrGroupName::Group(GroupName::from(rdn.1.clone()));
         }
     }
 
@@ -239,7 +247,7 @@ pub fn get_group_id_from_distinguished_name(
 ) -> LdapResult<GroupName> {
     match get_user_or_group_id_from_distinguished_name(dn, base_tree) {
         UserOrGroupName::Group(group_name) => Ok(group_name),
-        err => Err(err.into_ldap_error(dn, format!(r#""cn=id,ou=...,{}""#, base_dn_str))),
+        err => Err(err.into_ldap_error(dn, format!(r#""uid=id or cn=id,ou=...,{}""#, base_dn_str))),
     }
 }
 

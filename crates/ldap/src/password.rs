@@ -332,7 +332,7 @@ pub mod tests {
             make_bind_result(LdapResultCode::NamingViolation, "Not a subtree of the base tree"),
         );
 
-        // VALID: correct base DN + correct RDN type → Success
+        // VALID: correct base DN + uid= RDN type → Success (POSIX style)
         let request = LdapBindRequest {
             dn: "uid=bob,ou=people,dc=example,dc=com".to_string(),
             cred: LdapBindCred::Simple("pass".to_string()),
@@ -342,17 +342,15 @@ pub mod tests {
             make_bind_success()
         );
 
-        // INVALID: correct base DN but wrong RDN type (cn= instead of uid=) → NamingViolation
+        // VALID: correct base DN + cn= RDN type for user in people OU → Success (dual resolution)
+        // Both uid= and cn= must succeed and return the user "bob"
         let request = LdapBindRequest {
             dn: "cn=bob,ou=people,dc=example,dc=com".to_string(),
             cred: LdapBindCred::Simple("pass".to_string()),
         };
         assert_eq!(
             ldap_handler.do_bind(&request).await,
-            make_bind_result(
-                LdapResultCode::NamingViolation,
-                r#"Unexpected DN format. Got "cn=bob,ou=people,dc=example,dc=com", expected: "uid=id,ou=...,dc=example,dc=com""#
-            ),
+            make_bind_success()
         );
     }
 

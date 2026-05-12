@@ -296,6 +296,10 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                 self.backend_handler
                     .get_readable_handler(credentials, user_id)
             },
+            |credentials, user_id| {
+                self.backend_handler
+                    .get_writeable_handler(credentials, user_id)
+            },
             self.ldap_info,
             credentials,
             request,

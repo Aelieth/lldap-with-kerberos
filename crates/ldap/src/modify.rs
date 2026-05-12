@@ -1,6 +1,8 @@
 // crates/ldap/src/modify.rs
-// LDAP Modify — currently only supports password changes (userPassword Replace)
-// All other attribute modifications go through the GraphQL layer (protected by schema read-only flags)
+// LDAP Modify — supports password changes (userPassword Replace) + profile attributes
+// (givenName/sn/cn/mail/avatar/sshPublicKey) for self-service / admin updates.
+// Mirrors the GraphQL update_user path using UpdateUserRequest + writeable handler.
+// All other operations still return UnwillingToPerform (single source of truth in GraphQL layer).
 
 use crate::{
     core::{
@@ -11,100 +13,389 @@ use crate::{
     password,
 };
 use ldap3_proto::proto::{LdapModify, LdapModifyRequest, LdapModifyType, LdapOp, LdapResultCode};
-use lldap_access_control::UserReadableBackendHandler;
+use lldap_access_control::{UserReadableBackendHandler, UserWriteableBackendHandler};
 use lldap_auth::access_control::ValidationResults;
-use lldap_domain::types::UserId;
+use lldap_domain::{
+    deserialize,
+    requests::UpdateUserRequest,
+    types::{Attribute, AttributeName, AttributeType, Email, UserId},
+};
 use lldap_opaque_handler::OpaqueHandler;
 use tracing::warn;
 
 async fn handle_modify_change(
     readable_handler: &impl UserReadableBackendHandler,
+    writeable_handler: &impl UserWriteableBackendHandler,
     opaque_handler: &impl OpaqueHandler,
     user_id: UserId,
     credentials: &ValidationResults,
     user_is_admin: bool,
     change: &LdapModify,
 ) -> LdapResult<()> {
-    if !change
-        .modification
-        .atype
-        .eq_ignore_ascii_case("userpassword")
-        || change.operation != LdapModifyType::Replace
-    {
-        return Err(LdapError {
-            code: LdapResultCode::UnwillingToPerform,
-            message: format!(
-                r#"Unsupported operation: `{:?}` for `{}`"#,
-                change.operation, change.modification.atype
-            ),
-        });
-    }
+    let atype_lower = change.modification.atype.to_ascii_lowercase();
 
-    if !credentials.can_change_password(&user_id, user_is_admin) {
-        return Err(LdapError {
-            code: LdapResultCode::InsufficentAccessRights,
-            message: format!(
-                r#"User `{}` cannot modify the password of user `{}`"#,
-                credentials.user, user_id
-            ),
-        });
-    }
-
-    if let [value] = &change.modification.vals.as_slice() {
-        password::change_password(opaque_handler, user_id.clone(), value)
-            .await
-            .map_err(|e| LdapError {
-                code: LdapResultCode::Other,
-                message: format!("Error while changing the password: {e:#?}"),
-            })?;
-
-        // Kerberos sync after LDAP password change (if enabled for this user)
-        // Uses our PublicSchema single source of truth via the integer attribute
-        if let Ok(plain_pass) = std::str::from_utf8(value) {
-            let user = match readable_handler.get_user_details(&user_id).await {
-                Ok(u) => u,
-                Err(e) => {
-                    warn!("Failed to fetch user for Kerberos sync check: {}", e);
-                    return Ok(());
-                }
-            };
-
-            let sync_enabled = user.attributes.iter().any(|attr| {
-                attr.name.as_str() == "kerberossync"
-                    && matches!(
-                        &attr.value,
-                        lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1))
-                    )
+    if atype_lower == "userpassword" {
+        if change.operation != LdapModifyType::Replace {
+            return Err(LdapError {
+                code: LdapResultCode::UnwillingToPerform,
+                message: format!(
+                    r#"Unsupported operation: `{:?}` for `{}`"#,
+                    change.operation, change.modification.atype
+                ),
             });
+        }
 
-            if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
-                warn!("Kerberos sync failed after LDAP password change: {}", e);
+        if !credentials.can_change_password(&user_id, user_is_admin) {
+            return Err(LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: format!(
+                    r#"User `{}` cannot modify the password of user `{}`"#,
+                    credentials.user, user_id
+                ),
+            });
+        }
+
+        if let [value] = &change.modification.vals.as_slice() {
+            password::change_password(opaque_handler, user_id.clone(), value)
+                .await
+                .map_err(|e| LdapError {
+                    code: LdapResultCode::Other,
+                    message: format!("Error while changing the password: {e:#?}"),
+                })?;
+
+            if let Ok(plain_pass) = std::str::from_utf8(value) {
+                let user = match readable_handler.get_user_details(&user_id).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        warn!("Failed to fetch user for Kerberos sync check: {}", e);
+                        return Ok(());
+                    }
+                };
+
+                let sync_enabled = user.attributes.iter().any(|attr| {
+                    attr.name.as_str() == "kerberossync"
+                        && matches!(
+                            &attr.value,
+                            lldap_domain::types::AttributeValue::Integer(lldap_domain::types::Cardinality::Singleton(1))
+                        )
+                });
+
+                if let Err(e) = lldap_kerberos::sync_kerberos_if_enabled(sync_enabled, user_id.as_str(), plain_pass) {
+                    warn!("Kerberos sync failed after LDAP password change: {}", e);
+                }
+            }
+            Ok(())
+        } else {
+            Err(LdapError {
+                code: LdapResultCode::InvalidAttributeSyntax,
+                message: format!(
+                    r#"Wrong number of values for password attribute: {}"#,
+                    change.modification.vals.len()
+                ),
+            })
+        }
+    } else {
+        // === Profile attributes: now support Add / Replace / Delete ===
+        if !credentials.can_change_password(&user_id, user_is_admin) {
+            return Err(LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: format!(
+                    r#"User `{}` cannot modify attributes of user `{}`"#,
+                    credentials.user, user_id
+                ),
+            });
+        }
+
+        // Protect mail and displayname from deletion
+        if change.operation == LdapModifyType::Delete
+            && (atype_lower == "mail" || atype_lower == "email"
+                || atype_lower == "cn" || atype_lower == "displayname" || atype_lower == "commonname")
+        {
+            return Err(LdapError {
+                code: LdapResultCode::InsufficentAccessRights,
+                message: format!(
+                    r#"Deletion of `{}` is not allowed via LDAP Modify (use GraphQL or protected path)"#,
+                    change.modification.atype
+                ),
+            });
+        }
+
+        let mut email: Option<Email> = None;
+        let mut display_name: Option<String> = None;
+        let mut insert_attributes: Vec<Attribute> = Vec::new();
+        let mut delete_attributes: Vec<AttributeName> = Vec::new();
+
+        match change.operation {
+            LdapModifyType::Replace => {
+                let vals: Vec<String> = change.modification.vals.iter()
+                    .filter_map(|v| std::str::from_utf8(v).ok().map(|s| s.to_string()))
+                    .collect();
+
+                if vals.is_empty() {
+                    return Err(LdapError {
+                        code: LdapResultCode::InvalidAttributeSyntax,
+                        message: format!("No values provided for {}", change.modification.atype),
+                    });
+                }
+
+                match atype_lower.as_str() {
+                    "givenname" | "given_name" => {
+                        insert_attributes.push(Attribute {
+                            name: "first_name".into(),
+                            value: deserialize::deserialize_attribute_value(&vals, AttributeType::String, false)
+                                .map_err(|e| LdapError {
+                                    code: LdapResultCode::ConstraintViolation,
+                                    message: format!("Invalid first_name value: {e}"),
+                                })?,
+                        });
+                    }
+                    "sn" | "surname" => {
+                        insert_attributes.push(Attribute {
+                            name: "last_name".into(),
+                            value: deserialize::deserialize_attribute_value(&vals, AttributeType::String, false)
+                                .map_err(|e| LdapError {
+                                    code: LdapResultCode::ConstraintViolation,
+                                    message: format!("Invalid last_name value: {e}"),
+                                })?,
+                        });
+                    }
+                    "cn" | "commonname" | "displayname" => {
+                        display_name = Some(vals[0].clone());
+                    }
+                    "mail" | "email" => {
+                        email = Some(Email::from(vals[0].clone()));
+                    }
+                    "avatar" | "jpegphoto" | "jpeg_photo" => {
+                        insert_attributes.push(Attribute {
+                            name: "avatar".into(),
+                            value: deserialize::deserialize_attribute_value(&vals, AttributeType::Avatar, false)
+                                .map_err(|e| LdapError {
+                                    code: LdapResultCode::ConstraintViolation,
+                                    message: format!("Invalid avatar value: {e}"),
+                                })?,
+                        });
+                    }
+                    "sshpublickey" | "ssh_public_key" => {
+                        insert_attributes.push(Attribute {
+                            name: "sshpublickey".into(),
+                            value: deserialize::deserialize_attribute_value(&vals, AttributeType::String, true)
+                                .map_err(|e| LdapError {
+                                    code: LdapResultCode::ConstraintViolation,
+                                    message: format!("Invalid sshPublicKey value: {e}"),
+                                })?,
+                        });
+                    }
+                    "ou" => {
+                        return Err(LdapError {
+                            code: LdapResultCode::UnwillingToPerform,
+                            message: "Direct modification of 'ou' via LDAP Modify is not supported.".to_string(),
+                        });
+                    }
+                    _ => {
+                        return Err(LdapError {
+                            code: LdapResultCode::UnwillingToPerform,
+                            message: format!(r#"Unsupported attribute for LDAP Modify: {}"#, change.modification.atype),
+                        });
+                    }
+                }
+            }
+
+            LdapModifyType::Add => {
+                let new_vals: Vec<String> = change.modification.vals.iter()
+                    .filter_map(|v| std::str::from_utf8(v).ok().map(|s| s.to_string()))
+                    .collect();
+
+                if new_vals.is_empty() {
+                    return Err(LdapError {
+                        code: LdapResultCode::InvalidAttributeSyntax,
+                        message: format!("No values provided for {}", change.modification.atype),
+                    });
+                }
+
+                if atype_lower == "sshpublickey" || atype_lower == "ssh_public_key" {
+                    let user = readable_handler.get_user_details(&user_id).await
+                        .map_err(|e| LdapError {
+                            code: LdapResultCode::OperationsError,
+                            message: format!("Failed to read current user: {e}"),
+                        })?;
+
+                    let mut existing: Vec<String> = user.attributes.iter()
+                        .find(|a| a.name.as_str() == "sshpublickey")
+                        .and_then(|a| match &a.value {
+                            lldap_domain::types::AttributeValue::String(
+                                lldap_domain::types::Cardinality::Unbounded(list)
+                            ) => Some(list.clone()),
+                            lldap_domain::types::AttributeValue::String(
+                                lldap_domain::types::Cardinality::Singleton(s)
+                            ) => Some(vec![s.clone()]),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+
+                    for v in new_vals {
+                        if !existing.contains(&v) {
+                            existing.push(v);
+                        }
+                    }
+
+                    insert_attributes.push(Attribute {
+                        name: "sshpublickey".into(),
+                        value: deserialize::deserialize_attribute_value(&existing, AttributeType::String, true)
+                            .map_err(|e| LdapError {
+                                code: LdapResultCode::ConstraintViolation,
+                                message: format!("Invalid sshPublicKey value: {e}"),
+                            })?,
+                    });
+                } else {
+                    match atype_lower.as_str() {
+                        "givenname" | "given_name" => {
+                            insert_attributes.push(Attribute {
+                                name: "first_name".into(),
+                                value: deserialize::deserialize_attribute_value(&new_vals, AttributeType::String, false)
+                                    .map_err(|e| LdapError {
+                                        code: LdapResultCode::ConstraintViolation,
+                                        message: format!("Invalid first_name value: {e}"),
+                                    })?,
+                            });
+                        }
+                        "sn" | "surname" => {
+                            insert_attributes.push(Attribute {
+                                name: "last_name".into(),
+                                value: deserialize::deserialize_attribute_value(&new_vals, AttributeType::String, false)
+                                    .map_err(|e| LdapError {
+                                        code: LdapResultCode::ConstraintViolation,
+                                        message: format!("Invalid last_name value: {e}"),
+                                    })?,
+                            });
+                        }
+                        "cn" | "commonname" | "displayname" => {
+                            display_name = Some(new_vals[0].clone());
+                        }
+                        "mail" | "email" => {
+                            email = Some(Email::from(new_vals[0].clone()));
+                        }
+                        "avatar" | "jpegphoto" | "jpeg_photo" => {
+                            insert_attributes.push(Attribute {
+                                name: "avatar".into(),
+                                value: deserialize::deserialize_attribute_value(&new_vals, AttributeType::Avatar, false)
+                                    .map_err(|e| LdapError {
+                                        code: LdapResultCode::ConstraintViolation,
+                                        message: format!("Invalid avatar value: {e}"),
+                                    })?,
+                            });
+                        }
+                        _ => {
+                            return Err(LdapError {
+                                code: LdapResultCode::UnwillingToPerform,
+                                message: format!("Add not supported for {}", change.modification.atype),
+                            });
+                        }
+                    }
+                }
+            }
+
+            LdapModifyType::Delete => {
+                let delete_vals: Vec<String> = change.modification.vals.iter()
+                    .filter_map(|v| std::str::from_utf8(v).ok().map(|s| s.to_string()))
+                    .collect();
+
+                if atype_lower == "sshpublickey" || atype_lower == "ssh_public_key" {
+                    if delete_vals.is_empty() {
+                        // No specific values → delete whole attribute
+                        delete_attributes.push(AttributeName::from("sshpublickey"));
+                    } else {
+                        // Specific keys provided → remove only those exact keys
+                        let user = readable_handler.get_user_details(&user_id).await
+                            .map_err(|e| LdapError {
+                                code: LdapResultCode::OperationsError,
+                                message: format!("Failed to read current user: {e}"),
+                            })?;
+
+                        let existing: Vec<String> = user.attributes.iter()
+                            .find(|a| a.name.as_str() == "sshpublickey")
+                            .and_then(|a| match &a.value {
+                                lldap_domain::types::AttributeValue::String(
+                                    lldap_domain::types::Cardinality::Unbounded(list)
+                                ) => Some(list.clone()),
+                                lldap_domain::types::AttributeValue::String(
+                                    lldap_domain::types::Cardinality::Singleton(s)
+                                ) => Some(vec![s.clone()]),
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+
+                        let remaining: Vec<String> = existing
+                            .into_iter()
+                            .filter(|k| !delete_vals.contains(k))
+                            .collect();
+
+                        if remaining.is_empty() {
+                            delete_attributes.push(AttributeName::from("sshpublickey"));
+                        } else {
+                            insert_attributes.push(Attribute {
+                                name: "sshpublickey".into(),
+                                value: deserialize::deserialize_attribute_value(&remaining, AttributeType::String, true)
+                                    .map_err(|e| LdapError {
+                                        code: LdapResultCode::ConstraintViolation,
+                                        message: format!("Invalid sshPublicKey value: {e}"),
+                                    })?,
+                            });
+                        }
+                    }
+                } else {
+                    // Non-sshPublicKey delete (whole attribute)
+                    match atype_lower.as_str() {
+                        "givenname" | "given_name" => delete_attributes.push(AttributeName::from("first_name")),
+                        "sn" | "surname" => delete_attributes.push(AttributeName::from("last_name")),
+                        "avatar" | "jpegphoto" | "jpeg_photo" => delete_attributes.push(AttributeName::from("avatar")),
+                        _ => {
+                            return Err(LdapError {
+                                code: LdapResultCode::UnwillingToPerform,
+                                message: format!("Deletion not supported for {}", change.modification.atype),
+                            });
+                        }
+                    }
+                }
             }
         }
+
+        let update_req = UpdateUserRequest {
+            user_id: user_id.clone(),
+            email,
+            display_name,
+            delete_attributes,
+            insert_attributes,
+        };
+
+        writeable_handler
+            .update_user(update_req)
+            .await
+            .map_err(|e| LdapError {
+                code: LdapResultCode::OperationsError,
+                message: format!("Error while updating user via LDAP Modify: {e:#?}"),
+            })?;
+
         Ok(())
-    } else {
-        Err(LdapError {
-            code: LdapResultCode::InvalidAttributeSyntax,
-            message: format!(
-                r#"Wrong number of values for password attribute: {}"#,
-                change.modification.vals.len()
-            ),
-        })
     }
 }
 
-pub(crate) async fn handle_modify_request<'cred, UserBackendHandler>(
+pub(crate) async fn handle_modify_request<'cred, UserBackendHandler, WriteBackendHandler>(
     opaque_handler: &impl OpaqueHandler,
     get_readable_handler: impl Fn(
         &'cred ValidationResults,
         UserId,
     ) -> Option<&'cred UserBackendHandler>,
+    get_writeable_handler: impl Fn(
+        &'cred ValidationResults,
+        UserId,
+    ) -> Option<&'cred WriteBackendHandler>,
     ldap_info: &LdapInfo,
     credentials: &'cred ValidationResults,
     request: &LdapModifyRequest,
 ) -> LdapResult<Vec<LdapOp>>
 where
-UserBackendHandler: UserReadableBackendHandler + 'cred,
+    UserBackendHandler: UserReadableBackendHandler + 'cred,
+    WriteBackendHandler: UserWriteableBackendHandler + 'cred,
 {
     match get_user_id_from_distinguished_name(
         &request.dn,
@@ -114,32 +405,43 @@ UserBackendHandler: UserReadableBackendHandler + 'cred,
         Ok(uid) => {
             for change in &request.changes {
                 let readable_handler = get_readable_handler(credentials, uid.clone())
-                .ok_or_else(|| LdapError {
-                    code: LdapResultCode::InsufficentAccessRights,
-                    message: format!(
-                        "User `{}` cannot modify user `{}`",
-                        credentials.user.as_str(),
-                                     uid.as_str()
-                    ),
-                })?;
+                    .ok_or_else(|| LdapError {
+                        code: LdapResultCode::InsufficentAccessRights,
+                        message: format!(
+                            "User `{}` cannot modify user `{}`",
+                            credentials.user.as_str(),
+                            uid.as_str()
+                        ),
+                    })?;
+
+                let writeable_handler = get_writeable_handler(credentials, uid.clone())
+                    .ok_or_else(|| LdapError {
+                        code: LdapResultCode::InsufficentAccessRights,
+                        message: format!(
+                            "User `{}` cannot modify user `{}` (no write permission)",
+                            credentials.user.as_str(),
+                            uid.as_str()
+                        ),
+                    })?;
 
                 let user_is_admin = readable_handler
-                .get_user_groups(&uid)
-                .await
-                .map_err(|e| LdapError {
-                    code: LdapResultCode::OperationsError,
-                    message: format!("Internal error while requesting user's groups: {e:#?}"),
-                })?
-                .iter()
-                .any(|g| g.display_name == "lldap_admin".into());
+                    .get_user_groups(&uid)
+                    .await
+                    .map_err(|e| LdapError {
+                        code: LdapResultCode::OperationsError,
+                        message: format!("Internal error while requesting user's groups: {e:#?}"),
+                    })?
+                    .iter()
+                    .any(|g| g.display_name == "lldap_admin".into());
 
                 handle_modify_change(
                     readable_handler,
+                    writeable_handler,
                     opaque_handler,
                     uid.clone(),
-                                     credentials,
-                                     user_is_admin,
-                                     change,
+                    credentials,
+                    user_is_admin,
+                    change,
                 )
                 .await?;
             }
@@ -227,9 +529,7 @@ mod tests {
     }
 
     // ========================================================================
-    // FUNDAMENTAL REWRITE
-    // We properly simulate security contexts (admin / password_manager / regular)
-    // using explicit get_user_groups expectations so the new ACL logic works correctly.
+    // EXISTING PASSWORD TESTS (unchanged behavior)
     // ========================================================================
 
     #[tokio::test]
@@ -270,14 +570,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_modify_password_bad_primary_dn() {
-        // Tests that modify with a bad primary DN (invalid format) is rejected early
-        // with InvalidDNSyntax, before any password change logic runs.
         let mut mock = MockTestBackendHandler::new();
         setup_default_ldap_mock(&mut mock);
 
         let ldap_handler = setup_bound_admin_handler(mock).await;
 
-        // Bad primary DN (wrong base)
         let request = LdapModifyRequest {
             dn: "uid=bob,ou=people,dc=example,dc=fr".to_string(),
             changes: vec![LdapModify {
@@ -302,29 +599,28 @@ mod tests {
         let mut mock = MockTestBackendHandler::new();
         setup_default_ldap_mock(&mut mock);
 
-        // Make "bob" appear as admin so regular user correctly denies
         mock.expect_get_user_groups()
-        .with(mockall::predicate::eq(UserId::new("bob")))
-        .returning(|_| {
-            let mut set = HashSet::new();
-            set.insert(GroupDetails {
-                group_id: GroupId(1),
-                       display_name: "lldap_admin".into(),
-                       creation_date: chrono::Utc::now().naive_utc(),
-                       modified_date: chrono::Utc::now().naive_utc(),
-                       uuid: lldap_domain::types::Uuid::from_name_and_date("bob", &chrono::Utc::now().naive_utc()),
-                       attributes: vec![],
+            .with(mockall::predicate::eq(UserId::new("bob")))
+            .returning(|_| {
+                let mut set = HashSet::new();
+                set.insert(GroupDetails {
+                    group_id: GroupId(1),
+                    display_name: "lldap_admin".into(),
+                    creation_date: chrono::Utc::now().naive_utc(),
+                    modified_date: chrono::Utc::now().naive_utc(),
+                    uuid: lldap_domain::types::Uuid::from_name_and_date("bob", &chrono::Utc::now().naive_utc()),
+                    attributes: vec![],
+                });
+                Ok(set)
             });
-            Ok(set)
-        });
 
         let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
         assert_eq!(
             ldap_handler.do_modify_request(&make_password_modify_request("bob")).await,
-                   make_modify_failure_response(
-                       LdapResultCode::InsufficentAccessRights,
-                       "User `test` cannot modify the password of user `bob`"
-                   )
+            make_modify_failure_response(
+                LdapResultCode::InsufficentAccessRights,
+                "User `test` cannot modify user `bob` (no write permission)"
+            )
         );
     }
 
@@ -361,6 +657,134 @@ mod tests {
             make_modify_failure_response(
                 LdapResultCode::InvalidAttributeSyntax,
                 "Wrong number of values for password attribute: 2"
+            )
+        );
+    }
+
+    // ========================================================================
+    // NEW PROFILE ATTRIBUTE MODIFY TESTS (givenName, sn, cn, mail, avatar, sshPublicKey)
+    // ========================================================================
+
+    fn make_profile_modify_request(target_user: &str, attr: &str, value: &str) -> LdapModifyRequest {
+        LdapModifyRequest {
+            dn: format!("uid={target_user},ou=people,dc=example,dc=com"),
+            changes: vec![LdapModify {
+                operation: LdapModifyType::Replace,
+                modification: ldap3_proto::LdapPartialAttribute {
+                    atype: attr.to_string(),
+                    vals: vec![value.as_bytes().to_vec()],
+                },
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_modify_givenname_as_self() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        // Expect update_user call with first_name
+        mock.expect_update_user()
+            .with(mockall::predicate::function(|req: &lldap_domain::requests::UpdateUserRequest| {
+                req.user_id == UserId::new("test") &&
+                req.insert_attributes.iter().any(|a| a.name.as_str() == "first_name")
+            }))
+            .times(1)
+            .return_once(|_| Ok(()));
+
+        let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
+        let request = make_profile_modify_request("test", "givenName", "Alice");
+        assert_eq!(
+            ldap_handler.do_modify_request(&request).await,
+            make_modify_success_response()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_modify_sn_as_admin() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        mock.expect_update_user()
+        .with(mockall::predicate::function(|req: &lldap_domain::requests::UpdateUserRequest| {
+            req.user_id == UserId::new("bob") &&
+            req.insert_attributes.iter().any(|a| a.name.as_str() == "last_name")
+        }))
+        .times(1)
+        .return_once(|_| Ok(()));
+
+        let ldap_handler = setup_bound_admin_handler(mock).await;
+        let request = make_profile_modify_request("bob", "sn", "Smith");
+        assert_eq!(ldap_handler.do_modify_request(&request).await, make_modify_success_response());
+    }
+
+    #[tokio::test]
+    async fn test_modify_mail_as_admin() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        mock.expect_update_user()
+        .with(mockall::predicate::function(|req: &lldap_domain::requests::UpdateUserRequest| {
+            req.user_id == UserId::new("bob") && req.email.is_some()
+        }))
+        .times(1)
+        .return_once(|_| Ok(()));
+
+        let ldap_handler = setup_bound_admin_handler(mock).await;
+        let request = make_profile_modify_request("bob", "mail", "bob.smith@example.com");
+        assert_eq!(ldap_handler.do_modify_request(&request).await, make_modify_success_response());
+    }
+
+    #[tokio::test]
+    async fn test_modify_cn_displayname_as_self() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        mock.expect_update_user()
+            .with(mockall::predicate::function(|req: &lldap_domain::requests::UpdateUserRequest| {
+                req.user_id == UserId::new("test") && req.display_name == Some("Test User".to_string())
+            }))
+            .times(1)
+            .return_once(|_| Ok(()));
+
+        let ldap_handler = setup_bound_handler_with_group(mock, "regular").await;
+        let request = make_profile_modify_request("test", "cn", "Test User");
+        assert_eq!(
+            ldap_handler.do_modify_request(&request).await,
+            make_modify_success_response()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_modify_avatar_and_sshpublickey_as_admin() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+
+        mock.expect_update_user()
+            .times(2) // one for avatar, one for ssh
+            .returning(|_| Ok(()));
+
+        let ldap_handler = setup_bound_admin_handler(mock).await;
+
+        let avatar_req = make_profile_modify_request("bob", "avatar", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==");
+        assert_eq!(ldap_handler.do_modify_request(&avatar_req).await, make_modify_success_response());
+
+        let ssh_req = make_profile_modify_request("bob", "sshPublicKey", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABCCCBAQCExampleRSAKeyForTestingOnly2048bit testuser@otherlab");
+        assert_eq!(ldap_handler.do_modify_request(&ssh_req).await, make_modify_success_response());
+    }
+
+    #[tokio::test]
+    async fn test_modify_unsupported_attribute() {
+        let mut mock = MockTestBackendHandler::new();
+        setup_default_ldap_mock(&mut mock);
+        let ldap_handler = setup_bound_admin_handler(mock).await;
+
+        let request = make_profile_modify_request("bob", "title", "Manager");
+        assert_eq!(
+            ldap_handler.do_modify_request(&request).await,
+            make_modify_failure_response(
+                LdapResultCode::UnwillingToPerform,
+                "Unsupported attribute for LDAP Modify: title (supported: givenName, sn, cn, mail, avatar, sshPublicKey, userPassword)"
             )
         );
     }
