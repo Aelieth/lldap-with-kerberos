@@ -79,6 +79,8 @@ input PushRealmToKeycloakInput {
   lldapUrl: String!
   syncUsername: String!
   syncPassword: String!
+  enableHsts: Boolean!
+  enableBruteForce: Boolean!
 }
 
 """

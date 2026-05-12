@@ -45,11 +45,13 @@ impl KeycloakClient {
         lldap_url: String,
         sync_username: String,
         sync_password: String,
+        enable_hsts: bool,
+        enable_brute_force: bool,
     ) -> Result<String> {
         info!("🔄 PushRealm starting - Realm: '{}', LLDAP URL: '{}'", self.config.realm, lldap_url);
         let token = self.acquire_token().await?;
 
-        self.create_realm(&token).await?;
+        self.create_realm(&token, enable_hsts, enable_brute_force).await?;
         self.add_ldap_kerberos_component(&token, &lldap_url, &sync_username, &sync_password).await?;
         self.add_lldap_web_client(&token).await?;
 
@@ -81,7 +83,7 @@ impl KeycloakClient {
         Ok(token)
     }
 
-    async fn create_realm(&self, token: &str) -> Result<()> {
+    async fn create_realm(&self, token: &str, enable_hsts: bool, enable_brute_force: bool) -> Result<()> {
         info!("   → Creating realm '{}'...", self.config.realm);
         let realm_json = json!({
             "realm": self.config.realm,
@@ -97,13 +99,17 @@ impl KeycloakClient {
             "ssoSessionMaxLifespan": 43200,
             "accessTokenLifespan": 900,
             "browserSecurityHeaders": {
-                "strictTransportSecurity": "",
+                "strictTransportSecurity": if enable_hsts {
+                    "max-age=31536000; includeSubDomains"
+                } else {
+                    ""
+                },
                 "xFrameOptions": "SAMEORIGIN",
                 "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
                 "xContentTypeOptions": "nosniff",
                 "referrerPolicy": "no-referrer"
             },
-            "bruteForceProtected": false
+            "bruteForceProtected": enable_brute_force
         });
 
         let resp = self.http_client

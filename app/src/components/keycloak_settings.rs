@@ -163,6 +163,8 @@ impl CommonComponent<KeycloakSettings> for KeycloakSettings {
                         lldap_url: self.lldap_url.clone(),
                         sync_username: self.sync_username.clone(),
                         sync_password: self.sync_password.clone(),
+                        enable_hsts: Some(self.enable_hsts),
+                        enable_brute_force: Some(self.enable_brute_force),
                     },
                 };
                 self.common.call_graphql::<PushRealmToKeycloak, _>(ctx, variables, Msg::PushResponse, "Error pushing realm");

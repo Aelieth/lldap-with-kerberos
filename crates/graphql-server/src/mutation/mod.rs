@@ -107,6 +107,8 @@ struct PushRealmToKeycloakInput {
     lldap_url: String,
     sync_username: String,
     sync_password: String,
+    enable_hsts: bool,
+    enable_brute_force: bool,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -1074,8 +1076,17 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
             input.admin_pass,
         );
 
+        let enable_hsts = input.enable_hsts;
+        let enable_brute_force = input.enable_brute_force;
+
         let message = client
-        .setup_realm(input.lldap_url, input.sync_username, input.sync_password)
+        .setup_realm(
+            input.lldap_url,
+            input.sync_username,
+            input.sync_password,
+            enable_hsts,
+            enable_brute_force,
+        )
         .await
         .map_err(|e| juniper::FieldError::new(e.to_string(), juniper::Value::null()))?;
 
