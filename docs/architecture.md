@@ -79,7 +79,7 @@ MIT Kerberos KDC maintains its own independent database (`/var/kerberos/krb5kdc`
 On user creation or password change, the plaintext password is decrypted once
 (RSA 2048 OAEP+SHA-256) and synced to the KDC via the kadm5 keytab. After this
 single sync operation, KLLDAP immediately discards all knowledge of the
-plaintext password — exactly like OPAQUE, we retain zero knowledge of the
+plaintext password — exactly like OPAQUE, retaining zero knowledge of the
 actual credential.
 
 ### JWTs and refresh tokens

@@ -1021,6 +1021,17 @@ impl UserBackendHandler for SqlBackendHandler {
 
     #[instrument(skip_all, level = "debug", err, fields(user_id = ?user_id.as_str()))]
     async fn delete_user(&self, user_id: &UserId) -> Result<()> {
+        // Kerberos principal must be removed when the user ceases to exist.
+        // We do this *before* the hard delete so the row still exists if anything
+        // downstream needs it, and because delete_kerberos_principal is idempotent.
+        if let Err(e) = delete_kerberos_principal(user_id.as_str()) {
+            tracing::warn!(
+                "Failed to delete Kerberos principal for user {} during deletion (non-fatal): {}",
+                           user_id,
+                           e
+            );
+        }
+
         let res = model::User::delete_by_id(user_id.clone())
         .exec(&self.sql_pool)
         .await?;

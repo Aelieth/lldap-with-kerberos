@@ -68,8 +68,9 @@ being contained within the same environment as LLDAP, acting in unison with one 
 
 ## LDAP Standardized support following RFC guidelines
 - Full standards compliant refactor with RFC guidelines, utilizing dynamic new public_schema information
-- LDAP can now be read and connected to via Directory Studios, even as strict as Apache
 - Modularized and memory efficient for lookups with POSIX and SSSD
+- LDAP can now be read and connected to via Directory Studios, even as strict as Apache
+- User and group creation supported, user attribute modifications support with limitations
 
 ## Other improvements / Bugfixes
 - #1399 [FEATURE REQUEST] Change Avatar Data Type to MEDIUMBLOB? → Fixed through BLOB size to be consistent among databases

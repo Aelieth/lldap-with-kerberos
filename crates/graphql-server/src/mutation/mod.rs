@@ -22,7 +22,7 @@ use lldap_domain_handlers::handler::{BackendHandler, ReadSchemaBackendHandler};
 use lldap_validation::attributes::{ALLOWED_CHARACTERS_DESCRIPTION, validate_attribute_name};
 use std::sync::Arc;
 use lldap_opaque_handler::OpaqueHandler;
-use lldap_kerberos::{decrypt_password, delete_kerberos_principal, sync_kerberos_principal,
+use lldap_kerberos::{decrypt_password, sync_kerberos_principal,
 };
 use helpers::{
     UnpackedAttributes, consolidate_attributes, create_group_with_details, deserialize_attribute,
@@ -464,7 +464,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
             return Err("Cannot delete current user".into());
         }
 
-        // Delete from LLDAP
+        // The SQL backend now owns Kerberos principal cleanup (delete_user guard).
         handler
         .delete_user(&user_id_typed)
         .instrument(span.clone())
@@ -474,23 +474,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
             graphql_value!({ "details": (e.to_string()) })
         ))?;
 
-        if let Err(e) = delete_kerberos_principal(&user_id) {
-            warn!("Failed to delete Kerberos principal for user {}: {}", user_id, e);
-        } else {
-            info!("Deleted Kerberos principal for user {}", user_id);
-        }
-
-        // Kerberos consistency cleanup is allowed to do nothing if the user row is already gone
-        // (this is normal during bulk delete where the same user may already be removed by a previous call)
-        let inner = AdminBackendHandler::unsafe_get_handler(handler);
-        if let Err(e) = inner.ensure_kerberos_principal_consistency(&user_id_typed, false).await {
-            if e.to_string().contains("None of the records are updated") {
-                debug!("User already deleted — Kerberos consistency cleanup skipped for {}", user_id);
-            } else {
-                warn!("Kerberos principal consistency cleanup failed for {}: {}", user_id, e);
-            }
-        }
-
+        info!("Deleted user {}", user_id);
         Ok(Success::new())
     }
 
