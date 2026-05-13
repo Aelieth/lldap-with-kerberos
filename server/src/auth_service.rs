@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use crate::{
     tcp_backend_handler::*,
     tcp_server::{AppState, TcpError, TcpResult, error_to_http_response},

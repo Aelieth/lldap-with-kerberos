@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use crate::{cli::SmtpEncryption, configuration::MailOptions};
 use anyhow::{Ok, Result, anyhow};
 use lettre::{

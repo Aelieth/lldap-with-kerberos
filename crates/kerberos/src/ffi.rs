@@ -236,10 +236,21 @@ impl Kadm5Handle {
                 s
             };
 
-            if err_msg.contains("Principal does not exist") || err_msg.contains("No such principal") {
+            // Strengthened principal-not-found detection:
+            // 1. Prefer the official error code (robust across locales/versions)
+            // 2. Fall back to multiple common English strings for older/newer Kerberos builds
+            let principal_not_found = (ret == KADM5_UNK_PRINC as i64)
+                || err_msg.contains("Principal does not exist")
+                || err_msg.contains("No such principal")
+                || err_msg.contains("unknown principal")
+                || err_msg.to_lowercase().contains("does not exist");
+
+            if principal_not_found {
                 let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
                 ent.principal = princ;
 
+                // These are the standard kadm5 mask bits for creating a principal with a key.
+                // Define them locally because KADM5_KEY is not always exported from bindings.
                 const KADM5_PRINCIPAL: c_long = 0x00000001;
                 const KADM5_KEY: c_long = 0x00000020;
                 let mask = (KADM5_PRINCIPAL | KADM5_KEY) as c_long;

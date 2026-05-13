@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use sea_orm::{
     ConnectionTrait, DeriveIden,
     sea_query::{ColumnDef, ForeignKey, ForeignKeyAction, Table},

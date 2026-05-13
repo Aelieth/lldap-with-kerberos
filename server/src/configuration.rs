@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use crate::{
     cli::{
         GeneralConfigOpts, HealthcheckOpts, LdapsOpts, RunOpts, SmtpEncryption, SmtpOpts,

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use crate::configuration::Configuration;
 use actix_web::{
     Error,

@@ -27,7 +27,6 @@ fn validate_ssh_public_key(key: &str) -> Result<(), String> {
     if trimmed.is_empty() {
         return Err("SSH public key cannot be empty".to_string());
     }
-    // Must start with a recognized OpenSSH key type prefix
     if !(trimmed.starts_with("ssh-")
         || trimmed.starts_with("ecdsa-")
         || trimmed.starts_with("sk-")
@@ -36,16 +35,22 @@ fn validate_ssh_public_key(key: &str) -> Result<(), String> {
             "Invalid SSH public key format. Expected to start with ssh-, ecdsa-, sk-, or ssh-ed25519. Got: '{}'",
             trimmed.split_whitespace().next().unwrap_or(trimmed)
         ));
-        }
-        // Must contain at least one space (key type + base64)
-        if !trimmed.contains(' ') {
-            return Err("Invalid SSH public key: missing space after key type".to_string());
-        }
-        // Reasonable length guard (prevents accidental huge pastes)
-        if trimmed.len() > 4096 {
-            return Err("SSH public key is too long (max 4096 characters)".to_string());
-        }
-        Ok(())
+    }
+    if !trimmed.contains(' ') {
+        return Err("Invalid SSH public key: missing space after key type".to_string());
+    }
+    if trimmed.len() > 4096 {
+        return Err("SSH public key is too long (max 4096 characters)".to_string());
+    }
+    Ok(())
+}
+
+/// Resolve an attribute name (which may be an alias) to its canonical name using the schema.
+fn resolve_canonical_name(attribute_list: &AttributeList, name: &str) -> String {
+    attribute_list
+        .resolve_canonical_name(name)
+        .unwrap_or(name)
+        .to_string()
 }
 
 pub fn unpack_attributes(
@@ -104,6 +109,8 @@ pub fn consolidate_attributes(
         })
         .collect::<BTreeMap<_, _>>();
 
+    // Special fields are inserted using their common alias names.
+    // Normalization to canonical names happens inside deserialize_attribute.
     let field_attrs = [
         ("first_name", first_name),
         ("last_name", last_name),
@@ -112,7 +119,7 @@ pub fn consolidate_attributes(
     for (name, value) in field_attrs.into_iter() {
         if let Some(val) = value {
             if name == "avatar" && val.trim().is_empty() {
-                continue; // let removeAttributes handle deletion
+                continue;
             }
             let attr_name: AttributeName = name.into();
             provided_attributes
@@ -139,7 +146,6 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
 
     let raw_attributes = request.attributes.unwrap_or_default();
 
-    // === EXACT SAME OU BYPASS PATTERN AS create_user ===
     let ou_value = raw_attributes
         .iter()
         .find(|a| a.name == "ou")
@@ -156,7 +162,6 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
         .map(|attr| deserialize_attribute(schema.group_attributes(), attr, true))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Add the OU back as a proper typed attribute (backend is allowed to set readonly fields on create)
     let mut final_attributes = attributes;
     final_attributes.push(DomainAttribute {
         name: AttributeName::from("ou"),
@@ -180,7 +185,11 @@ pub fn deserialize_attribute(
     attribute: AttributeValue,
     is_admin: bool,
 ) -> FieldResult<DomainAttribute> {
-    let attribute_name = AttributeName::from(attribute.name.as_str());
+    // Resolve to canonical name so that aliases defined in PublicSchema
+    // are normalized before being stored. This prevents duplicates like
+    // firstname + first_name.
+    let canonical_name = resolve_canonical_name(attribute_schema, &attribute.name);
+    let attribute_name = AttributeName::from(canonical_name.as_str());
 
     let attr_schema = attribute_schema
         .get_attribute_schema(attribute_name.as_str())
@@ -209,9 +218,8 @@ pub fn deserialize_attribute(
         }
     }
 
-    // === SPECIAL CASE FOR AVATAR: decode base64 BEFORE creating Serialized ===
     let is_avatar = attribute.name.eq_ignore_ascii_case("avatar")
-    || attribute.name.eq_ignore_ascii_case("jpegphoto");
+        || attribute.name.eq_ignore_ascii_case("jpegphoto");
 
     let serialized = if is_avatar && !attr_schema.is_list {
         let val = attribute.value.first().cloned().unwrap_or_default().trim().to_string();
@@ -222,20 +230,12 @@ pub fn deserialize_attribute(
             match general_purpose::STANDARD.decode(&val) {
                 Ok(raw_bytes) => {
                     match process_avatar_input(&raw_bytes) {
-                        Ok(jpeg) => {
-                            Serialized(jpeg)
-                        }
-                        Err(e) => {
-                            return Err(anyhow!("Invalid avatar upload: {}", e).into());
-                        }
+                        Ok(jpeg) => Serialized(jpeg),
+                        Err(e) => return Err(anyhow!("Invalid avatar upload: {}", e).into()),
                     }
                 }
                 Err(e) => {
-                    tracing::error!(
-                        target: "avatar_debug",
-                        "Avatar base64 decode FAILED: {}",
-                        e
-                    );
+                    tracing::error!(target: "avatar_debug", "Avatar base64 decode FAILED: {}", e);
                     return Err(anyhow!("Invalid base64 avatar data: {}", e).into());
                 }
             }

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use crate::{auth_service::check_if_token_is_valid, tcp_server::AppState};
 use actix_web::FromRequest;
 use actix_web::HttpMessage;

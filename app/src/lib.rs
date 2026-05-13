@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 #![forbid(non_ascii_idents)]
 #![forbid(unsafe_code)]
 #![allow(clippy::uninlined_format_args)]
