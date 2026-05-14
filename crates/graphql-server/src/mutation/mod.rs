@@ -164,21 +164,22 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
 
         let consolidated_attributes = consolidate_attributes(
             user.attributes.unwrap_or_default(),
-                                                             user.first_name,
-                                                             user.last_name,
-                                                             user.avatar,
+            user.first_name,
+            user.last_name,
+            user.avatar,
+            &schema,
         );
 
         let ou_value = consolidated_attributes
-        .iter()
-        .find(|a| a.name == "ou")
-        .and_then(|a| a.value.first().cloned())
-        .unwrap_or_else(|| "people".to_string());
+            .iter()
+            .find(|a| schema.resolve_user_canonical_name(&a.name) == Some("ou"))
+            .and_then(|a| a.value.first().cloned())
+            .unwrap_or_else(|| "people".to_string());
 
         let attributes_for_unpack: Vec<_> = consolidated_attributes
-        .into_iter()
-        .filter(|a| a.name != "ou")
-        .collect();
+            .into_iter()
+            .filter(|a| schema.resolve_user_canonical_name(&a.name) != Some("ou"))
+            .collect();
 
         let UnpackedAttributes {
             email,
@@ -310,12 +311,13 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
             user.first_name,
             user.last_name,
             user.avatar,
+            &schema,
         );
 
         let mut delete_attributes: Vec<String> = user.remove_attributes.unwrap_or_default();
 
         // === PROTECT ou from direct editing (controlled by global list) ===
-        delete_attributes.retain(|attr| attr != "ou");
+        delete_attributes.retain(|attr| schema.resolve_user_canonical_name(attr) != Some("ou"));
 
         let UnpackedAttributes {
             email,
@@ -583,8 +585,8 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         span.in_scope(|| debug!(?name));
 
         let handler = context
-            .get_admin_handler()
-            .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
+        .get_admin_handler()
+        .ok_or_else(field_error_callback(&span, "Unauthorized OU deletion"))?;
 
         let name_lower = name.trim().to_lowercase();
         if name_lower == "people" || name_lower == "groups" || name_lower == "all" {
@@ -593,7 +595,7 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
 
         let inner = AdminBackendHandler::unsafe_get_handler(handler);
         let mut current_ous = inner.get_allowed_ous().await
-            .map_err(|_e| FieldError::new("Failed to load allowedous", juniper::Value::null()))?;
+        .map_err(|_e| FieldError::new("Failed to load allowedous", juniper::Value::null()))?;
 
         let has_children = current_ous.iter().any(|ou| {
             let parts: Vec<&str> = ou.splitn(2, '\\').collect();
@@ -603,17 +605,114 @@ impl<Handler: FullHandler + OpaqueHandler> Mutation<Handler> {
         if has_children {
             return Err(FieldError::new(
                 format!("Cannot delete primary OU '{}' because it still contains secondary OUs. Delete the secondary OUs first.", name),
-                juniper::Value::null(),
+                    juniper::Value::null(),
             ));
         }
 
+        // === Reassign users and groups still in this OU to default OUs ===
+        // This ensures no user/group is left pointing to a deleted OU.
+        // Best-effort reassignment using the same pattern as change_user_ou / change_group_ou.
+
+        // Reassign users still using this OU → move to "people"
+        if let Ok(users) = inner.list_users(None, false).await {
+            for user_and_groups in users {
+                let current_ou = user_and_groups
+                .user
+                .attributes
+                .iter()
+                .find(|attr| attr.name.as_str() == "ou")
+                .and_then(|attr| match &attr.value {
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(s),
+                    ) => Some(s.clone()),
+                          _ => None,
+                })
+                .unwrap_or_default();
+
+                if current_ou.to_lowercase() == name_lower {
+                    let insert_attributes = vec![lldap_domain::types::Attribute {
+                        name: AttributeName::from("ou"),
+                        value: lldap_domain::types::AttributeValue::String(
+                            lldap_domain::types::Cardinality::Singleton("people".to_string()),
+                        ),
+                    }];
+
+                    let update_req = UpdateUserRequest {
+                        user_id: user_and_groups.user.user_id.clone(),
+                        email: None,
+                        display_name: None,
+                        delete_attributes: vec![],
+                        insert_attributes,
+                    };
+
+                    if let Err(e) = inner.update_user(update_req).await {
+                        warn!(
+                            "Failed to reassign user {} from deleted OU '{}': {}",
+                            user_and_groups.user.user_id, name, e
+                        );
+                    } else {
+                        info!(
+                            "Reassigned user {} from deleted OU '{}' to 'people'",
+                            user_and_groups.user.user_id, name
+                        );
+                    }
+                }
+            }
+        }
+
+        // Reassign groups still using this OU → move to "groups"
+        if let Ok(groups) = inner.list_groups(None).await {
+            for group in groups {
+                let current_ou = group
+                .attributes
+                .iter()
+                .find(|attr| attr.name.as_str() == "ou")
+                .and_then(|attr| match &attr.value {
+                    lldap_domain::types::AttributeValue::String(
+                        lldap_domain::types::Cardinality::Singleton(s),
+                    ) => Some(s.clone()),
+                          _ => None,
+                })
+                .unwrap_or_default();
+
+                if current_ou.to_lowercase() == name_lower {
+                    let insert_attributes = vec![lldap_domain::types::Attribute {
+                        name: AttributeName::from("ou"),
+                        value: lldap_domain::types::AttributeValue::String(
+                            lldap_domain::types::Cardinality::Singleton("groups".to_string()),
+                        ),
+                    }];
+
+                    let update_req = UpdateGroupRequest {
+                        group_id: group.id,
+                        display_name: None,
+                        delete_attributes: vec![],
+                        insert_attributes,
+                    };
+
+                    if let Err(e) = inner.update_group(update_req).await {
+                        warn!(
+                            "Failed to reassign group {} from deleted OU '{}': {}",
+                            group.id.0, name, e
+                        );
+                    } else {
+                        info!(
+                            "Reassigned group {} from deleted OU '{}' to 'groups'",
+                            group.id.0, name
+                        );
+                    }
+                }
+            }
+        }
+
+        // Now safe to remove the OU from the allowed list
         current_ous.retain(|o| o.to_lowercase() != name_lower);
 
         inner.set_system_config("allowedous", serde_json::to_string(&current_ous).unwrap())
-            .await
-            .map_err(|_e| FieldError::new("Failed to save updated OU list", juniper::Value::null()))?;
+        .await
+        .map_err(|_e| FieldError::new("Failed to save updated OU list", juniper::Value::null()))?;
 
-        info!("Organizational Unit '{}' deleted from system_config.", name);
+        info!("Organizational Unit '{}' deleted.", name);
         Ok(Success::new())
     }
 
@@ -1545,11 +1644,13 @@ mod tests {
                 value: vec!["expected-avatar".to_string()],
             },
         ];
+        let schema = make_test_schema();
         let res = consolidate_attributes(
             attributes.clone(),
             Some("overridden-first".to_string()),
             Some("overridden-last".to_string()),
             Some("overriden-avatar".to_string()),
+            &schema,
         );
         assert_eq!(
             res,
@@ -1573,11 +1674,13 @@ mod tests {
     #[tokio::test]
     async fn test_attribute_consolidation_field_fallback() {
         let attributes = Vec::new();
+        let schema = make_test_schema();
         let res = consolidate_attributes(
             attributes.clone(),
             Some("expected-first".to_string()),
             Some("expected-last".to_string()),
             Some("expected-avatar".to_string()),
+            &schema,
         );
         assert_eq!(
             res,
@@ -1604,11 +1707,13 @@ mod tests {
             name: "First_Name".to_string(),
             value: vec!["expected-first".to_string()],
         }];
+        let schema = make_test_schema();
         let res = consolidate_attributes(
             attributes.clone(),
             Some("overriden-first".to_string()),
             Some("expected-last".to_string()),
             Some("expected-avatar".to_string()),
+            &schema,
         );
         assert_eq!(
             res,

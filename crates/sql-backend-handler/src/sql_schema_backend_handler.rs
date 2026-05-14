@@ -9,7 +9,7 @@ use lldap_domain_model::{
     error::{DomainError, Result},
     model,
 };
-use lldap_schema::{AttributeList, AttributeSchema, PublicSchema, Schema};
+use lldap_schema::{AttributeSchema, PublicSchema};
 use sea_orm::{
     ActiveModelTrait, DatabaseTransaction, EntityTrait, QueryOrder, Set, TransactionTrait,
 };
@@ -115,50 +115,68 @@ impl SqlBackendHandler {
     pub(crate) async fn get_schema_with_transaction(
         transaction: &DatabaseTransaction,
     ) -> Result<PublicSchema> {
-        let schema = Schema {
-            user_attributes: AttributeList {
-                attributes: Self::get_user_attributes(transaction).await?,
-            },
-            group_attributes: AttributeList {
-                attributes: Self::get_group_attributes(transaction).await?,
-            },
-            system_attributes: AttributeList {
-                attributes: vec![],  // system attributes are hardcoded in PublicSchema::get()
-            },
-            // === POSIX settings — now loaded live from system_config table ===
-            posix_settings: {
-                let settings = Self::get_posix_settings_with_transaction(transaction).await?;
-                lldap_schema::schema::PosixSettings {
-                    user_uidnumber_assign: settings.user_uidnumber_assign,
-                    user_uidnumber_start: settings.user_uidnumber_start,
-                    user_uidnumber_max: settings.user_uidnumber_max,
+        // === Start from the authoritative definition (has correct aliases) ===
+        let mut full = PublicSchema::get().0; // inner Schema
 
-                    user_gidnumber_assign: settings.user_gidnumber_assign,
-                    user_gidnumber_start: settings.user_gidnumber_start,
+        // Load only truly dynamic (custom) attributes from DB
+        let dynamic_user_attrs: Vec<_> = Self::get_user_attributes(transaction)
+        .await?
+        .into_iter()
+        .filter(|a| !a.is_hardcoded) // only keep custom ones
+        .collect();
 
-                    user_loginshell_assign: settings.user_loginshell_assign,
-                    user_loginshell_default: settings.user_loginshell_default,
+        let dynamic_group_attrs: Vec<_> = Self::get_group_attributes(transaction)
+        .await?
+        .into_iter()
+        .filter(|a| !a.is_hardcoded)
+        .collect();
 
-                    user_homedirectory_assign: settings.user_homedirectory_assign,
-                    user_homedirectory_prefix: settings.user_homedirectory_prefix,
+        // Merge dynamic attributes (avoid duplicates by canonical name)
+        for attr in dynamic_user_attrs {
+            if !full.user_attributes.attributes.iter().any(|existing| existing.name == attr.name) {
+                full.user_attributes.attributes.push(attr);
+            }
+        }
 
-                    group_gidnumber_assign: settings.group_gidnumber_assign,
-                    group_gidnumber_start: settings.group_gidnumber_start,
-                    group_gidnumber_max: settings.group_gidnumber_max,
-                }
-            },
-            extra_user_object_classes: Self::get_user_object_classes(transaction)
-                .await?
-                .into_iter()
-                .map(|oc| oc.into_string())
-                .collect(),
-            extra_group_object_classes: Self::get_group_object_classes(transaction)
-                .await?
-                .into_iter()
-                .map(|oc| oc.into_string())
-                .collect(),
+        for attr in dynamic_group_attrs {
+            if !full.group_attributes.attributes.iter().any(|existing| existing.name == attr.name) {
+                full.group_attributes.attributes.push(attr);
+            }
+        }
+
+        // Live POSIX settings (keep your current logic)
+        full.posix_settings = {
+            let s = Self::get_posix_settings_with_transaction(transaction).await?;
+            lldap_schema::schema::PosixSettings {
+                user_uidnumber_assign: s.user_uidnumber_assign,
+                user_uidnumber_start: s.user_uidnumber_start,
+                user_uidnumber_max: s.user_uidnumber_max,
+                user_gidnumber_assign: s.user_gidnumber_assign,
+                user_gidnumber_start: s.user_gidnumber_start,
+                user_loginshell_assign: s.user_loginshell_assign,
+                user_loginshell_default: s.user_loginshell_default,
+                user_homedirectory_assign: s.user_homedirectory_assign,
+                user_homedirectory_prefix: s.user_homedirectory_prefix,
+                group_gidnumber_assign: s.group_gidnumber_assign,
+                group_gidnumber_start: s.group_gidnumber_start,
+                group_gidnumber_max: s.group_gidnumber_max,
+            }
         };
-        Ok(PublicSchema(schema))
+
+        // Object classes
+        full.extra_user_object_classes = Self::get_user_object_classes(transaction)
+        .await?
+        .into_iter()
+        .map(|oc| oc.into_string())
+        .collect();
+
+        full.extra_group_object_classes = Self::get_group_object_classes(transaction)
+        .await?
+        .into_iter()
+        .map(|oc| oc.into_string())
+        .collect();
+
+        Ok(PublicSchema(full))
     }
 
     async fn get_user_attributes(
@@ -170,7 +188,7 @@ impl SqlBackendHandler {
         .await?
         .into_iter()
         .map(|m| AttributeSchema {
-            name: m.attribute_name.into_string(),   // ← fixed here
+            name: m.attribute_name.into_string(),
              aliases: serde_json::from_str(&m.aliases).unwrap_or_default(),
              attribute_type: m.attribute_type,
              is_list: m.is_list,
@@ -191,7 +209,7 @@ impl SqlBackendHandler {
         .await?
         .into_iter()
         .map(|m| AttributeSchema {
-            name: m.attribute_name.into_string(),   // ← fixed here
+            name: m.attribute_name.into_string(),
              aliases: serde_json::from_str(&m.aliases).unwrap_or_default(),
              attribute_type: m.attribute_type,
              is_list: m.is_list,
@@ -370,4 +388,55 @@ mod tests {
         let schema = fixture.handler.get_schema().await.unwrap();
         assert!(schema.0.extra_user_object_classes.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_schema_does_not_leak_aliases_as_top_level_names() {
+    let fixture = crate::sql_backend_handler::tests::TestFixture::new().await;
+    let schema = fixture.handler.get_schema().await.unwrap();
+
+    let user_attrs = schema.user_attributes();
+
+    // Collect all top-level attribute names
+    let top_level_names: Vec<&str> = user_attrs
+        .attributes
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+
+    // These must NEVER appear as top-level names.
+    // They should only exist inside the `aliases` vector of their canonical attribute.
+    let forbidden_alias_names = ["first_name", "last_name", "givenName", "sn"];
+
+    for forbidden in forbidden_alias_names {
+        assert!(
+            !top_level_names.contains(&forbidden),
+            "Alias '{}' should not appear as a top-level attribute name in the schema. \
+             It must only exist inside the `aliases` field of its canonical attribute.",
+            forbidden
+        );
+    }
+
+    // Sanity check: the canonical names must be present
+    assert!(
+        top_level_names.contains(&"firstname"),
+        "Canonical name 'firstname' must be present"
+    );
+    assert!(
+        top_level_names.contains(&"lastname"),
+        "Canonical name 'lastname' must be present"
+    );
+
+    // Extra safety: no top-level name should appear in another attribute's aliases list
+    for attr in &user_attrs.attributes {
+        for alias in &attr.aliases {
+            assert!(
+                !top_level_names.contains(&alias.as_str()),
+                "Alias '{}' from attribute '{}' is also appearing as a top-level name. \
+                 This indicates alias leakage in the schema.",
+                alias,
+                attr.name
+            );
+        }
+    }
+}
 }

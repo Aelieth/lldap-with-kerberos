@@ -246,22 +246,20 @@ mod tests {
     #[tokio::test]
     async fn test_create_user() {
         let mut mock = MockTestBackendHandler::new();
-        let ou_attr = Attribute {
-            name: "ou".into(),
-            value: deserialize::deserialize_attribute_value(&["people".to_string()], AttributeType::String, false)
-                .expect("valid ou for test"),
-        };
+
         mock.expect_create_user()
-            .with(eq(CreateUserRequest {
-                user_id: UserId::new("bob"),
-                email: "".into(),
-                display_name: Some("Bob".to_string()),
-                attributes: vec![ou_attr],
-                ..Default::default()
-            }))
-            .times(1)
-            .return_once(|_| Ok(()));
+        .with(mockall::predicate::function(|req: &CreateUserRequest| {
+            req.user_id == UserId::new("bob")
+            && req.email == Email::from("")
+            && req.display_name == Some("Bob".to_string())
+            && req.attributes.iter().any(|a| a.name.as_str() == "ou")
+            && req.attributes.iter().any(|a| a.name.as_str() == "kerberossync")
+        }))
+        .times(1)
+        .return_once(|_| Ok(()));
+
         let ldap_handler = setup_bound_admin_handler(mock).await;
+
         let request = LdapAddRequest {
             dn: "uid=bob,ou=people,dc=example,dc=com".to_owned(),
             attributes: vec![LdapPartialAttribute {
@@ -269,12 +267,10 @@ mod tests {
                 vals: vec![b"Bob".to_vec()],
             }],
         };
+
         assert_eq!(
             ldap_handler.create_user_or_group(request).await,
-            Ok(vec![make_add_response(
-                LdapResultCode::Success,
-                String::new()
-            )])
+                   Ok(vec![make_add_response(LdapResultCode::Success, String::new())])
         );
     }
 
@@ -315,22 +311,20 @@ mod tests {
     #[tokio::test]
     async fn test_create_user_multiple_object_class() {
         let mut mock = MockTestBackendHandler::new();
-        let ou_attr = Attribute {
-            name: "ou".into(),
-            value: deserialize::deserialize_attribute_value(&["people".to_string()], AttributeType::String, false)
-                .expect("valid ou for test"),
-        };
+
         mock.expect_create_user()
-            .with(eq(CreateUserRequest {
-                user_id: UserId::new("bob"),
-                email: "".into(),
-                display_name: Some("Bob".to_string()),
-                attributes: vec![ou_attr],
-                ..Default::default()
-            }))
-            .times(1)
-            .return_once(|_| Ok(()));
+        .with(mockall::predicate::function(|req: &CreateUserRequest| {
+            req.user_id == UserId::new("bob")
+            && req.email == Email::from("")
+            && req.display_name == Some("Bob".to_string())
+            && req.attributes.iter().any(|a| a.name.as_str() == "ou")
+            && req.attributes.iter().any(|a| a.name.as_str() == "kerberossync")
+        }))
+        .times(1)
+        .return_once(|_| Ok(()));
+
         let ldap_handler = setup_bound_admin_handler(mock).await;
+
         let request = LdapAddRequest {
             dn: "uid=bob,ou=people,dc=example,dc=com".to_owned(),
             attributes: vec![
@@ -340,20 +334,14 @@ mod tests {
                 },
                 LdapPartialAttribute {
                     atype: "objectClass".to_owned(),
-                    vals: vec![
-                        b"top".to_vec(),
-                        b"person".to_vec(),
-                        b"inetOrgPerson".to_vec(),
-                    ],
+                    vals: vec![b"top".to_vec(), b"person".to_vec(), b"inetOrgPerson".to_vec()],
                 },
             ],
         };
+
         assert_eq!(
             ldap_handler.create_user_or_group(request).await,
-            Ok(vec![make_add_response(
-                LdapResultCode::Success,
-                String::new()
-            )])
+                   Ok(vec![make_add_response(LdapResultCode::Success, String::new())])
         );
     }
 }

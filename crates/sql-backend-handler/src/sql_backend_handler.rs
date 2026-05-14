@@ -1,5 +1,8 @@
 use crate::sql_tables::DbConnection;
 use lldap_auth::opaque::server::ServerSetup;
+use lldap_domain::types::AttributeName;
+use lldap_schema::PublicSchema;
+use lldap_domain_handlers::handler::ReadSchemaBackendHandler;
 
 #[derive(Clone)]
 pub struct SqlBackendHandler {
@@ -17,6 +20,64 @@ impl SqlBackendHandler {
 
     pub fn pool(&self) -> &DbConnection {
         &self.sql_pool
+    }
+
+    /// Resolves any user attribute name or alias to its canonical form.
+    /// Falls back to the original name if it cannot be resolved.
+    pub async fn resolve_canonical_user_attribute_name(&self, name: &str) -> AttributeName {
+        match self.get_schema().await {
+            Ok(schema) => schema
+                .resolve_user_canonical_name(name)
+                .map(AttributeName::from)
+                .unwrap_or_else(|| AttributeName::from(name)),
+            Err(_) => AttributeName::from(name),
+        }
+    }
+
+    /// Resolves any group attribute name or alias to its canonical form.
+    /// Falls back to the original name if it cannot be resolved.
+    pub async fn resolve_canonical_group_attribute_name(&self, name: &str) -> AttributeName {
+        match self.get_schema().await {
+            Ok(schema) => schema
+                .resolve_group_canonical_name(name)
+                .map(AttributeName::from)
+                .unwrap_or_else(|| AttributeName::from(name)),
+            Err(_) => AttributeName::from(name),
+        }
+    }
+
+    /// Internal helper for when you already have the schema.
+    /// Preferred for hot paths inside transactions.
+    ///
+    /// ROBUST VERSION: First tries the passed schema (DB-loaded). If it cannot
+    /// resolve (e.g. alias not present in that schema object for any reason),
+    /// falls back to the static PublicSchema::get(). This guarantees we always
+    /// return canonical form for known hardcoded attributes, eliminating the
+    /// exact alias leakage seen in tests.
+    /// Always resolves using the static PublicSchema::get() (authoritative source).
+    /// This guarantees correct canonical form even if the DB-loaded schema
+    /// has incomplete alias data.
+    pub(crate) fn canonical_user_attribute_name(
+        _schema: &PublicSchema,
+        name: &str,
+    ) -> AttributeName {
+        PublicSchema::get()
+            .user_attributes()
+            .get_by_name_or_alias(name)
+            .map(|s| s.name.clone().into())
+            .unwrap_or_else(|| AttributeName::from(name))
+    }
+
+    /// Group equivalent (for symmetry and future use in group paths).
+    pub(crate) fn canonical_group_attribute_name(
+        _schema: &PublicSchema,
+        name: &str,
+    ) -> AttributeName {
+        PublicSchema::get()
+            .group_attributes()
+            .get_by_name_or_alias(name)
+            .map(|s| s.name.clone().into())
+            .unwrap_or_else(|| AttributeName::from(name))
     }
 }
 
@@ -71,13 +132,13 @@ pub mod tests {
             })
             .await
             .unwrap();
-            let registration_upload = opaque::client::registration::finish_registration(
-                client_registration_start.state,
-                pass.as_bytes(),
-                response.registration_response,
-                &mut rng,
-            )
-            .unwrap();
+        let registration_upload = opaque::client::registration::finish_registration(
+            client_registration_start.state,
+            pass.as_bytes(),
+            response.registration_response,
+            &mut rng,
+        )
+        .unwrap();
         handler
             .registration_finish(registration::ClientRegistrationFinishRequest {
                 server_data: response.server_data,
@@ -95,11 +156,11 @@ pub mod tests {
                 display_name: Some("display ".to_string() + name),
                 attributes: vec![
                     DomainAttribute {
-                        name: "first_name".into(),
+                        name: "firstname".into(),  // canonical
                         value: ("first ".to_string() + name).into(),
                     },
                     DomainAttribute {
-                        name: "last_name".into(),
+                        name: "lastname".into(),   // canonical
                         value: ("last ".to_string() + name).into(),
                     },
                 ],

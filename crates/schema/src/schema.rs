@@ -89,8 +89,12 @@ pub struct PosixSettings {
 
 impl AttributeList {
     pub fn get_by_name_or_alias(&self, name: &str) -> Option<&AttributeSchema> {
+        // Case-insensitive match on both canonical name and aliases.
+        // This fixes resolution when AttributeName::as_str() or loaded aliases
+        // have subtle casing differences from CaseInsensitiveString.
         self.attributes.iter().find(|a| {
-            a.name == name || a.aliases.iter().any(|alias| alias == name)
+            a.name.eq_ignore_ascii_case(name) ||
+            a.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(name))
         })
     }
 

@@ -194,7 +194,10 @@ async fn handle_modify_change(
                     _ => {
                         return Err(LdapError {
                             code: LdapResultCode::UnwillingToPerform,
-                            message: format!(r#"Unsupported attribute for LDAP Modify: {}"#, change.modification.atype),
+                            message: format!(
+                                "Unsupported attribute for LDAP Modify: {} (supported: givenName, sn, cn, mail, avatar, sshPublicKey, userPassword)",
+                                             change.modification.atype
+                            ),
                         });
                     }
                 }
@@ -780,12 +783,13 @@ mod tests {
         let ldap_handler = setup_bound_admin_handler(mock).await;
 
         let request = make_profile_modify_request("bob", "title", "Manager");
+
         assert_eq!(
             ldap_handler.do_modify_request(&request).await,
-            make_modify_failure_response(
-                LdapResultCode::UnwillingToPerform,
-                "Unsupported attribute for LDAP Modify: title (supported: givenName, sn, cn, mail, avatar, sshPublicKey, userPassword)"
-            )
+                   make_modify_failure_response(
+                       LdapResultCode::UnwillingToPerform,
+                       "Unsupported attribute for LDAP Modify: title (supported: givenName, sn, cn, mail, avatar, sshPublicKey, userPassword)"
+                   )
         );
     }
 }

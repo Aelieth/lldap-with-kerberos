@@ -254,7 +254,7 @@ impl GroupListerBackendHandler for SqlBackendHandler {
         let mut attributes_iter = attributes.into_iter().peekable();
         use itertools::Itertools;
         for group in groups.iter_mut() {
-            group.attributes = attributes_iter
+            let mut attrs: Vec<_> = attributes_iter
             .take_while_ref(|u| u.group_id == group.id)
             .map(|a| {
                 deserialize::deserialize_attribute(
@@ -264,6 +264,12 @@ impl GroupListerBackendHandler for SqlBackendHandler {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+
+            // Defensive canonical remap on group read path (symmetry with user side)
+            for attr in &mut attrs {
+                attr.name = SqlBackendHandler::canonical_group_attribute_name(&schema, attr.name.as_str());
+            }
+            group.attributes = attrs;
         }
         groups.sort_by(|g1, g2| g1.display_name.cmp(&g2.display_name));
         Ok(groups)
@@ -288,11 +294,15 @@ impl GroupBackendHandler for SqlBackendHandler {
         group_details.attributes = attributes
         .into_iter()
         .map(|a| {
-            deserialize::deserialize_attribute(
+            let mut attr = deserialize::deserialize_attribute(
                 a.attribute_name,
                 &a.value,
                 schema.group_attributes(),
-            )
+            )?;
+
+            // Defensive canonical remap (consistent with user side)
+            attr.name = SqlBackendHandler::canonical_group_attribute_name(&schema, attr.name.as_str());
+            Ok(attr)
         })
         .collect::<Result<Vec<_>>>()?;
         Ok(group_details)
@@ -399,6 +409,11 @@ impl GroupBackendHandler for SqlBackendHandler {
                     let mut new_group_attributes = Vec::new();
 
                     for attribute in final_attributes {
+                        let canonical_name = schema
+                            .group_attributes()
+                            .get_by_name_or_alias(attribute.name.as_str())
+                            .map(|s| s.name.clone().into())
+                            .unwrap_or_else(|| attribute.name.clone());
                         let attr_name = attribute.name.as_str();
 
                         if schema
@@ -410,7 +425,7 @@ impl GroupBackendHandler for SqlBackendHandler {
                             let db_value = attribute_value_to_db_bytes(&attribute.value);
                             new_group_attributes.push(model::group_attributes::ActiveModel {
                                 group_id: Set(group_id),
-                                attribute_name: Set(attribute.name),
+                                attribute_name: Set(canonical_name),
                                 value: Set(Serialized(db_value)),
                             });
                         } else {
@@ -490,6 +505,11 @@ impl SqlBackendHandler {
         let mut remove_group_attributes = Vec::new();
 
         for attribute in request.insert_attributes {
+            let canonical_name = schema
+                .group_attributes()
+                .get_by_name_or_alias(attribute.name.as_str())
+                .map(|s| s.name.clone().into())
+                .unwrap_or_else(|| attribute.name.clone());
             let name = attribute.name.as_str();
             let value = match &attribute.value {
                 AttributeValue::Integer(Cardinality::Singleton(v)) => *v,
@@ -497,7 +517,7 @@ impl SqlBackendHandler {
                     let db_value = attribute_value_to_db_bytes(&attribute.value);
                     update_group_attributes.push(model::group_attributes::ActiveModel {
                         group_id: Set(request.group_id),
-                        attribute_name: Set(attribute.name),
+                        attribute_name: Set(canonical_name.clone()),
                         value: Set(Serialized(db_value)),
                     });
                     continue;
@@ -527,12 +547,17 @@ impl SqlBackendHandler {
             let db_value = attribute_value_to_db_bytes(&attribute.value);
             update_group_attributes.push(model::group_attributes::ActiveModel {
                 group_id: Set(request.group_id),
-                attribute_name: Set(attribute.name),
+                attribute_name: Set(canonical_name),
                 value: Set(Serialized(db_value)),
             });
         }
 
         for attribute in request.delete_attributes {
+            let canonical_name: AttributeName = schema
+                .group_attributes()
+                .get_by_name_or_alias(attribute.as_str())
+                .map(|s| s.name.clone().into())
+                .unwrap_or_else(|| attribute.clone());
             let attr_name = attribute.as_str();
 
             if schema
@@ -541,7 +566,7 @@ impl SqlBackendHandler {
                 .is_some()
                 || is_backend_writable_readonly_attribute(attr_name)
             {
-                remove_group_attributes.push(attribute);
+                remove_group_attributes.push(canonical_name);
             } else {
                 return Err(DomainError::InternalError(format!(
                     "Group attribute name {} doesn't exist in the schema, yet was attempted to be removed from the database",

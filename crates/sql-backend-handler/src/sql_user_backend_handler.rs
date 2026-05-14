@@ -235,7 +235,7 @@ impl UserListerBackendHandler for SqlBackendHandler {
         let mut attributes_iter = attributes.into_iter().peekable();
         let schema = self.get_schema().await?;
         for user in users.iter_mut() {
-            user.user.attributes = attributes_iter
+            let mut attrs: Vec<_> = attributes_iter
             .take_while_ref(|u| u.user_id == user.user.user_id)
             .map(|a| {
                 deserialize::deserialize_attribute(
@@ -245,6 +245,14 @@ impl UserListerBackendHandler for SqlBackendHandler {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+
+            // Defensive canonical remap on read path (matches get_user_details).
+            // Ensures AttributeEquality filters and list output always use canonical names,
+            // even if legacy alias data exists. Reuses the shared helper.
+            for attr in &mut attrs {
+                attr.name = Self::canonical_user_attribute_name(&schema, attr.name.as_str());
+            }
+            user.user.attributes = attrs;
 
             user.user.materialize_protected_fields();
         }
@@ -260,7 +268,11 @@ impl SqlBackendHandler {
         schema: &PublicSchema,
     ) -> Result<(Vec<model::user_attributes::ActiveModel>, Vec<AttributeName>, Option<bool>)> {
         let mut update_user_attributes = Vec::new();
-        let mut remove_user_attributes: Vec<AttributeName> = delete_attributes;
+        // Resolve delete names to canonical too (supports alias in delete requests + keeps storage invariant)
+        let mut remove_user_attributes: Vec<AttributeName> = delete_attributes
+            .into_iter()
+            .map(|name| SqlBackendHandler::canonical_user_attribute_name(schema, name.as_str()))
+            .collect();
         let mut kerb_sync_enabled: Option<bool> = None;
 
         for attribute in insert_attributes {
@@ -827,11 +839,14 @@ impl UserBackendHandler for SqlBackendHandler {
         user.attributes = attributes
         .into_iter()
         .map(|a| {
-            let attr = deserialize::deserialize_attribute(
+            let mut attr = deserialize::deserialize_attribute(
                 a.attribute_name,
                 &a.value,
                 schema.user_attributes(),
             )?;
+
+            // Force canonical name on output (defensive against any legacy alias data)
+            attr.name = Self::canonical_user_attribute_name(&schema, attr.name.as_str());
 
             if attr.name.as_str() == "avatar" {
                 debug!("GET_USER_DETAILS: avatar attribute found in EAV");

@@ -62,7 +62,7 @@ pub fn unpack_attributes(
 
     let email = attributes
         .iter()
-        .find(|attr| attr.name == "mail")
+        .find(|attr| resolve_canonical_name(user_schema, &attr.name) == "mail")
         .cloned()
         .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
         .transpose()?
@@ -71,7 +71,7 @@ pub fn unpack_attributes(
 
     let display_name = attributes
         .iter()
-        .find(|attr| attr.name == "display_name")
+        .find(|attr| resolve_canonical_name(user_schema, &attr.name) == "displayname")
         .cloned()
         .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
         .transpose()?
@@ -79,7 +79,10 @@ pub fn unpack_attributes(
 
     let attributes = attributes
         .into_iter()
-        .filter(|attr| attr.name != "mail" && attr.name != "display_name")
+        .filter(|attr| {
+            let canon = resolve_canonical_name(user_schema, &attr.name);
+            canon != "mail" && canon != "displayname"
+        })
         .map(|attr| deserialize_attribute(user_schema, attr, is_admin))
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -95,12 +98,16 @@ pub fn consolidate_attributes(
     first_name: Option<String>,
     last_name: Option<String>,
     avatar: Option<String>,
+    schema: &PublicSchema,
 ) -> Vec<AttributeValue> {
-    let mut provided_attributes: BTreeMap<AttributeName, AttributeValue> = attributes
+    let user_schema = schema.user_attributes();
+    let mut provided_attributes: BTreeMap<String, AttributeValue> = attributes
         .into_iter()
         .map(|x| {
+            let canon = resolve_canonical_name(user_schema, &x.name);
+            let key = canon.to_ascii_lowercase();
             (
-                x.name.clone().into(),
+                key,
                 AttributeValue {
                     name: x.name.to_ascii_lowercase(),
                     value: x.value,
@@ -109,8 +116,9 @@ pub fn consolidate_attributes(
         })
         .collect::<BTreeMap<_, _>>();
 
-    // Special fields are inserted using their common alias names.
-    // Normalization to canonical names happens inside deserialize_attribute.
+    // Special fields (deprecated top-level) are merged using alias names for .name,
+    // but keyed by (lowercased) canonical to deduplicate aliases like "first_name" + "firstname".
+    // This ensures attributes list takes precedence and no duplicate canonical entries.
     let field_attrs = [
         ("first_name", first_name),
         ("last_name", last_name),
@@ -121,9 +129,10 @@ pub fn consolidate_attributes(
             if name == "avatar" && val.trim().is_empty() {
                 continue;
             }
-            let attr_name: AttributeName = name.into();
+            let canon = resolve_canonical_name(user_schema, name);
+            let key = canon.to_ascii_lowercase();
             provided_attributes
-                .entry(attr_name)
+                .entry(key)
                 .or_insert_with(|| AttributeValue {
                     name: name.to_string(),
                     value: vec![val],
@@ -148,13 +157,13 @@ pub async fn create_group_with_details<Handler: BackendHandler + OpaqueHandler>(
 
     let ou_value = raw_attributes
         .iter()
-        .find(|a| a.name == "ou")
+        .find(|a| resolve_canonical_name(schema.group_attributes(), &a.name) == "ou")
         .and_then(|a| a.value.first().cloned())
         .unwrap_or_else(|| "groups".to_string());
 
     let attributes_for_unpack: Vec<_> = raw_attributes
         .into_iter()
-        .filter(|a| a.name != "ou")
+        .filter(|a| resolve_canonical_name(schema.group_attributes(), &a.name) != "ou")
         .collect();
 
     let attributes = attributes_for_unpack
@@ -208,7 +217,7 @@ pub fn deserialize_attribute(
         ).into());
     }
 
-    if attribute.name.eq_ignore_ascii_case("sshpublickey") && attr_schema.is_list {
+    if canonical_name.eq_ignore_ascii_case("sshpublickey") && attr_schema.is_list {
         for key in &attribute.value {
             if let Err(err_msg) = validate_ssh_public_key(key) {
                 return Err(anyhow!(
@@ -218,8 +227,8 @@ pub fn deserialize_attribute(
         }
     }
 
-    let is_avatar = attribute.name.eq_ignore_ascii_case("avatar")
-        || attribute.name.eq_ignore_ascii_case("jpegphoto");
+    let is_avatar = canonical_name.eq_ignore_ascii_case("avatar");
+    // jpegphoto (and variants) resolve to canonical "avatar" via resolve_canonical_name above
 
     let serialized = if is_avatar && !attr_schema.is_list {
         let val = attribute.value.first().cloned().unwrap_or_default().trim().to_string();
