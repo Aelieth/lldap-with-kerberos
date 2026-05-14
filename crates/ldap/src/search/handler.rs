@@ -51,7 +51,7 @@ where
                 let o_val = base_dn.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("o"))
                     .map(|(_, v)| v.as_bytes().to_vec())
-                    .unwrap_or_else(|| b"LLDAP Directory".to_vec());
+                    .unwrap_or_else(|| b"lldap Directory".to_vec());
                 let root_entry = ldap3_proto::LdapSearchResultEntry {
                     dn: ldap_info.base_dn_str.clone(),
                     attributes: vec![
@@ -306,8 +306,14 @@ where
                 Ok(name) => name,
                 Err(_) => return Ok(vec![make_search_success()]),
             };
-            // FIX: existence check with specific filter
-            let specific_filter = ldap3_proto::LdapFilter::Equality("cn".to_string(), group_name.to_string());
+
+            // Existence check using the canonical attribute name for the group RDN.
+            // We use SchemaManager so we stay consistent with the dynamic alias mapping
+            // (displayname <-> cn) that was standardized in this release.
+            let schema_manager = crate::schema::get_schema_manager();
+            let group_rdn_attr = schema_manager.get_canonical_name("cn");
+            let specific_filter = ldap3_proto::LdapFilter::Equality(group_rdn_attr, group_name.to_string());
+
             let exists_groups = crate::core::group::get_groups_list(
                 ldap_info,
                 &specific_filter,
@@ -321,7 +327,10 @@ where
                     message: "".to_string(),
                 });
             }
-            // Apply REAL client filter (Problem 3)
+
+            // Apply the REAL client filter after confirming the entry exists.
+            // This two-step pattern (existence check + real filter) is required to
+            // correctly return NoSuchObject vs Success+0 entries per LDAP semantics.
             let groups = crate::core::group::get_groups_list(
                 ldap_info,
                 &request.filter,
@@ -336,6 +345,7 @@ where
                 &None,
                 &schema,
             ).collect();
+
             let base_lower = request.base.to_ascii_lowercase();
             results.retain(|op| {
                 if let LdapOp::SearchResultEntry(e) = op {

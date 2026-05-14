@@ -2,6 +2,10 @@
 //!
 //! This module centralizes all Distinguished Name parsing, OU hierarchy handling,
 //! and user/group ID extraction from DNs.
+//!
+//! Custom groups are now fully supported under any allowed OU (not just the default "groups" OU).
+//! The leaf detection logic was updated to be symmetric with users while preserving
+//! backward compatibility for classic deployments.
 
 use crate::core::error::{LdapError, LdapResult};
 use ldap3_proto::LdapResultCode;
@@ -191,6 +195,12 @@ impl UserOrGroupName {
     }
 }
 
+/// Determines whether a DN refers to a user or a group by inspecting the RDN and the
+/// primary (leaf) OU.
+///
+/// Users are recognized by `uid=` or `cn=` when the primary OU is `people` (or empty).
+/// Groups are recognized by `cn=` under **any other OU**. This enables full support for
+/// custom and nested OUs for groups while keeping classic behavior for the default `groups` OU.
 pub fn get_user_or_group_id_from_distinguished_name(
     dn: &str,
     base_tree: &[(String, String)],
@@ -209,8 +219,6 @@ pub fn get_user_or_group_id_from_distinguished_name(
         .cloned()
         .collect();
 
-    // Dual resolution: support uid= or cn= for users (in people/* OUs for POSIX/traditional LDAP compatibility)
-    // cn= only for groups (in groups/* OUs). This allows both traditional (cn) and POSIX (uid) clients.
     let primary_ou = ou_chain
         .last()
         .map(|(_, v)| v.to_ascii_lowercase())
@@ -219,10 +227,13 @@ pub fn get_user_or_group_id_from_distinguished_name(
     if parts.len() == base_tree.len() + ou_chain.len() + 1 {
         let rdn = &parts[0];
         let rdn_type = rdn.0.to_ascii_lowercase();
-        if rdn_type == "uid" || (rdn_type == "cn" && (primary_ou == "people" || primary_ou.is_empty())) {
-                return UserOrGroupName::User(UserId::from(rdn.1.clone()));
-        } else if rdn_type == "cn" && primary_ou == "groups" {
-                return UserOrGroupName::Group(GroupName::from(rdn.1.clone()));
+
+        let is_user_ou = primary_ou == DEFAULT_PRIMARY_USER_OU || primary_ou.is_empty();
+
+        if rdn_type == "uid" || (rdn_type == "cn" && is_user_ou) {
+            return UserOrGroupName::User(UserId::from(rdn.1.clone()));
+        } else if rdn_type == "cn" && !is_user_ou {
+            return UserOrGroupName::Group(GroupName::from(rdn.1.clone()));
         }
     }
 
@@ -247,7 +258,10 @@ pub fn get_group_id_from_distinguished_name(
 ) -> LdapResult<GroupName> {
     match get_user_or_group_id_from_distinguished_name(dn, base_tree) {
         UserOrGroupName::Group(group_name) => Ok(group_name),
-        err => Err(err.into_ldap_error(dn, format!(r#""uid=id or cn=id,ou=...,{}""#, base_dn_str))),
+        err => Err(err.into_ldap_error(
+            dn,
+            format!(r#""cn=id,ou=any-allowed-ou,...{}""#, base_dn_str),
+        )),
     }
 }
 
