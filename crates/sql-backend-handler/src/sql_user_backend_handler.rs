@@ -12,7 +12,7 @@ use lldap_schema::PublicSchema;
 use lldap_domain_handlers::handler::{
     GroupBackendHandler, PosixBackendHandler, PosixSettings,
     ReadSchemaBackendHandler, SystemConfigBackendHandler, UserBackendHandler,
-    UserListerBackendHandler, UserRequestFilter,
+    UserListerBackendHandler, UserRequestFilter, SubStringFilter,
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
@@ -54,6 +54,23 @@ fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> C
                           value
                           .map(|v| model::UserAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
                           .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
+                      )
+                      .into_query(),
+    )
+    .into_condition()
+}
+
+fn attribute_substring_condition(name: AttributeName, filter: &SubStringFilter) -> Cond {
+    let like_pattern = filter.to_sql_filter();
+    Expr::in_subquery(
+        Expr::col(UserColumn::UserId.as_column_ref()),
+                      model::UserAttributes::find()
+                      .select_only()
+                      .column(model::UserAttributesColumn::UserId)
+                      .filter(model::UserAttributesColumn::AttributeName.eq(name.clone()))
+                      .filter(
+                          SimpleExpr::FunctionCall(Func::lower(Expr::col(model::UserAttributesColumn::Value)))
+                          .like(like_pattern),
                       )
                       .into_query(),
     )
@@ -148,30 +165,30 @@ fn get_user_filter_expr(filter: UserRequestFilter) -> Cond {
             }
         }
         AttributeGreaterOrEqual(name, value) => {
-            // Custom DateTime attributes are stored as generalized-time strings (sortable)
             Expr::in_subquery(
-                Expr::col(UserColumn::UserId.as_column_ref()),
-                model::UserAttributes::find()
+                Expr::col(GroupColumn::GroupId.as_column_ref()),
+                model::GroupAttributes::find()
                     .select_only()
-                    .column(model::UserAttributesColumn::UserId)
-                    .filter(model::UserAttributesColumn::AttributeName.eq(name))
-                    .filter(model::UserAttributesColumn::Value.gte(value))
+                    .column(model::GroupAttributesColumn::GroupId)
+                    .filter(model::GroupAttributesColumn::AttributeName.eq(name))
+                    .filter(model::GroupAttributesColumn::Value.gte(value))
                     .into_query(),
             )
             .into_condition()
         }
         AttributeLessOrEqual(name, value) => {
             Expr::in_subquery(
-                Expr::col(UserColumn::UserId.as_column_ref()),
-                model::UserAttributes::find()
+                Expr::col(GroupColumn::GroupId.as_column_ref()),
+                model::GroupAttributes::find()
                     .select_only()
-                    .column(model::UserAttributesColumn::UserId)
-                    .filter(model::UserAttributesColumn::AttributeName.eq(name))
-                    .filter(model::UserAttributesColumn::Value.lte(value))
+                    .column(model::GroupAttributesColumn::GroupId)
+                    .filter(model::GroupAttributesColumn::AttributeName.eq(name))
+                    .filter(model::GroupAttributesColumn::Value.lte(value))
                     .into_query(),
             )
             .into_condition()
         }
+        AttributeSubString(name, filter) => attribute_substring_condition(name, &filter),
     }
 }
 

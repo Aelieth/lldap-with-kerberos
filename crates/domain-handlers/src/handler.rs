@@ -88,6 +88,9 @@ pub enum UserRequestFilter {
     LessOrEqual(UserColumn, String),
     AttributeGreaterOrEqual(AttributeName, String),
     AttributeLessOrEqual(AttributeName, String),
+    // NEW: Substring support for custom string attributes (e.g. givenName, sn, displayName, etc.)
+    // This enables Keycloak (and other LDAP clients) admin searches to work properly.
+    AttributeSubString(AttributeName, SubStringFilter),
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
@@ -108,6 +111,10 @@ pub enum GroupRequestFilter {
     LessOrEqual(String, String),
     AttributeGreaterOrEqual(AttributeName, String),
     AttributeLessOrEqual(AttributeName, String),
+    // NEW: Substring support for custom string attributes (e.g. givenName, sn, displayName, mail, etc.)
+    // This enables Keycloak admin console searches (and other LDAP clients) to work without
+    // "Unsupported user attribute for substring filter" errors.
+    AttributeSubString(AttributeName, SubStringFilter),
 }
 
 impl From<bool> for GroupRequestFilter {

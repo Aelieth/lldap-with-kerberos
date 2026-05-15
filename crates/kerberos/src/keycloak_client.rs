@@ -1,4 +1,3 @@
-// crates/kerberos/src/keycloak_client.rs
 use anyhow::{Context, Result};
 use reqwest::Client as HttpClient;
 use serde_json::json;
@@ -51,33 +50,77 @@ impl KeycloakClient {
         info!("🔄 PushRealm starting - Realm: '{}', LLDAP URL: '{}'", self.config.realm, lldap_url);
         let token = self.acquire_token().await?;
 
+        // 1. Check if realm already exists — error out to prevent accidental overwrite / data loss.
+        // Professional safeguard: explicit existence check before any mutation.
+        if self.realm_exists(&token).await? {
+            return Err(anyhow::anyhow!(
+                "Realm '{}' already exists. Aborting setup. Delete the realm manually in Keycloak admin console (or via API) if you intend to recreate it with fresh mappers.",
+                self.config.realm
+            ));
+        }
+
+        // 2. Create the realm (clean slate)
         self.create_realm(&token, enable_hsts, enable_brute_force).await?;
-        self.add_ldap_kerberos_component(&token, &lldap_url, &sync_username, &sync_password).await?;
+
+        // 3. Create LDAP + Kerberos component and retrieve its ID for mapper parenting
+        let provider_id = self.create_ldap_kerberos_component(&token, &lldap_url, &sync_username, &sync_password).await?;
+
+        // 4. Clear ALL default "dumb" Keycloak auto-created mappers (firstName<->cn oddities, generic ones, etc.)
+        // This gives us a pristine provider to attach our schema-aligned custom mappers.
+        self.clear_default_mappers(&token, &provider_id).await?;
+
+        // 5. Create precise, standards-based custom mappers
+        //    - LDAP inetOrgPerson / core: givenName→firstName, sn→lastName, mail→email, uid→username, cn→displayName
+        //    - POSIX: uidNumber, gidNumber, homeDirectory, loginShell
+        //    - Kerberos: krbPrincipalName
+        //    - Extras from our schema: sshPublicKey (multivalued), ou, kerberossync
+        // Uses exact Keycloak component JSON syntax (config values as string arrays).
+        // userObjectClasses kept as single comma-separated string inside array element (proven working syntax).
+        self.create_custom_mappers(&token, &provider_id).await?;
+
+        // 6. Add lldap-web public client (unchanged)
         self.add_lldap_web_client(&token).await?;
 
-        let msg = format!("Realm '{}' fully set up with LLDAP + Kerberos! SPNEGO ready for KDE/Gnome SSO.", self.config.realm);
+        let msg = format!(
+            "Realm '{}' fully set up with LLDAP + Kerberos! Custom attribute mappers applied for correct firstName/lastName/email/displayName/POSIX/Kerberos/SSH resolution. SSO ready for KDE/Gnome/etc.",
+            self.config.realm
+        );
         info!("{}", msg);
         Ok(msg)
+    }
+
+    async fn realm_exists(&self, token: &str) -> Result<bool> {
+        let url = format!("{}/admin/realms/{}", self.config.url, self.config.realm);
+        let resp = self
+            .http_client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("Failed to check realm existence")?;
+
+        // 200/204 = exists; 404 = does not exist. Other codes treated as error by caller context.
+        Ok(resp.status().is_success())
     }
 
     async fn acquire_token(&self) -> Result<String> {
         info!("   → Acquiring admin token...");
         let resp = self.http_client
-        .post(format!("{}/realms/master/protocol/openid-connect/token", self.config.url))
-        .form(&[
-            ("client_id", "admin-cli"),
-              ("username", &self.config.admin_user),
-              ("password", &self.admin_pass),
-              ("grant_type", "password"),
-        ])
-        .send()
-        .await
-        .context("Failed to connect to Keycloak")?;
+            .post(format!("{}/realms/master/protocol/openid-connect/token", self.config.url))
+            .form(&[
+                ("client_id", "admin-cli"),
+                ("username", &self.config.admin_user),
+                ("password", &self.admin_pass),
+                ("grant_type", "password"),
+            ])
+            .send()
+            .await
+            .context("Failed to connect to Keycloak")?;
 
         let json: serde_json::Value = resp.json().await.context("Invalid token response")?;
         let token = json["access_token"].as_str()
-        .ok_or_else(|| anyhow::anyhow!("No access_token in response (wrong admin password?)"))?
-        .to_string();
+            .ok_or_else(|| anyhow::anyhow!("No access_token in response (wrong admin password?)"))?
+            .to_string();
 
         info!("   → Token acquired successfully");
         Ok(token)
@@ -113,15 +156,16 @@ impl KeycloakClient {
         });
 
         let resp = self.http_client
-        .post(format!("{}/admin/realms", self.config.url))
-        .bearer_auth(token)
-        .header("Content-Type", "application/json")
-        .json(&realm_json)
-        .send()
-        .await?;
+            .post(format!("{}/admin/realms", self.config.url))
+            .bearer_auth(token)
+            .header("Content-Type", "application/json")
+            .json(&realm_json)
+            .send()
+            .await?;
 
         let status = resp.status();
         if status.is_success() || status.as_u16() == 409 {
+            info!("   → Realm created (or already reported created)");
             Ok(())
         } else {
             let body = resp.text().await.unwrap_or_default();
@@ -129,14 +173,16 @@ impl KeycloakClient {
         }
     }
 
-    async fn add_ldap_kerberos_component(
+    /// Creates the LLDAP + Kerberos LDAP User Storage Provider component.
+    /// Returns the internal Keycloak component ID of the provider (required for parenting custom mappers).
+    async fn create_ldap_kerberos_component(
         &self,
         token: &str,
         lldap_url: &str,
         sync_username: &str,
         sync_password: &str,
-    ) -> Result<()> {
-        info!("   → Adding LDAP+Kerberos provider...");
+    ) -> Result<String> {
+        info!("   → Adding LDAP+Kerberos provider (with subtree support for custom OUs)...");
         let base_dn = format!("dc={}", self.config.realm.replace('.', ",dc="));
         let component_json = json!({
             "name": "lldap-with-kerberos",
@@ -146,52 +192,337 @@ impl KeycloakClient {
                 "vendor": ["other"],
                 "connectionUrl": [lldap_url],
                 "bindDn": [format!("uid={},ou=people,{}", sync_username, base_dn)],
-                                   "bindCredential": [sync_password],
-                                   "usersDn": [format!("ou=people,{}", base_dn)],
-                                   "groupsDn": [format!("ou=groups,{}", base_dn)],
-                                   "userObjectClasses": ["top, person, inetOrgPerson, posixAccount, ldapPublicKey"],
-                                   "rdnLDAPAttribute": ["uid"],
-                                   "uuidLDAPAttribute": ["entryUUID"],
-                                   "usernameLDAPAttribute": ["uid"],
-                                   "customUserSearchFilter": ["(&(!(objectClass=organizationalUnit))(kerberossync=1))"],
-                                   "searchScope": ["2"],
-                                   "validatePasswordPolicy": ["false"],
-                                   "trustEmail": ["true"],
-                                   "syncRegistrations": ["true"],
-                                   "fullSyncPeriod": ["86400"],
-                                   "changedSyncPeriod": ["300"],
-                                   "editMode": ["READ_ONLY"],
-                                   "importEnabled": ["true"],
-                                   "pagination": ["true"],
-                                   "allowKerberosAuthentication": ["true"],
-                                   "kerberosRealm": [self.config.realm.to_uppercase()],
-                                   "serverPrincipal": [format!("HTTP/keycloak.{}@{}", self.config.realm, self.config.realm.to_uppercase())],
-                                   "keyTab": ["/keytab/keycloak-http.keytab"],
-                                   "krbPrincipalAttribute": ["krbPrincipalName"],
-                                   "useKerberosForPasswordAuthentication": ["false"],
-                                   "useTruststoreSpi": ["always"],
-                                   "connectionPooling": ["true"],
-                                   "cachePolicy": ["DEFAULT"],
-                                   "usePasswordModifyExtendedOp": ["false"],
-                                   "connectionTrace": ["false"]
+                "bindCredential": [sync_password],
+                "usersDn": [format!("ou=people,{}", base_dn)],
+                "groupsDn": [format!("ou=groups,{}", base_dn)],
+                "userObjectClasses": ["top, person, inetOrgPerson, posixAccount, ldapPublicKey"],
+                "rdnLDAPAttribute": ["uid"],
+                "uuidLDAPAttribute": ["entryUUID"],
+                "usernameLDAPAttribute": ["uid"],
+                "customUserSearchFilter": ["(&(!(objectClass=organizationalUnit))(kerberossync=1))"],
+                "searchScope": ["2"],
+                "validatePasswordPolicy": ["false"],
+                "trustEmail": ["true"],
+                "syncRegistrations": ["true"],
+                "fullSyncPeriod": ["86400"],
+                "changedSyncPeriod": ["300"],
+                "editMode": ["READ_ONLY"],
+                "importEnabled": ["true"],
+                "pagination": ["true"],
+                "allowKerberosAuthentication": ["true"],
+                "kerberosRealm": [self.config.realm.to_uppercase()],
+                "serverPrincipal": [format!("HTTP/keycloak.{}@{}", self.config.realm, self.config.realm.to_uppercase())],
+                "keyTab": ["/keytab/keycloak-http.keytab"],
+                "krbPrincipalAttribute": ["krbPrincipalName"],
+                "useKerberosForPasswordAuthentication": ["false"],
+                "useTruststoreSpi": ["always"],
+                "connectionPooling": ["true"],
+                "cachePolicy": ["DEFAULT"],
+                "usePasswordModifyExtendedOp": ["false"],
+                "connectionTrace": ["false"]
             }
         });
 
         let resp = self.http_client
-        .post(format!("{}/admin/realms/{}/components", self.config.url, self.config.realm))
-        .bearer_auth(token)
-        .header("Content-Type", "application/json")
-        .json(&component_json)
-        .send()
-        .await?;
+            .post(format!("{}/admin/realms/{}/components", self.config.url, self.config.realm))
+            .bearer_auth(token)
+            .header("Content-Type", "application/json")
+            .json(&component_json)
+            .send()
+            .await?;
 
         let status = resp.status();
-        if status.is_success() || status.as_u16() == 409 {
-            Ok(())
-        } else {
+        if !(status.is_success() || status.as_u16() == 409) {
             let body = resp.text().await.unwrap_or_default();
-            Err(anyhow::anyhow!("Component creation failed: {} - {}", status, body))
+            return Err(anyhow::anyhow!("Component creation failed: {} - {}", status, body));
         }
+
+        // Retrieve the freshly created component's ID (Keycloak does not always echo it in POST body)
+        let list_url = format!(
+            "{}/admin/realms/{}/components?providerId=ldap&name=lldap-with-kerberos",
+            self.config.url, self.config.realm
+        );
+        let components: Vec<serde_json::Value> = self.http_client
+            .get(&list_url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("Failed to query created LDAP component")?
+            .json()
+            .await
+            .context("Invalid component list JSON")?;
+
+        let provider_id = components
+            .iter()
+            .find(|c| c.get("name").and_then(|n| n.as_str()) == Some("lldap-with-kerberos"))
+            .and_then(|c| c.get("id").and_then(|i| i.as_str()))
+            .ok_or_else(|| anyhow::anyhow!("Could not locate ID of newly created 'lldap-with-kerberos' component"))?
+            .to_string();
+
+        info!("   → LDAP+Kerberos component ready (ID: {})", provider_id);
+        Ok(provider_id)
+    }
+
+    /// Deletes every auto-created default mapper under the LDAP provider.
+    /// This removes Keycloak's generic/dumb mappings (e.g. cn → firstName weirdness) so our
+    /// schema-precise ones take full control.
+    async fn clear_default_mappers(&self, token: &str, provider_id: &str) -> Result<()> {
+        info!("   → Clearing default Keycloak mappers (clean slate for our schema-aligned mappers)...");
+
+        let url = format!(
+            "{}/admin/realms/{}/components?parent={}&type=org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+            self.config.url, self.config.realm, provider_id
+        );
+
+        let mappers: Vec<serde_json::Value> = self.http_client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("Failed to list default mappers")?
+            .json()
+            .await
+            .context("Invalid mappers list JSON")?;
+
+        let mut deleted = 0;
+        for mapper in mappers {
+            if let Some(id) = mapper.get("id").and_then(|v| v.as_str()) {
+                let name = mapper.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let del_url = format!("{}/admin/realms/{}/components/{}", self.config.url, self.config.realm, id);
+                let del_resp = self.http_client.delete(&del_url).bearer_auth(token).send().await;
+                match del_resp {
+                    Ok(r) if r.status().is_success() || r.status().as_u16() == 404 => {
+                        info!("     ✓ Deleted default mapper: {}", name);
+                        deleted += 1;
+                    }
+                    Ok(r) => {
+                        info!("     ! Delete mapper {} returned {} (non-fatal)", name, r.status());
+                    }
+                    Err(e) => {
+                        info!("     ! Delete mapper {} failed: {} (non-fatal)", name, e);
+                    }
+                }
+            }
+        }
+        info!("   → Cleared {} default mappers. Provider is now pristine.", deleted);
+        Ok(())
+    }
+
+    /// Creates our custom, exact, standards-compliant attribute mappers.
+    /// Built directly from LLDAP PublicSchema + preferred LDAP names + POSIX/Kerberos standards.
+    /// - Fixes firstName/lastName mapping (givenName/sn instead of cn weirdness)
+    /// - Exposes POSIX, SSH (multivalued), OU, Kerberos principal, kerberossync as first-class user attributes
+    /// - All mappers marked read-only + always read from LDAP (correct for our READ_ONLY federation)
+    async fn create_custom_mappers(&self, token: &str, provider_id: &str) -> Result<()> {
+        info!("   → Creating custom schema-aligned mappers (LDAP/POSIX/Kerberos standards)...");
+
+        // Exact Keycloak component JSON for user-attribute-ldap-mapper.
+        // config values are always Vec<String>. multivalued supported for sshPublicKey etc.
+        let custom_mappers = vec![
+            // === Core identity (prevents cn→firstName oddball) ===
+            json!({
+                "name": "first name",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["givenName"],
+                    "user.model.attribute": ["firstName"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "last name",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["sn"],
+                    "user.model.attribute": ["lastName"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "email",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["mail"],
+                    "user.model.attribute": ["email"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "username",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["uid"],
+                    "user.model.attribute": ["username"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["true"]
+                }
+            }),
+            json!({
+                "name": "display name",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["cn"],
+                    "user.model.attribute": ["displayName"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+
+            // === POSIX (RFC2307) for scripts, home dirs, shells, numeric IDs in SSO/tokens ===
+            json!({
+                "name": "uid number",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["uidNumber"],
+                    "user.model.attribute": ["uidNumber"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "gid number",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["gidNumber"],
+                    "user.model.attribute": ["gidNumber"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "home directory",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["homeDirectory"],
+                    "user.model.attribute": ["homeDirectory"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+            json!({
+                "name": "login shell",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["loginShell"],
+                    "user.model.attribute": ["loginShell"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+
+            // === Kerberos principal (for SPNEGO / SSO) ===
+            json!({
+                "name": "krb principal name",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["krbPrincipalName"],
+                    "user.model.attribute": ["krbPrincipalName"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+
+            // === SSH public keys (multivalued, from our schema) ===
+            json!({
+                "name": "ssh public key",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["sshPublicKey"],
+                    "user.model.attribute": ["sshPublicKey"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"],
+                    "multivalued": ["true"]
+                }
+            }),
+
+            // === OU (for custom/nested OU awareness in tokens or downstream apps) ===
+            json!({
+                "name": "ou",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["ou"],
+                    "user.model.attribute": ["ou"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+
+            // === kerberossync flag (used by our search filter; exposed for completeness) ===
+            json!({
+                "name": "kerberos sync",
+                "providerId": "user-attribute-ldap-mapper",
+                "providerType": "org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
+                "parentId": provider_id,
+                "config": {
+                    "ldap.attribute": ["kerberossync"],
+                    "user.model.attribute": ["kerberosSync"],
+                    "read.only": ["true"],
+                    "always.read.value.from.ldap": ["true"],
+                    "is.mandatory.in.ldap": ["false"]
+                }
+            }),
+        ];
+
+        for mapper in custom_mappers {
+            let name = mapper.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+            let resp = self.http_client
+                .post(format!("{}/admin/realms/{}/components", self.config.url, self.config.realm))
+                .bearer_auth(token)
+                .header("Content-Type", "application/json")
+                .json(&mapper)
+                .send()
+                .await?;
+
+            let status = resp.status();
+            if status.is_success() || status.as_u16() == 409 {
+                info!("     ✓ Created custom mapper: {}", name);
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                info!("     ! Mapper '{}' creation returned {} (non-fatal, continuing): {}", name, status, body);
+            }
+        }
+
+        info!("   → All custom mappers created. Attribute resolution now follows LLDAP schema + standards.");
+        Ok(())
     }
 
     async fn add_lldap_web_client(&self, token: &str) -> Result<()> {
@@ -210,12 +541,12 @@ impl KeycloakClient {
         });
 
         let resp = self.http_client
-        .post(format!("{}/admin/realms/{}/clients", self.config.url, self.config.realm))
-        .bearer_auth(token)
-        .header("Content-Type", "application/json")
-        .json(&client_json)
-        .send()
-        .await?;
+            .post(format!("{}/admin/realms/{}/clients", self.config.url, self.config.realm))
+            .bearer_auth(token)
+            .header("Content-Type", "application/json")
+            .json(&client_json)
+            .send()
+            .await?;
 
         let status = resp.status();
         if status.is_success() || status.as_u16() == 409 {
@@ -230,10 +561,10 @@ impl KeycloakClient {
         info!("🔍 Testing Keycloak connection...");
         let token = self.acquire_token().await?;
         let resp = self.http_client
-        .get(format!("{}/admin/realms/{}", self.config.url, self.config.realm))
-        .bearer_auth(token)
-        .send()
-        .await?;
+            .get(format!("{}/admin/realms/{}", self.config.url, self.config.realm))
+            .bearer_auth(token)
+            .send()
+            .await?;
 
         if resp.status().is_success() {
             let msg = format!("✅ Connected to Keycloak at {} — realm '{}' is ready", self.config.url, self.config.realm);

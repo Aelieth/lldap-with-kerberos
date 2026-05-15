@@ -222,8 +222,17 @@ pub fn convert_user_filter(
                 crate::core::utils::UserFieldType::PrimaryField(lldap_domain_model::model::UserColumn::UserId) => Ok(
                     UserRequestFilter::UserIdSubString(substring_filter.clone().into()),
                 ),
-                crate::core::utils::UserFieldType::Attribute(_, _, _)
-                | crate::core::utils::UserFieldType::ObjectClass
+                // === NEW: Support substring on custom String attributes ===
+                // This fixes Keycloak admin searches on givenName, sn, displayName, etc.
+                crate::core::utils::UserFieldType::Attribute(name, lldap_schema::AttributeType::String, _) => {
+                    Ok(UserRequestFilter::AttributeSubString(name, substring_filter.clone().into()))
+                }
+                // Non-string custom attributes still get rejected (makes sense)
+                crate::core::utils::UserFieldType::Attribute(_, _, _) => Err(LdapError {
+                    code: ldap3_proto::LdapResultCode::UnwillingToPerform,
+                    message: format!("Unsupported user attribute for substring filter: {field:?}"),
+                }),
+                crate::core::utils::UserFieldType::ObjectClass
                 | crate::core::utils::UserFieldType::MemberOf
                 | crate::core::utils::UserFieldType::Dn
                 | crate::core::utils::UserFieldType::EntryDn
@@ -503,6 +512,10 @@ pub fn convert_group_filter(
                 crate::core::utils::GroupFieldType::DisplayName => Ok(GroupRequestFilter::DisplayNameSubString(
                     substring_filter.clone().into(),
                 )),
+                // NEW: Support substring filters on custom String attributes for groups
+                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::String, _) => {
+                    Ok(GroupRequestFilter::AttributeSubString(name, substring_filter.clone().into()))
+                }
                 crate::core::utils::GroupFieldType::NoMatch => Ok(GroupRequestFilter::False),
                 _ => Err(LdapError {
                     code: ldap3_proto::LdapResultCode::UnwillingToPerform,
@@ -516,5 +529,44 @@ pub fn convert_group_filter(
             code: ldap3_proto::LdapResultCode::UnwillingToPerform,
             message: format!("Unsupported group filter: {filter:?}"),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lldap_domain::public_schema::PublicSchema;
+    use lldap_domain::types::AttributeName;
+    use ldap3_proto::LdapSubstringFilter;
+
+    #[test]
+    fn test_convert_user_filter_substring_on_custom_string_attribute() {
+        let schema = PublicSchema::get();
+        let ldap_info = crate::core::utils::LdapInfo {
+            base_dn: vec![],
+            base_dn_str: "dc=example,dc=com".to_string(),
+            ignored_user_attributes: vec![],
+            ignored_group_attributes: vec![],
+        };
+
+        let filter = LdapFilter::Substring(
+            "givenName".to_string(),
+                                           LdapSubstringFilter {
+                                               initial: Some("jo".to_string()),
+                                           any: vec![],
+                                           final_: None,
+                                           },
+        );
+
+        let result = convert_user_filter(&ldap_info, &filter, &schema);
+        assert!(result.is_ok());
+
+        // Should produce AttributeSubString (not an error)
+        match result.unwrap() {
+            UserRequestFilter::AttributeSubString(name, _) => {
+                assert_eq!(name.as_str(), "firstname"); // canonical name
+            }
+            other => panic!("Expected AttributeSubString, got {:?}", other),
+        }
     }
 }

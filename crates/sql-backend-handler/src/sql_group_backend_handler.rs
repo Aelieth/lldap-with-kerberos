@@ -5,7 +5,8 @@ use lldap_domain::{
     types::{Attribute, AttributeName, AttributeValue, Cardinality, Group, GroupDetails, GroupId, Serialized, Uuid, UserId},
 };
 use lldap_domain_handlers::handler::{
-    GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler, SystemConfigBackendHandler,
+    GroupBackendHandler, GroupListerBackendHandler, GroupRequestFilter, ReadSchemaBackendHandler,
+    SystemConfigBackendHandler, SubStringFilter,
 };
 use lldap_domain_model::{
     error::{DomainError, Result},
@@ -50,6 +51,23 @@ fn attribute_condition(name: AttributeName, value: Option<&AttributeValue>) -> C
                           value
                           .map(|v| model::GroupAttributesColumn::Value.eq(attribute_value_to_db_bytes(v)))
                           .unwrap_or_else(|| SimpleExpr::Constant(true.into())),
+                      )
+                      .into_query(),
+    )
+    .into_condition()
+}
+
+fn attribute_substring_condition(name: AttributeName, filter: &SubStringFilter) -> Cond {
+    let like_pattern = filter.to_sql_filter();
+    Expr::in_subquery(
+        Expr::col(GroupColumn::GroupId.as_column_ref()),
+                      model::GroupAttributes::find()
+                      .select_only()
+                      .column(model::GroupAttributesColumn::GroupId)
+                      .filter(model::GroupAttributesColumn::AttributeName.eq(name.clone()))
+                      .filter(
+                          SimpleExpr::FunctionCall(Func::lower(Expr::col(model::GroupAttributesColumn::Value)))
+                          .like(like_pattern),
                       )
                       .into_query(),
     )
@@ -176,6 +194,7 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
             )
             .into_condition()
         }
+        AttributeSubString(name, filter) => attribute_substring_condition(name, &filter),
     }
 }
 
