@@ -146,7 +146,7 @@ version = "2"
 
 [workspace.dependencies.uuid]
 version = "1.18.1"
-features = ["js", "serde", "v1", "v3", "v4"]
+features = ["js", "serde", "v1", "v3", "v4", "v5"]
 
 [workspace.dependencies.lldap-kerberos]
 path = "crates/kerberos"

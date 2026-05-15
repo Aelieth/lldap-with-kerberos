@@ -2,6 +2,7 @@
 
 use crate::dn::{is_container_dn, is_subtree};
 use ldap3_proto::{LdapPartialAttribute, LdapSearchResultEntry, LdapSearchScope, proto::LdapOp};
+use uuid::Uuid; //commented out to test entryUUID issues with keycloak
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchScope {
@@ -15,9 +16,9 @@ pub enum SearchScope {
 
 pub fn get_search_scope(
     base_dn: &[(String, String)],
-    dn_parts: &[(String, String)],
-    ldap_scope: &LdapSearchScope,
-    allowed_ous: &[String],
+                        dn_parts: &[(String, String)],
+                        ldap_scope: &LdapSearchScope,
+                        allowed_ous: &[String],
 ) -> SearchScope {
     if !is_subtree(dn_parts, base_dn) {
         return SearchScope::Invalid;
@@ -32,32 +33,32 @@ pub fn get_search_scope(
             return SearchScope::Container;
         }
 
-    if matches!(ldap_scope, LdapSearchScope::Base) && dn_parts.len() > base_dn.len() {
-        let full_dn = dn_parts.iter()
+        if matches!(ldap_scope, LdapSearchScope::Base) && dn_parts.len() > base_dn.len() {
+            let full_dn = dn_parts.iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect::<Vec<_>>()
             .join(",");
-        match crate::dn::get_user_or_group_id_from_distinguished_name(&full_dn, base_dn) {
-            crate::dn::UserOrGroupName::User(_) => return SearchScope::LeafUser,
-            crate::dn::UserOrGroupName::Group(_) => return SearchScope::LeafGroup,
-            _ => {}
+            match crate::dn::get_user_or_group_id_from_distinguished_name(&full_dn, base_dn) {
+                crate::dn::UserOrGroupName::User(_) => return SearchScope::LeafUser,
+                crate::dn::UserOrGroupName::Group(_) => return SearchScope::LeafGroup,
+                _ => {}
+            }
         }
-    }
 
-    if is_container_dn(dn_parts, base_dn, allowed_ous) {
-        return SearchScope::Container;
-    }
+        if is_container_dn(dn_parts, base_dn, allowed_ous) {
+            return SearchScope::Container;
+        }
 
-    SearchScope::Unknown
+        SearchScope::Unknown
 }
 
 pub fn make_ou_entry(ou_str: &str, base_dn_str: &str, include_operational_attributes: bool) -> LdapSearchResultEntry {
     let rdn_chain = crate::dn::internal_ou_to_ldap_rdn_chain(ou_str);
     let ou_part: String = rdn_chain
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect::<Vec<_>>()
-        .join(",");
+    .iter()
+    .map(|(k, v)| format!("{}={}", k, v))
+    .collect::<Vec<_>>()
+    .join(",");
     let dn = if ou_part.is_empty() {
         base_dn_str.to_string()
     } else {
@@ -65,9 +66,9 @@ pub fn make_ou_entry(ou_str: &str, base_dn_str: &str, include_operational_attrib
     };
 
     let leaf_ou_val = rdn_chain
-        .first()
-        .map(|(_, v)| v.as_bytes().to_vec())
-        .unwrap_or_else(|| crate::dn::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
+    .first()
+    .map(|(_, v)| v.as_bytes().to_vec())
+    .unwrap_or_else(|| crate::dn::DEFAULT_PRIMARY_USER_OU.as_bytes().to_vec());
 
     let mut attributes = vec![
         LdapPartialAttribute {
@@ -83,15 +84,22 @@ pub fn make_ou_entry(ou_str: &str, base_dn_str: &str, include_operational_attrib
     if include_operational_attributes {
         attributes.push(LdapPartialAttribute {
             atype: "hasSubordinates".to_string(),
-            vals: vec![b"TRUE".to_vec()],
+                        vals: vec![b"TRUE".to_vec()],
         });
         attributes.push(LdapPartialAttribute {
             atype: "structuralObjectClass".to_string(),
-            vals: vec![b"organizationalUnit".to_vec()],
+                        vals: vec![b"organizationalUnit".to_vec()],
         });
         attributes.push(LdapPartialAttribute {
             atype: "subschemaSubentry".to_string(),
-            vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
+                        vals: vec![format!("cn=Subschema,{}", base_dn_str).into_bytes()],
+        });
+
+        // Stable synthetic entryUUID — only when client requests operational attributes.
+        let ou_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, dn.as_bytes());
+        attributes.push(LdapPartialAttribute {
+           atype: "entryUUID".to_string(),
+                        vals: vec![ou_uuid.to_string().into_bytes()],
         });
     }
 
@@ -103,9 +111,9 @@ pub fn make_ou_entry(ou_str: &str, base_dn_str: &str, include_operational_attrib
 
 pub fn build_ou_entries(allowed_ous: &[String], base_dn_str: &str, include_operational_attributes: bool) -> Vec<LdapOp> {
     allowed_ous
-        .iter()
-        .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str, include_operational_attributes)))
-        .collect()
+    .iter()
+    .map(|ou_str| LdapOp::SearchResultEntry(make_ou_entry(ou_str, base_dn_str, include_operational_attributes)))
+    .collect()
 }
 
 // Production-grade, reusable OU filter matcher.
@@ -224,7 +232,7 @@ mod tests {
     fn test_ou_matches_filter_and() {
         let filter = ldap3_proto::LdapFilter::And(vec![
             ldap3_proto::LdapFilter::Equality("objectClass".to_string(), "organizationalUnit".to_string()),
-            ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string()),
+                                                  ldap3_proto::LdapFilter::Equality("ou".to_string(), "office".to_string()),
         ]);
         assert!(ou_matches_filter("office", &filter));
         assert!(!ou_matches_filter("people", &filter));

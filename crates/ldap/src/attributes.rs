@@ -4,7 +4,7 @@
 //! operational attributes, and search result entry building lives here.
 
 use crate::core::utils::{DEFAULT_PRIMARY_GROUP_OU, DEFAULT_PRIMARY_USER_OU};
-use crate::dn::{build_group_dn, build_user_dn, get_leaf_ou};
+use crate::dn::{build_group_dn, build_user_dn};
 use chrono::{NaiveDateTime, TimeZone};
 use ldap3_proto::LdapPartialAttribute;
 use lldap_domain::{
@@ -36,20 +36,14 @@ pub fn get_custom_attribute(
         .find(|a| &a.name == attribute_name)
         .map(|attribute| match &attribute.value {
             AttributeValue::String(Cardinality::Singleton(s)) => {
-                if attribute_name.as_str().eq_ignore_ascii_case("ou") {
-                    vec![get_leaf_ou(s).to_string().into_bytes()]
-                } else {
-                    vec![s.clone().into_bytes()]
-                }
+                // Always return the full stored OU value (e.g. "people" or "people\testou").
+                // Returning only the leaf via get_leaf_ou broke Keycloak sync when child OUs
+                // were created under a parent OU. Users must continue advertising their
+                // actual stored ou value.
+                vec![s.clone().into_bytes()]
             }
             AttributeValue::String(Cardinality::Unbounded(l)) => {
-                if attribute_name.as_str().eq_ignore_ascii_case("ou") {
-                    l.iter()
-                        .map(|s| get_leaf_ou(s).to_string().into_bytes())
-                        .collect()
-                } else {
-                    l.iter().map(|s| s.clone().into_bytes()).collect()
-                }
+                l.iter().map(|s| s.clone().into_bytes()).collect()
             }
             AttributeValue::Integer(Cardinality::Singleton(i)) => vec![i.to_string().into_bytes()],
             AttributeValue::Integer(Cardinality::Unbounded(l)) => {

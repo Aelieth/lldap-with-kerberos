@@ -55,7 +55,7 @@ impl KeycloakClient {
         self.add_ldap_kerberos_component(&token, &lldap_url, &sync_username, &sync_password).await?;
         self.add_lldap_web_client(&token).await?;
 
-        let msg = format!("🎉 Realm '{}' fully set up with LLDAP + Kerberos! SPNEGO ready for KDE/Gnome SSO.", self.config.realm);
+        let msg = format!("Realm '{}' fully set up with LLDAP + Kerberos! SPNEGO ready for KDE/Gnome SSO.", self.config.realm);
         info!("{}", msg);
         Ok(msg)
     }
@@ -149,14 +149,17 @@ impl KeycloakClient {
                                    "bindCredential": [sync_password],
                                    "usersDn": [format!("ou=people,{}", base_dn)],
                                    "groupsDn": [format!("ou=groups,{}", base_dn)],
-                                   "userObjectClasses": ["inetOrgPerson","organizationalPerson"],
+                                   "userObjectClasses": ["top, person, inetOrgPerson, posixAccount, ldapPublicKey"],
                                    "rdnLDAPAttribute": ["uid"],
                                    "uuidLDAPAttribute": ["entryUUID"],
                                    "usernameLDAPAttribute": ["uid"],
+                                   "customUserSearchFilter": ["(&(!(objectClass=organizationalUnit))(kerberossync=1))"],
                                    "searchScope": ["2"],
                                    "validatePasswordPolicy": ["false"],
                                    "trustEmail": ["true"],
                                    "syncRegistrations": ["true"],
+                                   "fullSyncPeriod": ["86400"],
+                                   "changedSyncPeriod": ["300"],
                                    "editMode": ["READ_ONLY"],
                                    "importEnabled": ["true"],
                                    "pagination": ["true"],

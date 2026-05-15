@@ -293,12 +293,6 @@ pub fn get_group_id_from_distinguished_name_or_plain_name(
     }
 }
 
-/// Returns the leaf OU from an internal OU string (e.g. "office\\floor1" -> "floor1", "people" -> "people").
-/// Used for displaying the `ou` attribute value in LDAP search results (the leaf RDN only).
-pub fn get_leaf_ou(internal_ou: &str) -> &str {
-    internal_ou.split('\\').next_back().unwrap_or(internal_ou)
-}
-
 /// Builds a full user Distinguished Name from the user_id, internal_ou hierarchy string
 /// (e.g. "service" or "office\\floor1"), and base_dn_str.
 /// This centralizes DN construction logic, eliminates duplication, and fixes the latent

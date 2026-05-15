@@ -155,7 +155,19 @@ pub fn convert_user_filter(
                         UserRequestFilter::False
                     }))
                 }
-                crate::core::utils::UserFieldType::EntryUuid => Ok(UserRequestFilter::False),
+                crate::core::utils::UserFieldType::EntryUuid => {
+                    // entryUUID maps to the internal user uuid column
+                    match lldap_domain::types::Uuid::try_from(value.as_str()) {
+                        Ok(_) => Ok(UserRequestFilter::Equality(
+                            lldap_domain_model::model::UserColumn::Uuid,
+                            value.to_string(),
+                        )),
+                        Err(e) => Err(LdapError {
+                            code: ldap3_proto::LdapResultCode::Other,
+                            message: format!("Invalid UUID in filter: {e:#}"),
+                        }),
+                    }
+                }
             }
         }
         LdapFilter::GreaterOrEqual(field, value) => {
@@ -340,7 +352,14 @@ pub fn convert_group_filter(
                         GroupRequestFilter::False
                     }))
                 }
-                crate::core::utils::GroupFieldType::EntryUuid => Ok(GroupRequestFilter::False),
+                crate::core::utils::GroupFieldType::EntryUuid => {
+                    lldap_domain::types::Uuid::try_from(value.as_str())
+                        .map(GroupRequestFilter::Uuid)
+                        .map_err(|e| LdapError {
+                            code: ldap3_proto::LdapResultCode::Other,
+                            message: format!("Invalid UUID in filter: {e:#}"),
+                        })
+                }
                 crate::core::utils::GroupFieldType::NoMatch => {
                     if !ldap_info.ignored_group_attributes.contains(&field) {
                         warn!(
@@ -367,14 +386,21 @@ pub fn convert_group_filter(
         LdapFilter::GreaterOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
             match crate::schema::get_schema_manager().map_group_field(&field, schema) {
-                crate::core::utils::GroupFieldType::CreationDate | crate::core::utils::GroupFieldType::ModifiedDate => {
+                crate::core::utils::GroupFieldType::CreationDate
+                | crate::core::utils::GroupFieldType::ModifiedDate => {
+                    // Use the authoritative PublicSchema (passed in) + resolve_group_canonical_name
+                    // so aliases ("createTimestamp", "modifyTimestamp", "creation_date", etc.)
+                    // are properly translated to the internal canonical names ("creationdate"/"modifieddate").
+                    let canonical = schema
+                        .resolve_group_canonical_name(field.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| field.as_str().to_string());
                     Ok(GroupRequestFilter::GreaterOrEqual(
-                        field.as_str().to_string(),
+                        canonical,
                         value.to_string(),
                     ))
                 }
-                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) =>
-                {
+                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) => {
                     Ok(GroupRequestFilter::AttributeGreaterOrEqual(
                         name,
                         value.to_string(),
@@ -382,21 +408,30 @@ pub fn convert_group_filter(
                 }
                 _ => Err(LdapError {
                     code: ldap3_proto::LdapResultCode::UnwillingToPerform,
-                    message: format!("GreaterOrEqual not supported on this attribute: {}", field),
+                    message: format!(
+                        "GreaterOrEqual is only supported on timestamp attributes for groups (got: {})",
+                        field
+                    ),
                 }),
             }
         }
         LdapFilter::LessOrEqual(field, value) => {
             let field = AttributeName::from(field.as_str());
             match crate::schema::get_schema_manager().map_group_field(&field, schema) {
-                crate::core::utils::GroupFieldType::CreationDate | crate::core::utils::GroupFieldType::ModifiedDate => {
+                crate::core::utils::GroupFieldType::CreationDate
+                | crate::core::utils::GroupFieldType::ModifiedDate => {
+                    // Use the authoritative PublicSchema (passed in) + resolve_group_canonical_name
+                    // (see GreaterOrEqual comment for full rationale)
+                    let canonical = schema
+                        .resolve_group_canonical_name(field.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| field.as_str().to_string());
                     Ok(GroupRequestFilter::LessOrEqual(
-                        field.as_str().to_string(),
+                        canonical,
                         value.to_string(),
                     ))
                 }
-                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) =>
-                {
+                crate::core::utils::GroupFieldType::Attribute(name, AttributeType::DateTime, _) => {
                     Ok(GroupRequestFilter::AttributeLessOrEqual(
                         name,
                         value.to_string(),
@@ -404,7 +439,10 @@ pub fn convert_group_filter(
                 }
                 _ => Err(LdapError {
                     code: ldap3_proto::LdapResultCode::UnwillingToPerform,
-                    message: format!("LessOrEqual not supported on this attribute: {}", field),
+                    message: format!(
+                        "LessOrEqual is only supported on timestamp attributes for groups (got: {})",
+                        field
+                    ),
                 }),
             }
         }

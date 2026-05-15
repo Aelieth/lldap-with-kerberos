@@ -106,24 +106,50 @@ fn get_group_filter_expr(filter: GroupRequestFilter) -> Cond {
 
         // NEW: GreaterOrEqual / LessOrEqual for timestamps (group side) — closes #1308
         GreaterOrEqual(column, value) => {
-            match column.as_str() {
-                "creationdate" | "modifieddate" => {
-                    // Primary date columns on groups table
-                    Expr::col(GroupColumn::CreationDate)
+            let col = column.to_ascii_lowercase();
+            match col.as_str() {
+                "creationdate" => {
+                    // Use table alias to avoid ambiguous column error when the filter
+                    // expression is evaluated inside a joined subquery (find_also_linked).
+                    Expr::col((group_table.clone(), GroupColumn::CreationDate))
                         .gte(value)
-                        .into_condition() // reuse creationdate column for simplicity; adjust if needed
+                        .into_condition()
                 }
-                _ => panic!("GreaterOrEqual only supported on date columns"),
+                "modifieddate" => {
+                    Expr::col((group_table.clone(), GroupColumn::ModifiedDate))
+                        .gte(value)
+                        .into_condition()
+                }
+                _ => {
+                    tracing::warn!(
+                        "GreaterOrEqual filter received on unsupported group column: {}. Returning no results.",
+                        column
+                    );
+                    bool_to_expr(false) // Safe: matches nothing
+                }
             }
         }
+
         LessOrEqual(column, value) => {
-            match column.as_str() {
-                "creationdate" | "modifieddate" => {
-                    Expr::col(GroupColumn::CreationDate)
+            let col = column.to_ascii_lowercase();
+            match col.as_str() {
+                "creationdate" => {
+                    Expr::col((group_table.clone(), GroupColumn::CreationDate))
                         .lte(value)
                         .into_condition()
                 }
-                _ => panic!("LessOrEqual only supported on date columns"),
+                "modifieddate" => {
+                    Expr::col((group_table.clone(), GroupColumn::ModifiedDate))
+                        .lte(value)
+                        .into_condition()
+                }
+                _ => {
+                    tracing::warn!(
+                        "LessOrEqual filter received on unsupported group column: {}. Returning no results.",
+                        column
+                    );
+                    bool_to_expr(false)
+                }
             }
         }
         AttributeGreaterOrEqual(name, value) => {
