@@ -536,8 +536,7 @@ pub fn convert_group_filter(
 mod tests {
     use super::*;
     use lldap_domain::public_schema::PublicSchema;
-    use lldap_domain::types::AttributeName;
-    use ldap3_proto::LdapSubstringFilter;
+    use ldap3_proto::proto::LdapSubstringFilter;
 
     #[test]
     fn test_convert_user_filter_substring_on_custom_string_attribute() {
