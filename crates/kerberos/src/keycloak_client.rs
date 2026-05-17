@@ -54,7 +54,7 @@ impl KeycloakClient {
         // Professional safeguard: explicit existence check before any mutation.
         if self.realm_exists(&token).await? {
             return Err(anyhow::anyhow!(
-                "Realm '{}' already exists. Aborting setup. Delete the realm manually in Keycloak admin console (or via API) if you intend to recreate it with fresh mappers.",
+                "Realm '{}' already exists. Delete the realm manually in Keycloak admin console to proceed.",
                 self.config.realm
             ));
         }
@@ -82,7 +82,7 @@ impl KeycloakClient {
         self.add_lldap_web_client(&token).await?;
 
         let msg = format!(
-            "Realm '{}' fully set up with LLDAP + Kerberos! Custom attribute mappers applied for correct firstName/lastName/email/displayName/POSIX/Kerberos/SSH resolution. SSO ready for KDE/Gnome/etc.",
+            "✅ Realm '{}' set up with LLDAP + Kerberos! Custom attribute mappers applied. SSO ready!",
             self.config.realm
         );
         info!("{}", msg);
@@ -182,7 +182,7 @@ impl KeycloakClient {
         sync_username: &str,
         sync_password: &str,
     ) -> Result<String> {
-        info!("   → Adding LDAP+Kerberos provider (with subtree support for custom OUs)...");
+        info!("   → Adding LDAP+Kerberos provider...");
         let base_dn = format!("dc={}", self.config.realm.replace('.', ",dc="));
         let component_json = json!({
             "name": "lldap-with-kerberos",
@@ -267,7 +267,7 @@ impl KeycloakClient {
     /// This removes Keycloak's generic/dumb mappings (e.g. cn → firstName weirdness) so our
     /// schema-precise ones take full control.
     async fn clear_default_mappers(&self, token: &str, provider_id: &str) -> Result<()> {
-        info!("   → Clearing default Keycloak mappers (clean slate for our schema-aligned mappers)...");
+        info!("   → Clearing default Keycloak mappers...");
 
         let url = format!(
             "{}/admin/realms/{}/components?parent={}&type=org.keycloak.storage.ldap.mappers.LDAPStorageMapper",
@@ -304,7 +304,7 @@ impl KeycloakClient {
                 }
             }
         }
-        info!("   → Cleared {} default mappers. Provider is now pristine.", deleted);
+        info!("   → Cleared {} default mappers.", deleted);
         Ok(())
     }
 
@@ -314,7 +314,7 @@ impl KeycloakClient {
     /// - Exposes POSIX, SSH (multivalued), OU, Kerberos principal, kerberossync as first-class user attributes
     /// - All mappers marked read-only + always read from LDAP (correct for our READ_ONLY federation)
     async fn create_custom_mappers(&self, token: &str, provider_id: &str) -> Result<()> {
-        info!("   → Creating custom schema-aligned mappers (LDAP/POSIX/Kerberos standards)...");
+        info!("   → Creating custom schema-aligned mappers...");
 
         // Exact Keycloak component JSON for user-attribute-ldap-mapper.
         // config values are always Vec<String>. multivalued supported for sshPublicKey etc.
@@ -521,7 +521,7 @@ impl KeycloakClient {
             }
         }
 
-        info!("   → All custom mappers created. Attribute resolution now follows LLDAP schema + standards.");
+        info!("   → All custom mappers created. Attribute resolution for KLLDAP schema implemented.");
         Ok(())
     }
 

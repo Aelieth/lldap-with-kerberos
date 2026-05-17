@@ -170,36 +170,34 @@ pub fn export_keytab_for_keycloak(hostname_input: &str) -> Result<String> {
     let admin_principal = format!("admin/admin@{}", realm);
 
     let handle = Kadm5Handle::init_with_keytab("/data/kadm5.keytab", &admin_principal, &realm)
-    .context("Failed to init Kadm5Handle for keytab export")?;
-
-    handle.set_random_key_for_service(&principal)
-    .context("Failed to set random key for Keycloak service principal")?;
+    .context("Failed to initialize Kerberos admin handle")?;
 
     let keytab_path = "/data/keytab/keycloak-http.keytab";
     let _ = fs::remove_file(keytab_path);
 
-    let query = format!("ktadd -k {} {}", keytab_path, principal);
-    let output = Command::new("sudo")
-    .arg("-n")
-    .arg("/usr/sbin/kadmin.local")
+    // Step 1: Ensure principal exists and has a fresh key (via FFI)
+    handle.set_random_key_for_service(&principal)?;
+
+    // Step 2: Export the keytab using kadmin.local (no sudo)
+    // Force strong encryption types so Keycloak/Java can decrypt SPNEGO tickets
+    let query = format!(
+        "ktadd -k {} -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal {}",
+        keytab_path, principal
+    );
+
+    let output = Command::new("/usr/sbin/kadmin.local")
     .env("KRB5_CONFIG", "/etc/krb5.conf")
     .arg("-q")
     .arg(&query)
     .output()
-    .context("Failed to run kadmin.local for keytab export")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    info!("kadmin.local stdout: {}", stdout.trim());
-    if !stderr.is_empty() {
-        info!("kadmin.local stderr: {}", stderr.trim());
-    }
+    .context("Failed to execute kadmin.local")?;
 
     if !output.status.success() {
-        return Err(anyhow::anyhow!("kadmin.local ktadd failed"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("kadmin.local ktadd failed: {}", stderr));
     }
 
-    info!("Keytab saved to {} for {}", keytab_path, principal);
+    info!("Keytab successfully exported to {}", keytab_path);
     Ok(keytab_path.to_string())
 }
 

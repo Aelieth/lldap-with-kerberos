@@ -212,8 +212,13 @@ impl Kadm5Handle {
         }
     }
 
+    /// Ensures a service principal exists and has a fresh random key in the KDC.
+    ///
+    /// This function stays purely in the FFI layer and only talks to kadm5.
+    /// Keytab file writing is handled by the caller (lib.rs).
     pub fn set_random_key_for_service(&self, principal_name: &str) -> Result<()> {
-        let principal_cstr = CString::new(principal_name).context("Invalid principal name")?;
+        let principal_cstr = CString::new(principal_name)
+        .context("Invalid principal name")?;
 
         let mut princ: krb5_principal = ptr::null_mut();
         let ret = unsafe { krb5_parse_name(self.context, principal_cstr.as_ptr(), &mut princ) };
@@ -223,7 +228,10 @@ impl Kadm5Handle {
 
         let mut keyblocks = ptr::null_mut::<krb5_keyblock>();
         let mut n_keys: c_int = 0;
-        let ret = unsafe { kadm5_randkey_principal(self.handle, princ, &mut keyblocks, &mut n_keys) };
+
+        let ret = unsafe {
+            kadm5_randkey_principal(self.handle, princ, &mut keyblocks, &mut n_keys)
+        };
 
         if ret != 0 {
             let code = ret as i32;
@@ -236,48 +244,49 @@ impl Kadm5Handle {
                 s
             };
 
-            // Strengthened principal-not-found detection:
-            // 1. Prefer the official error code (robust across locales/versions)
-            // 2. Fall back to multiple common English strings for older/newer Kerberos builds
-            let principal_not_found = (ret == KADM5_UNK_PRINC as i64)
-                || err_msg.contains("Principal does not exist")
-                || err_msg.contains("No such principal")
-                || err_msg.contains("unknown principal")
-                || err_msg.to_lowercase().contains("does not exist");
+            let principal_not_found = ret == KADM5_UNK_PRINC as i64
+            || err_msg.contains("Principal does not exist")
+            || err_msg.contains("No such principal");
 
             if principal_not_found {
                 let mut ent: kadm5_principal_ent_rec = unsafe { mem::zeroed() };
                 ent.principal = princ;
 
-                // These are the standard kadm5 mask bits for creating a principal with a key.
-                // Define them locally because KADM5_KEY is not always exported from bindings.
                 const KADM5_PRINCIPAL: c_long = 0x00000001;
                 const KADM5_KEY: c_long = 0x00000020;
                 let mask = (KADM5_PRINCIPAL | KADM5_KEY) as c_long;
 
-                let ret = unsafe { kadm5_create_principal(self.handle, &mut ent, mask, ptr::null_mut()) };
+                let ret = unsafe {
+                    kadm5_create_principal(self.handle, &mut ent, mask, ptr::null_mut())
+                };
 
                 if ret != 0 {
-                    let code = ret as i32;
-                    let msg_ptr = unsafe { krb5_get_error_message(self.context, code) };
-                    let create_err = if msg_ptr.is_null() {
-                        format!("code {}", ret)
-                    } else {
-                        let s = unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() };
-                        unsafe { krb5_free_error_message(self.context, msg_ptr) };
-                        s
-                    };
                     unsafe { krb5_free_principal(self.context, princ) };
-                    return Err(anyhow::anyhow!("Failed to create service principal with random key: {}", create_err));
+                    return Err(anyhow::anyhow!(
+                        "Failed to create service principal {}: code {}",
+                        principal_name, ret
+                    ));
                 }
 
-                info!("Created new service principal with random key: {}", principal_name);
+                info!("Created new service principal: {}", principal_name);
             } else {
                 unsafe { krb5_free_principal(self.context, princ) };
                 return Err(anyhow::anyhow!("kadm5_randkey_principal failed: {}", err_msg));
             }
         } else {
-            info!("Rotated random key for existing service principal: {}", principal_name);
+            info!("Rotated random key for service principal: {}", principal_name);
+        }
+
+        // Free any keyblocks that were returned
+        if !keyblocks.is_null() {
+            unsafe {
+                for i in 0..n_keys {
+                    let kb = keyblocks.add(i as usize);
+                    if !(*kb).contents.is_null() {
+                        krb5_free_keyblock_contents(self.context, kb);
+                    }
+                }
+            }
         }
 
         unsafe { krb5_free_principal(self.context, princ) };
