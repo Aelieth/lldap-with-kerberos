@@ -36,8 +36,21 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY --chown=lldap:lldap . .
-RUN cargo build --release -p lldap -p lldap_migration_tool -p lldap_set_password -p lldap-kerberos
+
+# Force baseline x86-64 target for maximum processor compatibility (< v3)
+# This prevents the binary from requiring AVX2 / x86-64-v3 features.
+RUN CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64" \
+    cargo build --release \
+    -p lldap \
+    -p lldap_migration_tool \
+    -p lldap_set_password \
+    -p lldap-kerberos
+
+# Install wasm tools
 RUN cargo install wasm-pack --locked
+RUN cargo install wasm-bindgen-cli --locked
+
+# Build the frontend
 RUN cd app && wasm-pack build --target web --release
 RUN cd app && gzip -9 -k -f pkg/lldap_app_bg.wasm
 

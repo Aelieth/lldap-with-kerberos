@@ -1,0 +1,55 @@
+# Dockerfile.release
+# AlmaLinux 10-based reproducible builder for KLLDAP release tarballs.
+# Matches the AlmaLinux runtime image (quay.io/almalinuxorg/10-minimal)
+# so Kerberos (krb5) headers, libraries, and behavior are consistent
+# between the release build environment and the final containers.
+#
+# Produces both x86_64 (baseline CPU) and armv7 glibc tarballs.
+#
+# Usage:
+#   make prepare-release-docker
+
+FROM quay.io/almalinuxorg/10-minimal
+
+# Install build dependencies with microdnf (AlmaLinux/Fedora)
+# krb5-devel is critical for bindgen + Kerberos consistency
+RUN microdnf install -y --assumeyes \
+    shadow-utils \
+    pkgconf \
+    openssl-devel \
+    gcc \
+    make \
+    perl \
+    curl \
+    git \
+    gzip \
+    krb5-devel \
+    clang \
+    llvm \
+    ca-certificates \
+    wget \
+    docker \
+    && microdnf clean all
+
+# Create lldap user (consistent with main Dockerfile)
+RUN mkdir -p /app && \
+    groupadd -g 1000 lldap && \
+    useradd -u 1000 -g lldap -d /app -s /bin/bash lldap && \
+    chown -R lldap:lldap /app
+
+USER lldap
+WORKDIR /app
+
+# Install Rust via rustup as the lldap user (matches main Dockerfile pattern)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/app/.cargo/bin:${PATH}"
+
+# Install cross (for armv7 cross-compilation) and wasm-pack (frontend)
+RUN cargo install cross wasm-pack
+
+# Pre-add targets
+RUN rustup target add x86_64-unknown-linux-gnu armv7-unknown-linux-gnueabihf
+
+# Default command (overridden by Makefile)
+CMD ["bash"]
+

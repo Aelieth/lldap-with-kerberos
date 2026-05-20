@@ -121,7 +121,7 @@ impl Kadm5Handle {
                 self.handle,
                 &mut ent,
                 mask,
-                pass_cstr.as_ptr() as *mut i8,
+                pass_cstr.as_ptr() as *mut c_char,
             )
         };
 
@@ -160,7 +160,7 @@ impl Kadm5Handle {
             kadm5_chpass_principal(
                 self.handle,
                 princ,
-                pass_cstr.as_ptr() as *mut i8,
+                pass_cstr.as_ptr() as *mut c_char,
             )
         };
 
