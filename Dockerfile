@@ -24,6 +24,8 @@ ENV PATH="/app/.cargo/bin:${PATH}"
 # Verify Rust/Cargo
 RUN rustc --version && cargo --version
 
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64"
+
 # Install cargo-chef for dependency caching, add wasm target
 RUN cargo install cargo-chef && rustup target add wasm32-unknown-unknown
 
@@ -37,10 +39,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY --chown=lldap:lldap . .
 
-# Force baseline x86-64 target for maximum processor compatibility (< v3)
-# This prevents the binary from requiring AVX2 / x86-64-v3 features.
-RUN CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64" \
-    cargo build --release \
+RUN cargo build --release \
     -p lldap \
     -p lldap_migration_tool \
     -p lldap_set_password \

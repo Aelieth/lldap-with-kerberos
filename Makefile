@@ -44,14 +44,14 @@ prepare-release-docker:
 # Note: This builds the full runtime image with Kerberos support.
 # For maximum x86_64 compatibility inside the image, we can add
 # RUSTFLAGS later if needed (similar to the tarball build).
-PLATFORMS ?= linux/amd64,linux/arm64
+PLATFORMS ?= linux/amd64/v2,linux/arm64
 
 docker-build:
 	docker buildx build \
 		--file Dockerfile \
 		--platform $(PLATFORMS) \
-		--tag aelieth/klldap:0.7.1 \
 		--tag aelieth/klldap:latest \
+		--tag aelieth/klldap:0.7.1 \
 		--push .
 
 # Quick cleanup of generated tarballs
